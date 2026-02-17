@@ -12,6 +12,8 @@ seren-skills/
 │   └── api/                     # Apollo.io API integration
 ├── coinbase/
 │   └── grid-trader/             # Automated grid trading bot
+├── cryptobullseyezone/
+│   └── tax/                     # 1099-DA to Form 8949 reconciliation guide
 ├── kraken/
 │   └── grid-trader/             # Kraken grid trading bot
 ├── polymarket/
@@ -29,6 +31,7 @@ The slug is derived by joining the org and skill name with a hyphen:
 
 ```
 coinbase/grid-trader     → coinbase-grid-trader
+cryptobullseyezone/tax   → cryptobullseyezone-tax
 polymarket/trader        → polymarket-trader
 seren/getting-started    → seren-getting-started
 seren/browser-automation → seren-browser-automation
@@ -70,4 +73,3 @@ The `kind` field describes the nature of the skill:
 - **agent** — Autonomous bot that runs independently (has runtime code)
 - **integration** — API documentation and usage patterns (SKILL.md only)
 - **guide** — Tutorials and how-to content (SKILL.md only)
-
