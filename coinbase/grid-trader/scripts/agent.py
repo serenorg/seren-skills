@@ -3,11 +3,11 @@
 Coinbase Grid Trading Bot - Automated grid trading on Coinbase Exchange via Seren Gateway
 
 Usage:
-    python agent.py setup   --config config.json
-    python agent.py dry-run --config config.json
-    python agent.py start   --config config.json
-    python agent.py status  --config config.json
-    python agent.py stop    --config config.json
+    python scripts/agent.py setup   --config config.json
+    python scripts/agent.py dry-run --config config.json
+    python scripts/agent.py start   --config config.json
+    python scripts/agent.py status  --config config.json
+    python scripts/agent.py stop    --config config.json
 """
 
 import argparse
@@ -168,8 +168,8 @@ class CoinbaseGridTrader:
 
         print("\n✓ Setup complete!")
         print("\nNext steps:")
-        print("  1. Dry run:  python agent.py dry-run --config config.json")
-        print("  2. Live run: python agent.py start   --config config.json")
+        print("  1. Dry run:  python scripts/agent.py dry-run --config config.json")
+        print("  2. Live run: python scripts/agent.py start   --config config.json")
         print("============================================================\n")
 
     def dry_run(self, cycles: int = 5):
@@ -207,7 +207,7 @@ class CoinbaseGridTrader:
 
         print("✓ Dry run complete!")
         print("\nTo run live mode:")
-        print("  python agent.py start --config config.json")
+        print("  python scripts/agent.py start --config config.json")
         print("============================================================\n")
 
     def start(self):

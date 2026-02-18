@@ -53,13 +53,13 @@ Get your Seren API key at: https://serendb.com
 
 ```bash
 # Phase 0: Extract your profile
-python agent.py extract-profile \
+python scripts/agent.py extract-profile \
   --resume resume.pdf \
   --linkedin-export linkedin_export.zip \
   --output profile.json
 
 # Phase 1: Discover companies
-python agent.py discover \
+python scripts/agent.py discover \
   --profile profile.json \
   --role "Senior ML Engineer" \
   --industry "Artificial Intelligence" \
@@ -68,32 +68,32 @@ python agent.py discover \
   --output companies.json
 
 # Phase 2: Research top companies
-python agent.py research \
+python scripts/agent.py research \
   --companies companies.json \
   --limit 20 \
   --output research.json
 
 # Phase 3: Find hiring managers
-python agent.py find-contacts \
+python scripts/agent.py find-contacts \
   --companies research.json \
   --titles "Engineering Manager,VP Engineering,Director of Engineering" \
   --limit 10 \
   --output contacts.json
 
 # Phase 4: Discover networking events
-python agent.py discover-events \
+python scripts/agent.py discover-events \
   --location "San Francisco" \
   --industry "AI,Machine Learning" \
   --date-range "2026-03-01,2026-04-30" \
   --output events.json
 
 # Phase 5a: Verify emails
-python agent.py verify-emails \
+python scripts/agent.py verify-emails \
   --contacts contacts.json \
   --output contacts_verified.json
 
 # Phase 5b: Generate outreach emails
-python agent.py generate-outreach \
+python scripts/agent.py generate-outreach \
   --contacts contacts_verified.json \
   --profile profile.json \
   --events events.json \
@@ -101,10 +101,10 @@ python agent.py generate-outreach \
   --output outreach.json
 
 # Phase 6: Initialize tracker
-python agent.py init-tracker --database job_seeker.db
+python scripts/agent.py init-tracker --database job_seeker.db
 
 # Phase 6: Check status
-python agent.py status --database job_seeker.db --campaign "ML_2026"
+python scripts/agent.py status --database job_seeker.db --campaign "ML_2026"
 ```
 
 ## Dry-Run Mode
@@ -112,7 +112,7 @@ python agent.py status --database job_seeker.db --campaign "ML_2026"
 Test the workflow without making API calls (zero cost):
 
 ```bash
-python agent.py discover --profile profile.json --role "Engineer" --industry "Tech" --location "SF" --dry-run
+python scripts/agent.py discover --profile profile.json --role "Engineer" --industry "Tech" --location "SF" --dry-run
 ```
 
 ## Cost Estimates

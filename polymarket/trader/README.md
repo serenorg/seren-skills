@@ -52,7 +52,7 @@ Edit `config.json` to set:
 Test the bot without placing real trades:
 
 ```bash
-python3 agent.py --config config.json --dry-run
+python3 scripts/agent.py --config config.json --dry-run
 ```
 
 This will:
@@ -67,7 +67,7 @@ This will:
 Once you've tested and are ready to trade with real money:
 
 ```bash
-python3 agent.py --config config.json
+python3 scripts/agent.py --config config.json
 ```
 
 **IMPORTANT**: Only risk what you can afford to lose!
@@ -76,12 +76,12 @@ python3 agent.py --config config.json
 
 ```
 polymarket-trader/
-├── agent.py                 # Main trading bot
-├── seren_client.py          # Seren API client
-├── polymarket_client.py     # Polymarket CLOB API wrapper
-├── kelly.py                 # Kelly Criterion calculator
-├── position_tracker.py      # Position management
-├── logger.py                # Trading logger
+├── scripts/agent.py                 # Main trading bot
+├── scripts/seren_client.py          # Seren API client
+├── scripts/polymarket_client.py     # Polymarket CLOB API wrapper
+├── scripts/kelly.py                 # Kelly Criterion calculator
+├── scripts/position_tracker.py      # Position management
+├── scripts/logger.py                # Trading logger
 ├── requirements.txt         # Python dependencies
 ├── config.json              # Trading configuration (create from example)
 ├── .env                     # API credentials (create from example)
@@ -173,7 +173,7 @@ polymarket-trader/
 
 - **Position closing**: Detects API-closed positions but does not actively execute stop-loss or take-profit exits
 - **Notifications**: Events are logged to `notifications.jsonl` but no email or webhook delivery is implemented
-- **Backtesting**: No historical replay engine; `performance.py` analyses past live results only
+- **Backtesting**: No historical replay engine; `scripts/performance.py` analyses past live results only
 - **Web dashboard**: No monitoring UI; all data lives in JSONL files and SerenDB tables
 
 ## Contributing

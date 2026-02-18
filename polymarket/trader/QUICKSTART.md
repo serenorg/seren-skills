@@ -11,7 +11,7 @@ Get the Polymarket Trading Bot running in 5 minutes.
 ## One-Command Setup (Recommended)
 
 ```bash
-./setup_test.sh
+./scripts/setup_test.sh
 ```
 
 This script will:
@@ -57,10 +57,10 @@ Review the settings - defaults are safe for testing.
 
 ```bash
 # Syntax validation (no credentials needed)
-python3 test_syntax.py
+python3 scripts/test_syntax.py
 
 # Dry-run test (needs SEREN_API_KEY)
-python3 test_dry_run.py
+python3 scripts/test_dry_run.py
 ```
 
 ## Running the Bot
@@ -70,7 +70,7 @@ python3 test_dry_run.py
 Test without placing real trades:
 
 ```bash
-python3 agent.py --config config.json --dry-run
+python3 scripts/agent.py --config config.json --dry-run
 ```
 
 The bot will:
@@ -86,13 +86,13 @@ The bot will:
 1. Start the agent server:
 
 ```bash
-python3 run_agent_server.py --config config.json
+python3 scripts/run_agent_server.py --config config.json
 ```
 
 2. In another terminal, setup autonomous scheduling:
 
 ```bash
-python3 setup_cron.py --url http://localhost:8080/run --schedule "*/120 * * * *"
+python3 scripts/setup_cron.py --url http://localhost:8080/run --schedule "*/120 * * * *"
 ```
 
 This creates a cron job that triggers the bot every 2 hours.
@@ -135,7 +135,7 @@ Check if `config.json` exists:
 ls -la config.json
 ```
 
-If missing, run `./setup_test.sh` or `cp config.example.json config.json`.
+If missing, run `./scripts/setup_test.sh` or `cp config.example.json config.json`.
 
 ## Next Steps
 

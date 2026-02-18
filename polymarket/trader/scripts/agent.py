@@ -11,7 +11,7 @@ This agent:
 6. Monitors positions and reports P&L
 
 Usage:
-    python agent.py --config config.json [--dry-run]
+    python scripts/agent.py --config config.json [--dry-run]
 """
 
 import argparse

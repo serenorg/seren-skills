@@ -5,7 +5,8 @@
 set -e  # Exit on error
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+SKILL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$SKILL_DIR"
 
 echo "============================================================"
 echo "Polymarket Trading Bot - Test Setup"
@@ -46,7 +47,7 @@ else
         exit 1
     fi
 
-    cat > .env << EOF
+    cat > .env << EOF2
 # Seren API credentials (REQUIRED)
 SEREN_API_KEY=$SEREN_API_KEY
 
@@ -56,7 +57,7 @@ POLY_API_KEY=mock_key_for_testing
 POLY_PASSPHRASE=mock_passphrase_for_testing
 POLY_SECRET=mock_secret_for_testing
 POLY_ADDRESS=0xMockAddressForTesting
-EOF
+EOF2
 
     echo "✅ .env created"
 fi
@@ -81,7 +82,7 @@ echo "============================================================"
 echo "Running Syntax Validation..."
 echo "============================================================"
 echo ""
-python3 test_syntax.py
+python3 scripts/test_syntax.py
 echo ""
 
 # Run dry-run test
@@ -89,7 +90,7 @@ echo "============================================================"
 echo "Running Dry-Run Test..."
 echo "============================================================"
 echo ""
-python3 test_dry_run.py
+python3 scripts/test_dry_run.py
 echo ""
 
 # Summary
@@ -103,14 +104,14 @@ echo "1. Review your config.json settings:"
 echo "   cat config.json"
 echo ""
 echo "2. Run a single dry-run scan (no live trades):"
-echo "   python3 agent.py --config config.json --dry-run"
+echo "   python3 scripts/agent.py --config config.json --dry-run"
 echo ""
 echo "3. When ready for live trading:"
 echo "   - Update .env with real Polymarket API credentials"
 echo "   - Review config.json risk parameters"
 echo "   - Ensure you have $550+ total budget (see SKILL.md Phase 4)"
-echo "   - Start the agent server: python3 run_agent_server.py --config config.json"
-echo "   - Setup cron job: python3 setup_cron.py --url http://localhost:8080/run"
+echo "   - Start the agent server: python3 scripts/run_agent_server.py --config config.json"
+echo "   - Setup cron job: python3 scripts/setup_cron.py --url http://localhost:8080/run"
 echo ""
 echo "4. Monitor logs:"
 echo "   tail -f logs/trading_*.log"
