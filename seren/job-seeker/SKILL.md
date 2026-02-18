@@ -1,15 +1,6 @@
 ---
 name: job-seeker
 description: "AI-powered job search agent that finds hiring managers, researches companies, discovers networking events, generates personalized outreach, and auto-applies to jobs — dual strategy for maximum coverage"
-metadata:
-  display-name: "Job Seeker"
-  author: "SerenAI"
-  version: "1.0.0"
-  tags: "jobs,career,networking,hiring,outreach,apollo,linkedin,events,automation,ats,applications"
-  publishers: "alphagrowth,apollo,exa,perplexity,playwright,seren-models,2captcha"
-  cost_estimate: "$20-56 per search (networking-only to full combined strategy)"
-  kind: "agent"
-  runtime: "python"
 ---
 
 # Job Seeker & Apply

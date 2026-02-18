@@ -1,13 +1,6 @@
 ---
 name: browser-automation
 description: "Automate web browsers using Playwright with stealth features for screenshots, web scraping, form filling, and browser interactions"
-metadata:
-  display-name: "Browser Automation"
-  author: "SerenAI"
-  version: "1.0.0"
-  tags: "browser,automation,playwright,web-scraping,testing,screenshots,stealth"
-  kind: "integration"
-  runtime: "docs-only"
 ---
 
 # Browser Automation with Playwright

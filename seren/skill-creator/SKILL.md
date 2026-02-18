@@ -1,12 +1,6 @@
 ---
 name: skill-creator
 description: "Create or update skills that comply with the Agent Skills specification and Seren repo conventions."
-metadata:
-  display-name: "Skill Creator"
-  author: "SerenAI"
-  version: "1.0.0"
-  kind: "guide"
-  runtime: "docs-only"
 ---
 
 # Skill Creator
@@ -38,15 +32,15 @@ Core spec rules:
   - not start/end with a hyphen
   - not contain consecutive hyphens
   - exactly match the parent directory name
-- `metadata` must be a map of string keys to string values
+- if `metadata` is used, it must be a map of string keys to string values
 
 ## Seren Repo Conventions
 
 On top of the spec, this repo uses the following conventions:
 
-- store non-spec fields in `metadata`
-- keep all metadata values as strings
-- encode multi-value metadata fields (for example `tags`, `publishers`) as comma-separated strings
+- frontmatter uses only `name` and `description` (everything else is derived)
+- optional spec fields (`license`, `compatibility`, `allowed-tools`, `metadata`) are available when appropriate
+- use the first `# H1` in the body as the display name
 - keep runtime files in `scripts/`
 - keep `requirements.txt` / `package.json`, `config.example.json`, and `.env.example` at the skill root
 - keep local `config.json` untracked
@@ -60,7 +54,7 @@ Collect:
 - org name (for example `seren`, `coinbase`)
 - skill directory name in kebab-case (for example `grid-trader`)
 - skill purpose and activation context
-- runtime (`python`, `node`, `bash`, or `docs-only`)
+- whether the skill needs executable code (put in `scripts/`) or is documentation-only
 
 ### 2. Scaffold Directory
 
@@ -78,16 +72,9 @@ Use this baseline template:
 ---
 name: skill-name
 description: Clear statement of what the skill does and when to use it
-license: Apache-2.0 # optional
-compatibility: "Requires git and jq" # optional
-metadata:
-  display-name: "Skill Name"
-  kind: "guide"
-  runtime: "docs-only"
-  author: "Your Name"
-  version: "1.0.0"
-  tags: "optional,tags"
-allowed-tools: "Bash(git:*) Read" # optional, experimental
+# license: Apache-2.0
+# compatibility: "Requires git and jq"
+# allowed-tools: Read Bash(git:*)
 ---
 ```
 
@@ -95,7 +82,7 @@ Validation requirements:
 
 - `name` equals directory name exactly
 - `description` is concrete and trigger-oriented
-- `metadata` values are strings only
+- optional fields (if present) follow spec constraints
 - keep frontmatter fields minimal and relevant
 
 ### 4. Write A Focused SKILL.md Body
@@ -119,7 +106,6 @@ Checklist:
 
 - frontmatter present and valid
 - `name` matches directory
-- `metadata` contains string key/value entries only
 - commands in docs point to real files
 - runtime files (if any) live under `scripts/`
 - no secrets committed
@@ -130,11 +116,6 @@ Checklist:
 ---
 name: api-tester
 description: Test REST endpoints and validate response contracts.
-metadata:
-  display-name: "API Tester"
-  kind: "agent"
-  runtime: "python"
-  tags: "testing,api,validation"
 ---
 
 # API Tester

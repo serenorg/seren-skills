@@ -34,16 +34,7 @@ name: skill-name
 description: Clear description of what this skill does and when to use it
 license: Apache-2.0 # optional
 compatibility: "Requires git and jq" # optional
-metadata:
-  display-name: "Skill Name"
-  kind: "agent"
-  runtime: "python"
-  author: "Your Name"
-  version: "1.0.0"
-  tags: "relevant,searchable,tags"
-  publishers: "seren-models"
-  cost_estimate: "$X per operation"
-allowed-tools: "Bash(git:*) Read" # optional, experimental
+allowed-tools: Bash(git:*) Read # optional, experimental
 ---
 
 # Skill Title
@@ -66,14 +57,12 @@ Spec rules we enforce:
 
 Seren repo conventions:
 
-- Keep non-spec properties in `metadata`
-- Keep all `metadata` values as strings
-- Use comma-separated strings for multi-value metadata fields (for example `tags` and `publishers`)
-- Common metadata keys: `display-name`, `kind`, `runtime`, `author`, `version`, `tags`, `publishers`, `cost_estimate`
+- Use the first `# H1` in the body as the display name
+- Keep runtime code in `scripts/`
 
 ### 3. Include runtime files if applicable
 
-Skills with `runtime: "python"`, `runtime: "node"`, or `runtime: "bash"` should include:
+Skills with executable code should include:
 
 - `scripts/` - executable code (for example, `scripts/agent.py`, `scripts/index.js`, `scripts/run.sh`)
 - `requirements.txt` (python) or `package.json` (node) at skill root when needed
@@ -86,8 +75,8 @@ coinbase/grid-trader/
 ├── SKILL.md               # Required - skill documentation
 ├── scripts/
 │   └── grid_trader.py     # Runtime code
-├── requirements.txt       # Python dependencies (if runtime: python)
-├── package.json           # Node dependencies (if runtime: node)
+├── requirements.txt       # Python dependencies
+├── package.json           # Node dependencies
 ├── config.example.json    # Configuration template
 └── .env.example           # Environment template
 ```
@@ -95,7 +84,7 @@ coinbase/grid-trader/
 Keep dependency/config templates (`requirements.txt`, `package.json`, `config.example.json`, `.env.example`) at the skill root, not inside `scripts/`.
 Local `config.json` should also live at the skill root and be gitignored.
 
-Skills with `runtime: "docs-only"` only need `SKILL.md`.
+Documentation-only skills only need `SKILL.md`.
 
 ## Pull Request Process
 

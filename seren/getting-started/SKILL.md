@@ -1,13 +1,6 @@
 ---
 name: getting-started
 description: "Learn how to use skills, add them to threads, invoke them, and create custom skills with Skill Creator"
-metadata:
-  display-name: "Getting Started"
-  tags: "tutorial,getting-started,skills,guide"
-  author: "SerenAI"
-  version: "1.0.0"
-  kind: "guide"
-  runtime: "docs-only"
 ---
 
 # Getting Started with Skills

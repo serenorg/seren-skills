@@ -1,15 +1,6 @@
 ---
 name: grid-trader
 description: "Automated grid trading bot for Kraken — profits from BTC volatility using a mechanical, non-directional strategy"
-metadata:
-  display-name: "Kraken Grid Trader"
-  kind: "agent"
-  runtime: "python"
-  author: "SerenAI"
-  version: "1.0.0"
-  tags: "trading,crypto,kraken,grid-bot"
-  publishers: "kraken,seren-models"
-  cost_estimate: "$0.50-2.00 per trading cycle"
 ---
 
 # Kraken Grid Trader

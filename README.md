@@ -63,8 +63,8 @@ org/skill-name/
 ├── SKILL.md               # Required - docs and frontmatter
 ├── scripts/               # Executable code (agent skills only)
 │   └── agent.py
-├── requirements.txt       # Python dependencies (runtime: python)
-├── package.json           # Node dependencies (runtime: node)
+├── requirements.txt       # Python dependencies
+├── package.json           # Node dependencies
 ├── config.example.json    # Config template (optional)
 └── .env.example           # Environment template (optional)
 ```
@@ -88,21 +88,12 @@ name: skill-name
 description: What the skill does and when to use it
 license: Apache-2.0 # optional
 compatibility: "Requires git and jq" # optional
-metadata:
-  display-name: "Skill Name"
-  kind: "agent"
-  runtime: "python"
-  author: "Your Name"
-  version: "1.0.0"
-  tags: "relevant,searchable,tags"
-  publishers: "seren-models"
-  cost_estimate: "$X per operation"
-allowed-tools: "Bash(git:*) Read" # optional, experimental
+allowed-tools: Bash(git:*) Read # optional, experimental
 ---
 ```
 
-Repository conventions for `metadata` values:
+Conventions:
 
-- Keep all values as strings
-- Encode multi-value fields as comma-separated strings (for example, `tags`)
+- Use the first `# H1` in the document body as the display name
 - Keep runtime code in `scripts/`
+- `metadata` is available per spec but not used by Seren skills today
