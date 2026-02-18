@@ -1,11 +1,6 @@
 ---
-name: Getting Started Skill
-description: Learn how to use skills, add them to threads, invoke them, and create custom skills with Skill Creator
-tags: [tutorial, getting-started, skills, guide]
-author: SerenAI
-version: 1.0.0
-kind: guide
-runtime: docs-only
+name: getting-started
+description: "Learn how to use skills, add them to threads, invoke them, and create custom skills with Skill Creator"
 ---
 
 # Getting Started with Skills

@@ -80,19 +80,19 @@ Edit `config.json` to set your price range around the **current market price**:
 ### 4. Setup and validate
 
 ```bash
-python agent.py setup --config config.json
+python scripts/agent.py setup --config config.json
 ```
 
 ### 5. Test with dry run
 
 ```bash
-python agent.py dry-run --config config.json --cycles 5
+python scripts/agent.py dry-run --config config.json --cycles 5
 ```
 
 ### 6. Start live trading
 
 ```bash
-python agent.py start --config config.json
+python scripts/agent.py start --config config.json
 ```
 
 ---

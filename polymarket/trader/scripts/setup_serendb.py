@@ -115,7 +115,7 @@ def main():
         print("  ✓ No additional cost")
         print()
         print("Next steps:")
-        print("  1. Run the bot: python agent.py --config config.json")
+        print("  1. Run the bot: python scripts/agent.py --config config.json")
         print("  2. Bot will automatically use SerenDB for all data")
         print()
 

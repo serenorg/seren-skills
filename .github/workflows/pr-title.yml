@@ -1,0 +1,24 @@
+name: PR Title (Conventional)
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: step-security/action-semantic-pull-request@v6
+        with:
+          types: |
+            feat
+            fix
+            docs
+            chore
+            refactor
+            test
+          requireScope: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

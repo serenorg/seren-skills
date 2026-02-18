@@ -65,7 +65,7 @@ cp config.example.json config.json
 ### 4. Run Setup
 
 ```bash
-python agent.py setup --config config.json
+python scripts/agent.py setup --config config.json
 ```
 
 This validates your config and shows expected profit projections.
@@ -73,7 +73,7 @@ This validates your config and shows expected profit projections.
 ### 5. Test with Dry-Run
 
 ```bash
-python agent.py dry-run --config config.json --cycles 10
+python scripts/agent.py dry-run --config config.json --cycles 10
 ```
 
 Simulates 10 trading cycles without placing real orders (zero cost).
@@ -81,7 +81,7 @@ Simulates 10 trading cycles without placing real orders (zero cost).
 ### 6. Start Live Trading
 
 ```bash
-python agent.py start --config config.json
+python scripts/agent.py start --config config.json
 ```
 
 Bot will:
@@ -97,19 +97,19 @@ Press `Ctrl+C` to stop trading.
 
 ```bash
 # Setup and validate configuration
-python agent.py setup --config config.json
+python scripts/agent.py setup --config config.json
 
 # Simulate trading (no real orders)
-python agent.py dry-run --config config.json --cycles 10
+python scripts/agent.py dry-run --config config.json --cycles 10
 
 # Start live trading
-python agent.py start --config config.json
+python scripts/agent.py start --config config.json
 
 # Check current status
-python agent.py status --config config.json
+python scripts/agent.py status --config config.json
 
 # Stop trading and cancel all orders
-python agent.py stop --config config.json
+python scripts/agent.py stop --config config.json
 ```
 
 ## Configuration

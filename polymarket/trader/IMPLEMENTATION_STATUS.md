@@ -3,12 +3,12 @@
 ## ✅ Completed Components
 
 ### Core Python Modules (8/8)
-- ✅ **agent.py** - Main trading bot with scan loop
-- ✅ **seren_client.py** - Seren API client for calling publishers
-- ✅ **polymarket_client.py** - Polymarket CLOB API wrapper
-- ✅ **kelly.py** - Kelly Criterion position sizing (TESTED ✓)
-- ✅ **position_tracker.py** - Position management and P&L tracking
-- ✅ **logger.py** - Comprehensive logging to JSONL files
+- ✅ **scripts/agent.py** - Main trading bot with scan loop
+- ✅ **scripts/seren_client.py** - Seren API client for calling publishers
+- ✅ **scripts/polymarket_client.py** - Polymarket CLOB API wrapper
+- ✅ **scripts/kelly.py** - Kelly Criterion position sizing (TESTED ✓)
+- ✅ **scripts/position_tracker.py** - Position management and P&L tracking
+- ✅ **scripts/logger.py** - Comprehensive logging to JSONL files
 - ✅ **requirements.txt** - Python dependencies
 - ✅ **.env.example** - Credential template
 
@@ -60,8 +60,8 @@
 - Error handling for API failures
 
 **Implementation:**
-- `get_markets()` in polymarket_client.py calls polymarket-data publisher
-- `scan_markets()` in agent.py wraps with error handling
+- `get_markets()` in scripts/polymarket_client.py calls polymarket-data publisher
+- `scan_markets()` in scripts/agent.py wraps with error handling
 - Filters markets by liquidity to focus on tradeable opportunities
 
 ---
@@ -134,12 +134,12 @@
 **Status:** Client code exists, but no automation setup
 
 **What's needed:**
-- Web endpoint that triggers `agent.py`
+- Web endpoint that triggers `scripts/agent.py`
 - Or alternative: system cron + shell script
 - Proper error handling for automated runs
 
 **Current workaround:**
-- User must run `python agent.py` manually
+- User must run `python scripts/agent.py` manually
 - No autonomous operation yet
 
 **Implementation priority:** LOW (nice to have)
@@ -188,7 +188,7 @@
 - All data stored in user's SerenDB instance (cloud-based)
 
 #### Performance Module ✅
-- **performance.py**: Standalone module with:
+- **scripts/performance.py**: Standalone module with:
   - `calculate_brier_score()`
   - `calculate_calibration_curve()`
   - `adjust_kelly_multiplier()`

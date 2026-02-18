@@ -1,13 +1,6 @@
 ---
-name: Job Seeker & Apply
+name: job-seeker
 description: "AI-powered job search agent that finds hiring managers, researches companies, discovers networking events, generates personalized outreach, and auto-applies to jobs — dual strategy for maximum coverage"
-author: Seren AI
-version: 1.0.0
-tags: [jobs, career, networking, hiring, outreach, apollo, linkedin, events, automation, ats, applications]
-publishers: [alphagrowth, apollo, exa, perplexity, playwright, seren-models, 2captcha]
-cost_estimate: "$20-56 per search (networking-only to full combined strategy)"
-kind: agent
-runtime: python
 ---
 
 # Job Seeker & Apply
@@ -76,7 +69,7 @@ When the user asks to **find jobs** or **apply to companies**, follow this 7-pha
 5. Download ZIP file (e.g., `Basic_LinkedInDataExport.zip`)
 
 ```bash
-python3 job_seeker.py extract-profile \
+python3 scripts/agent.py extract-profile \
   --resume resume.pdf \
   --linkedin-export linkedin-export.zip \
   --output user_profile.json
@@ -132,7 +125,7 @@ Ready to find companies matching your profile?
 ```bash
 # Discover companies via AlphaGrowth
 # Example: Find 50 AI startups in SF with 10-100 employees
-python3 job_seeker.py discover \
+python3 scripts/agent.py discover \
   --profile user_profile.json \
   --role "Senior ML Engineer" \
   --industry "AI" \
@@ -531,7 +524,7 @@ Summary:
 
 **Phase 1: Company Discovery**
 ```bash
-python3 job_seeker.py discover \
+python3 scripts/agent.py discover \
   --role "Senior ML Engineer" \
   --industry "Artificial Intelligence" \
   --location "San Francisco" \
@@ -542,7 +535,7 @@ python3 job_seeker.py discover \
 
 **Phase 2: Research Top 20**
 ```bash
-python3 job_seeker.py research \
+python3 scripts/agent.py research \
   --companies companies.json \
   --limit 20 \
   --output research.json
@@ -550,7 +543,7 @@ python3 job_seeker.py research \
 
 **Phase 3: Find Hiring Managers (Apollo)**
 ```bash
-python3 job_seeker.py find-contacts \
+python3 scripts/agent.py find-contacts \
   --companies research.json \
   --titles "Engineering Manager,VP Engineering,Director of Engineering" \
   --tool apollo \
@@ -559,7 +552,7 @@ python3 job_seeker.py find-contacts \
 
 **Phase 3b: Enrich with Social Context (Playwright)**
 ```bash
-python3 job_seeker.py enrich-contacts \
+python3 scripts/agent.py enrich-contacts \
   --contacts contacts.json \
   --tool playwright \
   --limit 10 \
@@ -568,7 +561,7 @@ python3 job_seeker.py enrich-contacts \
 
 **Phase 4: Discover Events**
 ```bash
-python3 job_seeker.py discover-events \
+python3 scripts/agent.py discover-events \
   --location "San Francisco" \
   --industry "AI,Machine Learning" \
   --date_range "2026-03-01,2026-04-30" \
@@ -577,14 +570,14 @@ python3 job_seeker.py discover-events \
 
 **Phase 5a: Verify Emails**
 ```bash
-python3 job_seeker.py verify-emails \
+python3 scripts/agent.py verify-emails \
   --contacts contacts_enriched.json \
   --output contacts_verified.json
 ```
 
 **Phase 5b: Generate Outreach**
 ```bash
-python3 job_seeker.py generate-outreach \
+python3 scripts/agent.py generate-outreach \
   --contacts contacts_verified.json \
   --background user_background.txt \
   --events events.json \
@@ -594,14 +587,14 @@ python3 job_seeker.py generate-outreach \
 
 **Phase 6: Track Applications**
 ```bash
-python3 job_seeker.py track \
+python3 scripts/agent.py track \
   --outreach outreach.json \
   --database applications.db
 ```
 
 **Phase 7: Automated Job Applications**
 ```bash
-python3 job_seeker.py auto-apply \
+python3 scripts/agent.py auto-apply \
   --companies research.json \
   --role "Senior ML Engineer" \
   --resume resume.pdf \
@@ -721,7 +714,7 @@ python3 job_seeker.py auto-apply \
 ### Show Pipeline Status
 
 ```bash
-python3 job_seeker.py status --database applications.db
+python3 scripts/agent.py status --database applications.db
 ```
 
 **Output:**
@@ -761,7 +754,7 @@ Phase 6: Overall Tracking
 ### Update Tracker (After Sending Email)
 
 ```bash
-python3 job_seeker.py update-tracker \
+python3 scripts/agent.py update-tracker \
   --id 42 \
   --status sent \
   --sent_date 2026-03-10 \
@@ -771,7 +764,7 @@ python3 job_seeker.py update-tracker \
 ### Record Response
 
 ```bash
-python3 job_seeker.py record-response \
+python3 scripts/agent.py record-response \
   --id 42 \
   --responded yes \
   --response_date 2026-03-12 \
@@ -782,7 +775,7 @@ python3 job_seeker.py record-response \
 ### Schedule Follow-Up
 
 ```bash
-python3 job_seeker.py schedule-followup \
+python3 scripts/agent.py schedule-followup \
   --id 42 \
   --followup_date 2026-03-17 \
   --template "polite_nudge" \

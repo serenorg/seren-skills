@@ -1,13 +1,6 @@
 ---
-name: Polymarket Bot
-description: Autonomous trading agent for Polymarket prediction markets using Seren ecosystem
-author: Seren AI
-version: 1.0.0
-tags: [trading, polymarket, prediction-markets, ai, autonomous, seren]
-kind: agent
-runtime: python
-publishers: [polymarket, seren-models]
-cost_estimate: "$1-5 per trading cycle"
+name: trader
+description: "Autonomous trading agent for Polymarket prediction markets using Seren ecosystem"
 ---
 
 # Polymarket Trading Bot
@@ -82,7 +75,7 @@ If files are missing, guide user through setup (see Phase 1-2 below).
 Run a single scan to find mispriced markets:
 
 ```bash
-cd ~/.config/seren/skills/polymarket-trader && python3 agent.py --config config.json --dry-run --once 2>&1
+cd ~/.config/seren/skills/polymarket-trader && python3 scripts/agent.py --config config.json --dry-run --once 2>&1
 ```
 
 **What this does:**
@@ -130,13 +123,13 @@ tail -50 ~/.config/seren/skills/polymarket-trader/logs/trading_*.log
 - Real Polymarket API credentials
 
 ```bash
-cd ~/.config/seren/skills/polymarket-trader && python3 run_agent_server.py --config config.json &
+cd ~/.config/seren/skills/polymarket-trader && python3 scripts/run_agent_server.py --config config.json &
 ```
 
 Then setup cron:
 
 ```bash
-python3 setup_cron.py --url http://localhost:8080/run --schedule "*/120 * * * *"
+python3 scripts/setup_cron.py --url http://localhost:8080/run --schedule "*/120 * * * *"
 ```
 
 **Important:**
@@ -166,12 +159,12 @@ This skill helps users set up and manage an autonomous trading agent that:
 - Seren-cron executes Python script on schedule
 
 **Components:**
-- `agent.py` - Main trading loop
-- `seren_client.py` - Seren API client (calls publishers)
-- `polymarket_client.py` - Polymarket CLOB API wrapper
-- `kelly.py` - Position sizing calculator
-- `position_tracker.py` - Position management
-- `logger.py` - Trading logger
+- `scripts/agent.py` - Main trading loop
+- `scripts/seren_client.py` - Seren API client (calls publishers)
+- `scripts/polymarket_client.py` - Polymarket CLOB API wrapper
+- `scripts/kelly.py` - Position sizing calculator
+- `scripts/position_tracker.py` - Position management
+- `scripts/logger.py` - Trading logger
 
 **Seren Publishers Used:**
 - `polymarket-data` - Real-time Polymarket market data (prices, volumes, liquidity)
@@ -399,7 +392,7 @@ Paper trading uses real market data and real AI analysis, but simulates trades i
 **How to paper trade:**
 
 ```bash
-python3 agent.py --config config.json --dry-run
+python3 scripts/agent.py --config config.json --dry-run
 ```
 
 **What happens in dry-run mode:**
@@ -430,7 +423,7 @@ python3 agent.py --config config.json --dry-run
 Run scans one at a time when you want:
 
 ```bash
-python3 agent.py --config config.json --dry-run --once
+python3 scripts/agent.py --config config.json --dry-run --once
 ```
 
 - You control when to spend API credits ($1 per scan)
@@ -521,7 +514,7 @@ Before running the bot, verify both balances:
 Test the bot without placing real trades:
 
 ```bash
-python3 agent.py --config config.json --dry-run
+python3 scripts/agent.py --config config.json --dry-run
 ```
 
 **Dry-run mode:**
@@ -623,7 +616,7 @@ Once confirmed, run the agent:
 
 ```bash
 # Run once
-python3 agent.py --config config.json
+python3 scripts/agent.py --config config.json
 
 # Or set up with seren-cron for autonomous operation
 ```
@@ -649,7 +642,7 @@ job = seren.create_cron_job(
 print(f"Cron job created: {job['id']}")
 ```
 
-**Note:** You'll need to set up a web endpoint that calls `agent.py` when triggered.
+**Note:** You'll need to set up a web endpoint that calls `scripts/agent.py` when triggered.
 
 ---
 

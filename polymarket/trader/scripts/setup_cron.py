@@ -6,11 +6,11 @@ This script registers a cron job with seren-cron to trigger the trading agent
 on a regular schedule (default: every 10 minutes).
 
 Prerequisites:
-    1. Agent server must be running: python run_agent_server.py --config config.json
+    1. Agent server must be running: python scripts/run_agent_server.py --config config.json
     2. Server must be accessible at the URL provided
 
 Usage:
-    python setup_cron.py --url http://localhost:8080/run [--schedule "*/10 * * * *"]
+    python scripts/setup_cron.py --url http://localhost:8080/run [--schedule "*/10 * * * *"]
 """
 
 import argparse

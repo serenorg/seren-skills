@@ -1,11 +1,6 @@
 ---
-name: CryptoBullseyeZone Tax Reconciler
-description: "Use when a user needs to reconcile exchange Form 1099-DA data with crypto tax software records before filing Form 8949, including optional free SerenDB-backed normalization and audit automation."
-kind: guide
-runtime: python
-author: CryptoBullseye.zone
-version: 1.2.0
-tags: [crypto, taxes, 1099-da, form-8949, reconciliation, serendb]
+name: tax
+description: "Use when a user needs to reconcile exchange Form 1099-DA data with crypto tax software records before filing Form 8949."
 ---
 
 # CryptoBullseyeZone Tax Reconciler

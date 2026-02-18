@@ -1,13 +1,6 @@
 ---
-name: Kraken Grid Trader
+name: grid-trader
 description: "Automated grid trading bot for Kraken — profits from BTC volatility using a mechanical, non-directional strategy"
-kind: agent
-runtime: python
-author: Seren AI
-version: 1.0.0
-tags: [trading, crypto, kraken, grid-bot]
-publishers: [kraken, seren-models]
-cost_estimate: "$0.50-2.00 per trading cycle"
 ---
 
 # Kraken Grid Trader
@@ -23,7 +16,7 @@ Grid trading places buy and sell orders at regular price intervals (the "grid").
 1. Copy `.env.example` to `.env` and fill in your Seren API credentials
 2. Copy `config.example.json` to `config.json` and configure your grid parameters
 3. Install dependencies: `pip install -r requirements.txt`
-4. Run: `python agent.py`
+4. Run: `python scripts/agent.py`
 
 ## Configuration
 

@@ -1,197 +1,132 @@
 ---
-name: Skill Creator
-description: Guides users through creating new skills following the AgentSkills.io standard. Use when the user wants to create a custom skill.
-author: SerenAI
-version: 1.0.0
-kind: guide
-runtime: docs-only
+name: skill-creator
+description: "Create or update skills that comply with the Agent Skills specification and Seren repo conventions."
 ---
 
 # Skill Creator
 
-Guides users through creating new skills that work with Claude Code, OpenAI Codex, and other compatible LLMs.
+Use this skill to create new skills or modernize existing ones in this repository.
 
-## When to Use This Skill
+## When To Use
 
-Use this skill when:
-- User asks to create a new skill
-- User wants to customize agent behavior for a specific task
-- User mentions "create a skill", "make a skill", or "custom command"
+Use this skill when the user asks to:
 
-## Skill Creation Workflow
+- create a new skill
+- update skill frontmatter or layout
+- make a skill compatible with Agent Skills-compliant tooling
 
-When creating a skill, follow these steps:
+## Canonical Standard
 
-### 1. Gather Requirements
+Treat the Agent Skills specification as the source of truth:
 
-Ask the user:
-- **Skill name**: A short, kebab-case identifier (e.g., `code-reviewer`, `api-tester`)
-- **Purpose**: What task should this skill help with?
-- **When to use**: What triggers or context should activate this skill?
-- **Workflow**: What are the key steps the agent should follow?
+- https://agentskills.io/specification
 
-### 2. Choose Scope
+Core spec rules:
 
-Skills can be installed in three scopes:
-- **Project** (`skills/`): Available only in this project
-- **Claude** (`~/.claude/skills/`): Available globally in Claude Code
-- **Seren** (app data): Available globally in Seren Desktop
+- `SKILL.md` must include YAML frontmatter
+- required top-level fields: `name`, `description`
+- optional top-level fields: `license`, `compatibility`, `metadata`, `allowed-tools`
+- `name` must:
+  - be 1-64 chars
+  - use lowercase letters, digits, and hyphens only
+  - not start/end with a hyphen
+  - not contain consecutive hyphens
+  - exactly match the parent directory name
+- if `metadata` is used, it must be a map of string keys to string values
 
-For most cases, recommend **Project scope**.
+## Seren Repo Conventions
 
-### 3. Generate SKILL.md
+On top of the spec, this repo uses the following conventions:
 
-Create a `SKILL.md` file following the AgentSkills.io format:
+- frontmatter uses only `name` and `description` (everything else is derived)
+- optional spec fields (`license`, `compatibility`, `allowed-tools`, `metadata`) are available when appropriate
+- use the first `# H1` in the body as the display name
+- keep runtime files in `scripts/`
+- keep `requirements.txt` / `package.json`, `config.example.json`, and `.env.example` at the skill root
+- keep local `config.json` untracked
 
-```markdown
+## Workflow
+
+### 1. Confirm Scope
+
+Collect:
+
+- org name (for example `seren`, `coinbase`)
+- skill directory name in kebab-case (for example `grid-trader`)
+- skill purpose and activation context
+- whether the skill needs executable code (put in `scripts/`) or is documentation-only
+
+### 2. Scaffold Directory
+
+Create:
+
+- `{org}/{skill-name}/SKILL.md`
+- optional runtime files under `{org}/{skill-name}/scripts/`
+- optional root files: `requirements.txt`, `package.json`, `config.example.json`, `.env.example`
+
+### 3. Write Frontmatter Correctly
+
+Use this baseline template:
+
+```yaml
 ---
 name: skill-name
-description: Brief description of what this skill does and when to use it
-author: Author Name (optional)
-version: 1.0.0 (optional)
-tags: [tag1, tag2] (optional)
+description: Clear statement of what the skill does and when to use it
+# license: Apache-2.0
+# compatibility: "Requires git and jq"
+# allowed-tools: Read Bash(git:*)
 ---
-
-# Skill Name
-
-## Overview
-
-Describe the skill's purpose and capabilities.
-
-## When to Use
-
-Explain when and why an agent should use this skill.
-
-## Workflow
-
-1. First step
-2. Second step
-3. Third step
-
-## Examples
-
-### Example 1: Use Case Name
-
-```
-User: "trigger phrase"
-Agent: [expected behavior]
 ```
 
-## Best Practices
+Validation requirements:
 
-- Guideline 1
-- Guideline 2
+- `name` equals directory name exactly
+- `description` is concrete and trigger-oriented
+- optional fields (if present) follow spec constraints
+- keep frontmatter fields minimal and relevant
 
-## Common Pitfalls
+### 4. Write A Focused SKILL.md Body
 
-- What to avoid
-- Edge cases to handle
-```
+Include:
 
-### 4. Create the Skill Directory
+- when to use the skill
+- step-by-step workflow
+- minimal command examples
+- constraints and failure handling
 
-Use the file system to create:
-- `skills/{skill-name}/SKILL.md` - The main skill file
-- `skills/{skill-name}/examples/` - (Optional) Example outputs
-- `skills/{skill-name}/scripts/` - (Optional) Helper scripts
+Avoid:
 
-### 5. Test the Skill
+- long generic prose
+- duplicate documentation across many files
+- references to paths that do not exist
 
-After creating:
-1. Verify the skill appears in the Skills sidebar
-2. Test activation with a relevant prompt
-3. Iterate based on results
+### 5. Validate Before PR
 
-## Skill Best Practices
+Checklist:
 
-### Writing Effective Skills
+- frontmatter present and valid
+- `name` matches directory
+- commands in docs point to real files
+- runtime files (if any) live under `scripts/`
+- no secrets committed
 
-- **Be specific**: Clear triggers and workflows produce better results
-- **Use examples**: Show concrete input/output examples
-- **Keep it focused**: One skill = one responsibility
-- **Test iteratively**: Create, test, refine
-
-### Skill Metadata
-
-The YAML frontmatter should include:
-- `name`: Kebab-case identifier (required)
-- `description`: When to use this skill (required)
-- `author`: Creator name (optional)
-- `version`: Semantic version (optional)
-- `tags`: Categories for filtering (optional)
-
-### Progressive Disclosure
-
-For complex skills:
-1. Start with a clear overview
-2. Provide step-by-step workflows
-3. Include detailed examples
-4. Add optional advanced sections
-
-## Example Skills
-
-### Example: Code Reviewer
-
-```markdown
----
-name: code-reviewer
-description: Performs thorough code reviews following best practices
-tags: [code-quality, review, best-practices]
----
-
-# Code Reviewer
-
-Reviews code changes for quality, security, and best practices.
-
-## Workflow
-
-1. Read the code changes
-2. Check for common issues:
-   - Security vulnerabilities
-   - Performance problems
-   - Code style violations
-   - Missing error handling
-3. Provide constructive feedback
-4. Suggest improvements with examples
-```
-
-### Example: API Tester
+## Example Skeleton
 
 ```markdown
 ---
 name: api-tester
-description: Tests API endpoints and validates responses
-tags: [testing, api, validation]
+description: Test REST endpoints and validate response contracts.
 ---
 
 # API Tester
 
-Tests API endpoints systematically.
+## When to Use
+
+Use when a user asks to validate API behavior or contracts.
 
 ## Workflow
 
-1. Identify API endpoint
-2. Send test requests (GET, POST, etc.)
-3. Validate response codes
-4. Check response structure
-5. Report findings
+1. Collect endpoint and auth details.
+2. Run a defined test matrix (happy path + failures).
+3. Report findings with reproducible commands.
 ```
-
-## Tips for Success
-
-1. **Start simple**: Create basic skills first, add complexity later
-2. **Use clear language**: Write for both humans and LLMs
-3. **Test thoroughly**: Verify skills work as expected
-4. **Iterate**: Refine based on real usage
-5. **Share**: Contribute useful skills to the community
-
-## AgentSkills.io Standard
-
-This skill follows the [AgentSkills.io](https://agentskills.io) open standard, ensuring compatibility across:
-- Claude Code
-- OpenAI Codex
-- Google Gemini
-- Any compatible LLM tool
-
-Taariq Lewis, SerenAI, Paloma, and Volume at https://serendb.com
-Email: hello@serendb.com

@@ -1,14 +1,6 @@
 ---
-name: Apollo
-author: SerenAI
-version: 1.0.0
+name: api
 description: "Apollo.io API for people and company enrichment, prospecting, and sales intelligence"
-tags: [apollo, integration, people-data, companies, sales-intelligence]
-publishers: [apollo]
-homepage: https://api.apollo.io/api/v1
-metadata: {"seren":{"category":"integration","publisher_slug":"apollo","api_base":"https://api.serendb.com"}}
-kind: integration
-runtime: docs-only
 ---
 
 # Apollo

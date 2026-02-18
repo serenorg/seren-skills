@@ -6,7 +6,7 @@ This server provides a single endpoint that seren-cron can call on a schedule
 to trigger autonomous trading scans.
 
 Usage:
-    python run_agent_server.py --config config.json [--port 8080] [--dry-run]
+    python scripts/run_agent_server.py --config config.json [--port 8080] [--dry-run]
 """
 
 import argparse

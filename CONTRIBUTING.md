@@ -1,27 +1,28 @@
 # Contributing to Seren Skills
 
-Thanks for contributing! This guide covers how to add new skills or improve existing ones.
+Thanks for contributing. This guide covers how to add new skills or improve existing ones.
 
 ## Before You Start
 
-- Check the [repo structure](README.md#structure) to avoid duplicates
-- Skills that run code autonomously (trading bots, scrapers) get more scrutiny — open an issue first to discuss
+- Check [README.md](README.md#structure) to avoid duplicates
+- Skills that run code autonomously (trading bots, scrapers) get extra scrutiny - open an issue first to discuss
+- Follow the [Agent Skills specification](https://agentskills.io/specification)
 
 ## Creating a New Skill
 
 ### 1. Create the directory
 
-Skills live at `{org}/{skill-name}/` at the repo root. Use an existing org or create a new one.
+Skills live at `{org}/{skill-name}/` at the repo root.
 
 ```bash
 # First-party Seren skill
 mkdir -p seren/browser-automation/
 
-# Third-party skill under your org
+# Third-party skill
 mkdir -p coinbase/grid-trader/
 ```
 
-The slug is derived from the path: `coinbase/grid-trader/` → `coinbase-grid-trader`.
+The slug is derived from the path: `coinbase/grid-trader/` -> `coinbase-grid-trader`.
 
 ### 2. Write SKILL.md
 
@@ -29,40 +30,61 @@ Every skill needs a `SKILL.md` with YAML frontmatter:
 
 ```yaml
 ---
-name: My Skill Name
-description: "Clear description of what this skill does and when to use it"
-kind: agent              # agent | integration | guide
-runtime: python          # python | node | bash | docs-only
-author: Your Name
-version: 1.0.0
-tags: [relevant, searchable, tags]
-publishers: [seren-publishers-used]    # optional
-cost_estimate: "$X per operation"       # optional
+name: skill-name
+description: Clear description of what this skill does and when to use it
+license: Apache-2.0 # optional
+compatibility: "Requires git and jq" # optional
+allowed-tools: Bash(git:*) Read # optional, experimental
 ---
 
-# My Skill Name
+# Skill Title
 
 Detailed documentation goes here...
 ```
 
-**Required fields:** `name`, `description`, `kind`, `runtime`
+Spec rules we enforce:
 
-The `kind` field describes the nature of the skill:
+- Top-level required fields: `name`, `description`
+- Top-level optional fields: `license`, `compatibility`, `metadata`, `allowed-tools`
+- `name` must:
+  - be 1-64 chars
+  - use lowercase letters, digits, and hyphens only
+  - not start/end with a hyphen
+  - not contain consecutive hyphens
+  - exactly match the parent directory name
+- `description` must be non-empty and <= 1024 chars
+- `metadata` must be string key/value pairs only
 
-- **agent** — Runs code autonomously (trading bot, scraper, automation)
-- **integration** — Documents an API for agents to use (SKILL.md only)
-- **guide** — Teaches users or agents how to do something (SKILL.md only)
+Seren repo conventions:
+
+- Use the first `# H1` in the body as the display name
+- Keep runtime code in `scripts/`
 
 ### 3. Include runtime files if applicable
 
-Skills with `runtime: python` or `runtime: node` should include:
+Skills with executable code should include:
 
-- Runtime code (e.g., `agent.py`, `index.js`)
-- Dependency file (`requirements.txt` or `package.json`)
-- `.env.example` if environment variables are needed
+- `scripts/` - executable code (for example, `scripts/agent.py`, `scripts/index.js`, `scripts/run.sh`)
+- `requirements.txt` (python) or `package.json` (node) at skill root when needed
+- `config.example.json` at skill root when needed
+- `.env.example` at skill root when needed
 - `.gitignore` for local config and secrets
 
-Skills with `runtime: docs-only` only need `SKILL.md`.
+```
+coinbase/grid-trader/
+├── SKILL.md               # Required - skill documentation
+├── scripts/
+│   └── grid_trader.py     # Runtime code
+├── requirements.txt       # Python dependencies
+├── package.json           # Node dependencies
+├── config.example.json    # Configuration template
+└── .env.example           # Environment template
+```
+
+Keep dependency/config templates (`requirements.txt`, `package.json`, `config.example.json`, `.env.example`) at the skill root, not inside `scripts/`.
+Local `config.json` should also live at the skill root and be gitignored.
+
+Documentation-only skills only need `SKILL.md`.
 
 ## Pull Request Process
 
@@ -72,16 +94,15 @@ Skills with `runtime: docs-only` only need `SKILL.md`.
 
 ### What we look for
 
-- **All skills**: Clear description, correct frontmatter, no secrets committed
-- **Agent skills**: Code review, security review, and smoke test — expect thorough review
-- **Integration skills**: API contract accuracy, auth handling, example correctness
-- **Guide skills**: Clarity, accuracy, completeness
+- All skills: clear description, correct frontmatter, no secrets committed
+- Agent skills: code review, security review, and smoke test
+- Integration skills: API contract accuracy, auth handling, example correctness
+- Guide skills: clarity, accuracy, completeness
 
 ## Style Guide
 
-- Skill names: title case (`Coinbase Grid Trader`, not `coinbase-grid-trader`)
+- Frontmatter `name`: directory identifier format (`grid-trader`, not `Grid Trader`)
 - Directory names: kebab-case (`grid-trader`, not `GridTrader`)
 - Org names: lowercase kebab-case (`coinbase`, `apollo`, `seren`)
-- Description: write for the agent — explain **when** to use the skill, not just what it is
-- Tags: lowercase, use existing tags when possible
-- Keep SKILL.md focused. Put extended docs in a `README.md` alongside it.
+- Description: write for the agent - explain when to use the skill, not just what it is
+- Keep `SKILL.md` focused. Put extended docs in a `README.md` alongside it.

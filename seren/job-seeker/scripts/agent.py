@@ -16,16 +16,16 @@ This agent implements Taariq Lewis's proven job search strategy:
 The double-tap strategy: Apply via ATS → Email hiring manager with application ID
 
 Usage:
-    python agent.py extract-profile --resume resume.pdf --linkedin-export linkedin.zip --output profile.json
-    python agent.py discover --profile profile.json --role "Senior ML Engineer" --industry "AI" --location "SF"
-    python agent.py research --companies companies.json --limit 20
-    python agent.py find-contacts --companies research.json --tool apollo
-    python agent.py discover-events --location "San Francisco" --industry "AI" --date-range "2026-03-01,2026-04-30"
-    python agent.py verify-emails --contacts contacts.json
-    python agent.py generate-outreach --contacts contacts_verified.json --profile profile.json --limit 3
-    python agent.py init-tracker --database applications.db
-    python agent.py auto-apply --companies research.json --role "Senior ML Engineer" --resume resume.pdf --profile profile.json
-    python agent.py status --database applications.db
+    python scripts/agent.py extract-profile --resume resume.pdf --linkedin-export linkedin.zip --output profile.json
+    python scripts/agent.py discover --profile profile.json --role "Senior ML Engineer" --industry "AI" --location "SF"
+    python scripts/agent.py research --companies companies.json --limit 20
+    python scripts/agent.py find-contacts --companies research.json --tool apollo
+    python scripts/agent.py discover-events --location "San Francisco" --industry "AI" --date-range "2026-03-01,2026-04-30"
+    python scripts/agent.py verify-emails --contacts contacts.json
+    python scripts/agent.py generate-outreach --contacts contacts_verified.json --profile profile.json --limit 3
+    python scripts/agent.py init-tracker --database applications.db
+    python scripts/agent.py auto-apply --companies research.json --role "Senior ML Engineer" --resume resume.pdf --profile profile.json
+    python scripts/agent.py status --database applications.db
 """
 
 import argparse
