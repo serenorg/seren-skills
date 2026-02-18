@@ -2,6 +2,6 @@
 output/
 
 # Python env/cache
-scripts/.venv/
+.venv/
 scripts/__pycache__/
 scripts/*.pyc

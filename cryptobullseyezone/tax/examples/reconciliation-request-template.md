@@ -27,10 +27,10 @@ Files provided:
 3) Optional supporting files (wallet exports, transfer logs): <path or description>
 
 Execution flow:
-1) Run `python 1099da_normalizer.py --input <1099da.csv> --output ../output/normalized_1099da.json`
-2) Run `python cost_basis_resolver.py --input ../output/normalized_1099da.json --output ../output/resolved_lots.json`
-3) Run `python reconciliation_audit.py --resolved ../output/resolved_lots.json --tax-input <tax.csv> --output ../output/reconciliation_audit.json`
-4) Run `python run_pipeline.py --input-1099da <1099da.csv> --input-tax <tax.csv> --output-dir ../output`
+1) Run `python scripts/1099da_normalizer.py --input <1099da.csv> --output output/normalized_1099da.json`
+2) Run `python scripts/cost_basis_resolver.py --input output/normalized_1099da.json --output output/resolved_lots.json`
+3) Run `python scripts/reconciliation_audit.py --resolved output/resolved_lots.json --tax-input <tax.csv> --output output/reconciliation_audit.json`
+4) Run `python scripts/run_pipeline.py --input-1099da <1099da.csv> --input-tax <tax.csv> --output-dir output`
 
 Output needed:
 - Matched vs unmatched summary

@@ -67,7 +67,7 @@ When advanced features are used:
 
 ## Executable Commands
 
-Run from `cryptobullseyezone/tax/scripts`:
+Run from `cryptobullseyezone/tax`:
 
 Environment variables:
 - `SEREN_API_KEY` (required)
@@ -90,23 +90,23 @@ export SEREN_API_KEY=your_seren_api_key_here
 # export SEREN_DATABASE_NAME=serendb
 # export SEREN_API_BASE=https://api.serendb.com
 
-python 1099da_normalizer.py \
-  --input ../examples/sample_1099da.csv \
-  --output ../output/normalized_1099da.json
+python scripts/1099da_normalizer.py \
+  --input examples/sample_1099da.csv \
+  --output output/normalized_1099da.json
 
-python cost_basis_resolver.py \
-  --input ../output/normalized_1099da.json \
-  --output ../output/resolved_lots.json
+python scripts/cost_basis_resolver.py \
+  --input output/normalized_1099da.json \
+  --output output/resolved_lots.json
 
-python reconciliation_audit.py \
-  --resolved ../output/resolved_lots.json \
-  --tax-input ../examples/sample_tax_disposals.csv \
-  --output ../output/reconciliation_audit.json
+python scripts/reconciliation_audit.py \
+  --resolved output/resolved_lots.json \
+  --tax-input examples/sample_tax_disposals.csv \
+  --output output/reconciliation_audit.json
 
-python run_pipeline.py \
-  --input-1099da ../examples/sample_1099da.csv \
-  --input-tax ../examples/sample_tax_disposals.csv \
-  --output-dir ../output
+python scripts/run_pipeline.py \
+  --input-1099da examples/sample_1099da.csv \
+  --input-tax examples/sample_tax_disposals.csv \
+  --output-dir output
 ```
 
 ## Workflow
