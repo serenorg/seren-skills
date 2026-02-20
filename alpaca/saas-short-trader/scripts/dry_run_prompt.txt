@@ -1,31 +1,34 @@
-Run a complete dry run for `saas-short-trader` in `paper-sim` mode with strict feeds enabled.
+Run a complete dry run for `saas-short-trader` using MCP-native execution only (no Python script execution).
 
 Requirements:
-- Score 30 SaaS names (`max_names_scored=30`)
+- Mode: `paper-sim`
+- Score exactly 30 SaaS names (`max_names_scored=30`)
 - Cap planned shorts at 8 (`max_names_orders=8`)
-- Use publishers: `alpaca`, `sec-filings-intelligence`, `google-trends`, `perplexity` (fallback `exa`)
-- Persist all data and PnL to the connected SerenDB instance
+- Use publishers:
+  - `alpaca`
+  - `sec-filings-intelligence`
+  - `google-trends`
+  - `perplexity` (fallback `exa`)
+- Persist all state in SerenDB database `alpaca_short_bot` under project `alpaca-short-trader`
 
-Execute these commands in order:
+Execution steps:
+1. Use Seren MCP to resolve/create project `alpaca-short-trader`, default branch, and database `alpaca_short_bot`.
+2. Apply schemas from:
+   - `scripts/serendb_schema.sql`
+   - `scripts/self_learning_schema.sql`
+3. Pull data from publishers (MCP calls), score 30 names, select top 8 with conviction >= 65.
+4. Write rows into:
+   - `trading.strategy_runs`
+   - `trading.candidate_scores`
+   - `trading.order_events` (planned simulated shorts)
+   - `trading.position_marks_daily`
+   - `trading.pnl_daily` (`paper-sim`, `paper`, `live`)
+   - learning tables (`learning_feature_snapshots`, `learning_outcome_labels`, `learning_policy_versions`, `learning_policy_assignments`, `learning_events`)
+5. Mark run status completed and return summary.
 
-python3 scripts/setup_serendb.py --api-key "$SEREN_API_KEY"
-python3 scripts/strategy_engine.py --api-key "$SEREN_API_KEY" --run-type scan --mode paper-sim --strict-required-feeds --config config.example.json
-python3 scripts/strategy_engine.py --api-key "$SEREN_API_KEY" --run-type monitor --mode paper-sim --config config.example.json
-python3 scripts/strategy_engine.py --api-key "$SEREN_API_KEY" --run-type post-close --mode paper-sim --config config.example.json
-python3 scripts/self_learning.py --api-key "$SEREN_API_KEY" --action full --mode paper-sim
-
-Then return:
-1. The 8 selected names (ticker + conviction + rank)
-2. Feed status per publisher
-3. Simulated 5D/10D/20D net PnL and hit rate
-4. Confirmation that rows were written to:
-   - trading.strategy_runs
-   - trading.candidate_scores
-   - trading.order_events
-   - trading.position_marks_daily
-   - trading.pnl_daily
-   - trading.learning_feature_snapshots
-   - trading.learning_outcome_labels
-   - trading.learning_policy_versions
-   - trading.learning_policy_assignments
-   - trading.learning_events
+Return:
+1. `run_id`
+2. The 8 selected names (ticker + conviction + rank)
+3. Feed status per publisher
+4. Simulated 5D/10D/20D net PnL and hit rate
+5. Proof-of-write counts for each table listed above

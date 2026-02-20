@@ -2,16 +2,19 @@
 
 Use this checklist before every strategy dry run.
 
-## 1) Environment
+## 1) MCP Environment
 
-- Confirm `SEREN_API_KEY` is set (database target is auto-resolved/created).
-- Confirm Python dependencies are installed:
-  - `python3 -m pip install -r requirements.txt`
+- Confirm Seren MCP connectivity is available.
+- Confirm your MCP identity can access the target Seren org/project.
+- Confirm payment method/balance is available for publisher calls.
 
 ## 2) Data + Storage Readiness
 
-- Apply schemas:
-  - `python3 scripts/setup_serendb.py --api-key "$SEREN_API_KEY"`
+- Ensure project exists: `alpaca-short-trader`.
+- Ensure database exists: `alpaca_short_bot`.
+- Apply schemas via MCP SQL using:
+  - `scripts/serendb_schema.sql`
+  - `scripts/self_learning_schema.sql`
 - Verify key tables exist:
   - `trading.strategy_runs`
   - `trading.candidate_scores`
@@ -22,7 +25,7 @@ Use this checklist before every strategy dry run.
 
 ## 3) Publisher Readiness
 
-- Ensure these publishers are active and authorized:
+- Ensure these publishers are active and callable through MCP:
   - `alpaca`
   - `sec-filings-intelligence`
   - `google-trends`
@@ -39,11 +42,10 @@ Use this checklist before every strategy dry run.
 ## 5) Execute One Full Dry Run
 
 - Use `scripts/dry_run_prompt.txt` as a single copy/paste prompt.
-- Run sequence:
-  - `scan`
-  - `monitor`
-  - `post-close`
-  - self-learning bootstrap (`action=full`)
+- Execute with MCP-native tools only:
+  - publisher calls via `call_publisher`
+  - DB writes via `run_sql` / `run_sql_transaction`
+  - no Python script execution for the default path
 
 ## 6) Validate Outputs
 
@@ -63,4 +65,5 @@ Use this checklist before every strategy dry run.
 ## 7) Failure Handling
 
 - If a required publisher fails, run should be blocked when strict mode is on.
-- Fix publisher issue, then rerun full dry run.
+- If `perplexity` fails, use `exa` fallback and capture this in run metadata.
+- Fix upstream issue, then rerun full dry run.

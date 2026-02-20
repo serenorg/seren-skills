@@ -1,17 +1,23 @@
 ---
 name: saas-short-trader
-description: "Alpaca-branded SaaS short trader that scores AI disruption risk, builds capped short baskets, tracks paper/live PnL in SerenDB, and runs continuously with seren-cron."
+description: "Alpaca-branded SaaS short trader with MCP-native execution: scores AI disruption risk, builds capped short baskets, and tracks paper/live PnL in SerenDB."
 ---
 
 # Alpaca SaaS Short Trader
 
-Autonomous strategy agent for shorting SaaS names under AI-driven multiple compression.  
-It runs scheduled scans, intraday monitoring, post-close reconciliation, and controlled self-learning.
+Autonomous strategy agent for shorting SaaS names under AI-driven multiple compression.
+
+Default backend is MCP-native:
+- Data collection via `mcp__seren-mcp__call_publisher`
+- Storage and PnL via `mcp__seren-mcp__run_sql` / `mcp__seren-mcp__run_sql_transaction`
+- Project/database lifecycle via `mcp__seren-mcp__list_*` / `create_*`
+
+Legacy Python/API scripts remain available as fallback, not default.
 
 ## What This Skill Provides
 
-- 30-name SaaS universe scoring and ranking
-- 8-name capped short basket construction
+- MCP-native 30-name SaaS universe scoring and ranking
+- MCP-native 8-name capped short basket construction
 - Hedged short watchlist and catalyst notes
 - Paper / paper-sim / live execution modes
 - SerenDB persistence for runs, orders, marks, and PnL
@@ -20,6 +26,9 @@ It runs scheduled scans, intraday monitoring, post-close reconciliation, and con
 
 ## Runtime Files
 
+- `scripts/dry_run_prompt.txt` - single copy/paste MCP-native run prompt (default)
+- `scripts/dry_run_checklist.md` - MCP-native readiness checklist
+- `scripts/mcp_native_runbook.md` - canonical MCP execution contract
 - `scripts/strategy_engine.py` - core scan/monitor/post-close engine
 - `scripts/serendb_storage.py` - persistence layer
 - `scripts/seren_client.py` - publisher gateway client
@@ -27,25 +36,40 @@ It runs scheduled scans, intraday monitoring, post-close reconciliation, and con
 - `scripts/run_agent_server.py` - authenticated webhook runner for seren-cron
 - `scripts/setup_cron.py` - create/update cron jobs
 - `scripts/setup_serendb.py` - apply base + learning schemas
-- `scripts/dry_run_checklist.md` - preflight + validation checklist
-- `scripts/dry_run_prompt.txt` - single copy/paste dry-run prompt
-
 ## Execution Modes
 
 - `paper` - plan and store paper orders
 - `paper-sim` - simulate fills/PnL only (default)
 - `live` - real broker execution path (requires explicit user approval)
 
-## Continuous Schedule (Recommended)
+## MCP-Native Workflow (Default)
+
+1. Resolve target database with MCP:
+   - project: `alpaca-short-trader`
+   - database: `alpaca_short_bot`
+2. Ensure `serendb_schema.sql` and `self_learning_schema.sql` are applied via MCP SQL.
+3. Query publishers via MCP:
+   - `alpaca`
+   - `sec-filings-intelligence`
+   - `google-trends`
+   - `perplexity` (fallback: `exa`)
+4. Score exactly 30 names and cap planned shorts at 8.
+5. Persist run, candidates, order events, position marks, and daily PnL to SerenDB.
+6. Persist learning snapshots, labels, policy assignment/events.
+7. Return selected names, feed status, and PnL summary.
+
+Use `scripts/dry_run_prompt.txt` for one-copy/paste execution.
+
+## Continuous Schedule (Recommended ET)
 
 - Scan: `15 8 * * 1-5` (08:15 ET)
 - Monitor: `15 10-15 * * 1-5` (hourly, 10:15-15:15 ET)
 - Post-close: `20 16 * * 1-5` (16:20 ET)
-- Label update: `35 16 * * 1-5`
+- Label update: `35 16 * * 1-5` (MCP SQL upsert)
 - Retrain: `30 9 * * 6`
 - Promotion check: `0 7 * * 1`
 
-## Setup
+## Legacy Python Fallback (Optional)
 
 ```bash
 cd alpaca/saas-short-trader
@@ -55,7 +79,7 @@ cp config.example.json config.json
 python3 scripts/setup_serendb.py --api-key "$SEREN_API_KEY"
 ```
 
-## Run Once
+## Legacy Run Once (Optional)
 
 ```bash
 python3 scripts/strategy_engine.py --api-key "$SEREN_API_KEY" --run-type scan --mode paper-sim
@@ -64,7 +88,7 @@ python3 scripts/strategy_engine.py --api-key "$SEREN_API_KEY" --run-type post-cl
 python3 scripts/self_learning.py --api-key "$SEREN_API_KEY" --action full --mode paper-sim
 ```
 
-## Run Continuously (seren-cron)
+## Legacy Continuous Runner (Optional, seren-cron)
 
 1. Start runner:
 
@@ -86,3 +110,4 @@ python3 scripts/setup_cron.py \
 - Live trading is never auto-enabled.
 - Strategy enforces max 8 names and exposure caps.
 - If required data feeds fail and strict mode is enabled, run is blocked and persisted as blocked.
+- Prefer MCP-native execution in constrained/runtime-sandboxed environments.

@@ -1,4 +1,5 @@
 {
+  "execution_backend": "mcp",
   "mode": "paper-sim",
   "run_profile": "continuous",
   "learning_mode": "adaptive-paper",

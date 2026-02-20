@@ -2,6 +2,8 @@
 
 Production-oriented autonomous skill for shorting AI-vulnerable SaaS equities via Alpaca.
 
+Default execution backend is MCP-native (`mcp__seren-mcp` tools). Python scripts are fallback.
+
 ## Directory
 
 ```
@@ -15,6 +17,7 @@ alpaca/saas-short-trader/
 └── scripts/
     ├── dry_run_checklist.md
     ├── dry_run_prompt.txt
+    ├── mcp_native_runbook.md
     ├── run_agent_server.py
     ├── setup_cron.py
     ├── setup_serendb.py
@@ -28,6 +31,17 @@ alpaca/saas-short-trader/
 
 ## Quick Start
 
+### MCP-native (Recommended)
+
+Use the single prompt in `scripts/dry_run_prompt.txt` with your agent.  
+It will:
+- Use Seren MCP to resolve/create the project + database
+- Apply schemas via MCP SQL
+- Pull feed data via MCP publishers
+- Persist scan/orders/PnL/learning rows via MCP SQL
+
+### Legacy Python/API Fallback
+
 ```bash
 python3 -m pip install -r requirements.txt
 cp .env.example .env
@@ -37,6 +51,12 @@ python3 scripts/strategy_engine.py --api-key "$SEREN_API_KEY" --run-type scan --
 ```
 
 ## Continuous Operation
+
+### MCP-native
+
+Run from agent automation (for example via `seren-cron` publisher) and keep all writes in `alpaca_short_bot` through MCP SQL operations.
+
+### Legacy Python Runner
 
 ```bash
 SEREN_API_KEY="$SEREN_API_KEY" SAAS_SHORT_TRADER_WEBHOOK_SECRET="$SAAS_SHORT_TRADER_WEBHOOK_SECRET" \
@@ -52,6 +72,7 @@ python3 scripts/setup_cron.py \
 ## Notes
 
 - Use `paper-sim` first.
+- MCP-native is the primary and preferred path.
 - Self-learning promotion requires gate checks; it does not auto-promote to live.
 - Use `scripts/dry_run_prompt.txt` for a single copy/paste test run.
 
