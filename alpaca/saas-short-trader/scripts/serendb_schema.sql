@@ -7,7 +7,7 @@ CREATE SCHEMA IF NOT EXISTS trading;
 
 CREATE TABLE IF NOT EXISTS trading.strategy_runs (
   run_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  strategy_name TEXT NOT NULL DEFAULT 'saas-short-strategy-bot',
+  strategy_name TEXT NOT NULL DEFAULT 'saas-short-trader',
   mode TEXT NOT NULL CHECK (mode IN ('paper', 'paper-sim', 'live')),
   run_date DATE NOT NULL DEFAULT CURRENT_DATE,
   status TEXT NOT NULL DEFAULT 'completed',

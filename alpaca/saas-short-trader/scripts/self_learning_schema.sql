@@ -1,4 +1,4 @@
--- Self-learning extension schema for saas-short-strategy-bot
+-- Self-learning extension schema for saas-short-trader
 -- Apply after serendb_schema.sql.
 
 CREATE SCHEMA IF NOT EXISTS trading;

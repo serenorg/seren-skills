@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Create/update seren-cron jobs for saas-short-strategy-bot.
+Create/update seren-cron jobs for saas-short-trader.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def build_jobs(runner_url: str, webhook_secret: str, timezone: str, mode: str, l
     run_url = f"{runner_url.rstrip('/')}/run"
     headers = {"Content-Type": "application/json", "x-webhook-secret": webhook_secret}
     common = {
-        "skill": "saas-short-strategy-bot",
+        "skill": "saas-short-trader",
         "run_profile": "continuous",
         "mode": mode,
         "learning_mode": learning_mode,
@@ -78,7 +78,7 @@ def build_jobs(runner_url: str, webhook_secret: str, timezone: str, mode: str, l
     }
     return [
         {
-            "name": "saas-short-bot-scan",
+            "name": "saas-short-trader-scan",
             "schedule": "15 8 * * 1-5",
             "timezone": timezone,
             "url": run_url,
@@ -87,7 +87,7 @@ def build_jobs(runner_url: str, webhook_secret: str, timezone: str, mode: str, l
             "body": {**common, "run_type": "scan"},
         },
         {
-            "name": "saas-short-bot-monitor",
+            "name": "saas-short-trader-monitor",
             "schedule": "15 10-15 * * 1-5",
             "timezone": timezone,
             "url": run_url,
@@ -96,7 +96,7 @@ def build_jobs(runner_url: str, webhook_secret: str, timezone: str, mode: str, l
             "body": {**common, "run_type": "monitor"},
         },
         {
-            "name": "saas-short-bot-post-close",
+            "name": "saas-short-trader-post-close",
             "schedule": "20 16 * * 1-5",
             "timezone": timezone,
             "url": run_url,
@@ -105,7 +105,7 @@ def build_jobs(runner_url: str, webhook_secret: str, timezone: str, mode: str, l
             "body": {**common, "run_type": "post-close"},
         },
         {
-            "name": "saas-short-bot-label-update",
+            "name": "saas-short-trader-label-update",
             "schedule": "35 16 * * 1-5",
             "timezone": timezone,
             "url": run_url,
@@ -114,7 +114,7 @@ def build_jobs(runner_url: str, webhook_secret: str, timezone: str, mode: str, l
             "body": {"action": "label-update", "mode": mode},
         },
         {
-            "name": "saas-short-bot-retrain",
+            "name": "saas-short-trader-retrain",
             "schedule": "30 9 * * 6",
             "timezone": timezone,
             "url": run_url,
@@ -123,7 +123,7 @@ def build_jobs(runner_url: str, webhook_secret: str, timezone: str, mode: str, l
             "body": {"action": "retrain", "mode": mode},
         },
         {
-            "name": "saas-short-bot-promotion-check",
+            "name": "saas-short-trader-promotion-check",
             "schedule": "0 7 * * 1",
             "timezone": timezone,
             "url": run_url,
@@ -135,7 +135,7 @@ def build_jobs(runner_url: str, webhook_secret: str, timezone: str, mode: str, l
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Setup seren-cron jobs for saas-short-strategy-bot")
+    parser = argparse.ArgumentParser(description="Setup seren-cron jobs for saas-short-trader")
     parser.add_argument("--runner-url", required=True, help="Public runner URL, e.g. https://bot.example.com")
     parser.add_argument("--webhook-secret", required=True, help="x-webhook-secret value")
     parser.add_argument("--api-key", default=os.getenv("SEREN_API_KEY", ""), help="SEREN_API_KEY")
@@ -165,7 +165,7 @@ def main() -> None:
 
     if not args.dry_run:
         listed = setup.call("GET", "/api/v1/jobs")
-        jobs = [j for j in setup.extract_jobs(listed) if str(j.get("name", "")).startswith("saas-short-bot-")]
+        jobs = [j for j in setup.extract_jobs(listed) if str(j.get("name", "")).startswith("saas-short-trader-")]
         jobs.sort(key=lambda x: x.get("name", ""))
         print("\nActive jobs:")
         for j in jobs:

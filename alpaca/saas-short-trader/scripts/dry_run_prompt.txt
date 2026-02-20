@@ -1,4 +1,4 @@
-Run a complete dry run for `saas-short-strategy-bot` in `paper-sim` mode with strict feeds enabled.
+Run a complete dry run for `saas-short-trader` in `paper-sim` mode with strict feeds enabled.
 
 Requirements:
 - Score 30 SaaS names (`max_names_scored=30`)

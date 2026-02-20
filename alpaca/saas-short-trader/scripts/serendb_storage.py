@@ -40,7 +40,7 @@ class SerenDBStorage:
                     """
                     SELECT run_id
                     FROM trading.strategy_runs
-                    WHERE strategy_name = 'saas-short-strategy-bot'
+                    WHERE strategy_name = 'saas-short-trader'
                       AND mode = %s
                       AND status = 'running'
                       AND COALESCE(metadata->>'run_type', '') = %s
@@ -71,7 +71,7 @@ class SerenDBStorage:
                     INSERT INTO trading.strategy_runs
                       (run_id, strategy_name, mode, run_date, status, universe, max_names_scored, max_names_orders, min_conviction, metadata)
                     VALUES
-                      (%s, 'saas-short-strategy-bot', %s, CURRENT_DATE, %s, %s::text[], %s, %s, %s, %s::jsonb)
+                      (%s, 'saas-short-trader', %s, CURRENT_DATE, %s, %s::text[], %s, %s, %s, %s::jsonb)
                     """,
                     (
                         run_id,
@@ -293,7 +293,7 @@ class SerenDBStorage:
                     FROM trading.order_events e
                     JOIN trading.strategy_runs sr
                       ON sr.run_id = e.run_id
-                    WHERE sr.strategy_name = 'saas-short-strategy-bot'
+                    WHERE sr.strategy_name = 'saas-short-trader'
                       AND sr.mode = %s
                       AND COALESCE(sr.metadata->>'run_type', '') = 'scan'
                       AND sr.status = 'completed'

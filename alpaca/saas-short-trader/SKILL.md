@@ -1,9 +1,9 @@
 ---
-name: saas-short-strategy-bot
-description: "Research and execute AI-disruption SaaS short strategy with 30-name scoring, 8-name capped baskets, paper/live modes, SerenDB PnL tracking, and seren-cron automation."
+name: saas-short-trader
+description: "Alpaca-branded SaaS short trader that scores AI disruption risk, builds capped short baskets, tracks paper/live PnL in SerenDB, and runs continuously with seren-cron."
 ---
 
-# SaaS Short Strategy Bot
+# Alpaca SaaS Short Trader
 
 Autonomous strategy agent for shorting SaaS names under AI-driven multiple compression.  
 It runs scheduled scans, intraday monitoring, post-close reconciliation, and controlled self-learning.
@@ -48,7 +48,7 @@ It runs scheduled scans, intraday monitoring, post-close reconciliation, and con
 ## Setup
 
 ```bash
-cd seren/saas-short-strategy-bot
+cd alpaca/saas-short-trader
 python3 -m pip install -r requirements.txt
 cp .env.example .env
 cp config.example.json config.json
@@ -69,7 +69,7 @@ python3 scripts/self_learning.py --dsn "$SERENDB_DSN" --action full --mode paper
 1. Start runner:
 
 ```bash
-SERENDB_DSN="$SERENDB_DSN" SAAS_SHORT_BOT_WEBHOOK_SECRET="$SAAS_SHORT_BOT_WEBHOOK_SECRET" \
+SERENDB_DSN="$SERENDB_DSN" SAAS_SHORT_TRADER_WEBHOOK_SECRET="$SAAS_SHORT_TRADER_WEBHOOK_SECRET" \
 python3 scripts/run_agent_server.py --host 0.0.0.0 --port 8787
 ```
 
@@ -78,7 +78,7 @@ python3 scripts/run_agent_server.py --host 0.0.0.0 --port 8787
 ```bash
 python3 scripts/setup_cron.py \
   --runner-url "https://YOUR_PUBLIC_RUNNER_URL" \
-  --webhook-secret "$SAAS_SHORT_BOT_WEBHOOK_SECRET"
+  --webhook-secret "$SAAS_SHORT_TRADER_WEBHOOK_SECRET"
 ```
 
 ## Safety Notes

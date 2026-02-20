@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Self-learning runner for saas-short-strategy-bot.
+Self-learning runner for saas-short-trader.
 
 This script runs a controlled champion/challenger loop against SerenDB.
 
@@ -726,7 +726,7 @@ def run_full(conn: psycopg.Connection, mode: str) -> Dict[str, object]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Self-learning runner for saas-short-strategy-bot")
+    parser = argparse.ArgumentParser(description="Self-learning runner for saas-short-trader")
     parser.add_argument("--dsn", required=True, help="Postgres DSN for user's SerenDB database")
     parser.add_argument(
         "--action",

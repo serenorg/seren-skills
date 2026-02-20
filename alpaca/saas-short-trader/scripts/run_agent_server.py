@@ -44,7 +44,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/health":
             json_response(self, 404, {"status": "error", "message": "Not found"})
             return
-        json_response(self, 200, {"status": "ok", "service": "saas-short-strategy-bot"})
+        json_response(self, 200, {"status": "ok", "service": "saas-short-trader"})
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/run":
@@ -111,15 +111,15 @@ class Handler(BaseHTTPRequestHandler):
             json_response(self, 500, {"status": "error", "message": str(exc)})
 
     def log_message(self, fmt: str, *args: object) -> None:
-        print(f"[saas-short-bot] {self.address_string()} - {fmt % args}")
+        print(f"[saas-short-trader] {self.address_string()} - {fmt % args}")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run saas-short-strategy-bot webhook server")
+    parser = argparse.ArgumentParser(description="Run saas-short-trader webhook server")
     parser.add_argument("--dsn", default=os.getenv("SERENDB_DSN", ""), help="SerenDB DSN")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8787)
-    parser.add_argument("--webhook-secret", default=os.getenv("SAAS_SHORT_BOT_WEBHOOK_SECRET", ""))
+    parser.add_argument("--webhook-secret", default=os.getenv("SAAS_SHORT_TRADER_WEBHOOK_SECRET", ""))
     parser.add_argument("--strict-required-feeds", action="store_true")
     return parser.parse_args()
 
@@ -129,7 +129,7 @@ def main() -> None:
     if not args.dsn:
         raise SystemExit("SERENDB_DSN is required (--dsn or env)")
     if not args.webhook_secret:
-        raise SystemExit("SAAS_SHORT_BOT_WEBHOOK_SECRET is required (--webhook-secret or env)")
+        raise SystemExit("SAAS_SHORT_TRADER_WEBHOOK_SECRET is required (--webhook-secret or env)")
 
     engine = StrategyEngine(
         dsn=args.dsn,

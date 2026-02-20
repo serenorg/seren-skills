@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Core execution engine for saas-short-strategy-bot.
+Core execution engine for saas-short-trader.
 """
 
 from __future__ import annotations
@@ -156,7 +156,7 @@ class StrategyEngine:
             "run_profile": run_profile,
             "learning_mode": learning_mode,
             "scheduled_window_start": scheduled_window_start or datetime.now(timezone.utc).isoformat(),
-            "idempotency_key": f"saas-short-strategy-bot:{mode}:{run_type}:{scheduled_window_start or date.today()}",
+            "idempotency_key": f"saas-short-trader:{mode}:{run_type}:{scheduled_window_start or date.today()}",
         }
         run_id = self.storage.insert_run(
             mode=mode,

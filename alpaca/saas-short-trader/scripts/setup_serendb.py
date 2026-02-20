@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Apply required SerenDB schemas for saas-short-strategy-bot.
+Apply required SerenDB schemas for saas-short-trader.
 """
 
 from __future__ import annotations
