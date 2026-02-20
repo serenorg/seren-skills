@@ -249,3 +249,12 @@ See `examples/sample-assessment-regional-bank.md` for full output.
 - AI/ML Governance Program Managers
 - Risk Leaders in Regulated Industries
 - Enterprise Architects evaluating AI adoption
+
+## About Benjamin Black Consulting
+
+This skill is provided by Benjamin Black Consulting, specializing in AI strategy and governance advisory for regulated industries.
+
+- AI Governance Frameworks
+- Data Strategy & Architecture
+- Compliance Readiness Assessments
+- Executive AI Training

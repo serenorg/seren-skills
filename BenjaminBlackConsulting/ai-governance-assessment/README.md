@@ -255,3 +255,14 @@ See `scripts/serendb_schema.sql` for full DDL.
 - NERC CIP compliance considerations
 - Grid reliability AI governance
 - Environmental impact considerations
+
+## About Benjamin Black Consulting
+
+Benjamin Black Consulting specializes in AI strategy and governance for regulated industries:
+
+- **AI Governance Advisory**: Framework development, policy creation, board presentations
+- **Data Strategy**: Architecture, governance models, quality management
+- **Compliance Readiness**: NIST AI RMF, EU AI Act, OCC SR 11-7 alignment
+- **Executive Coaching**: AI literacy, risk awareness, strategic decision-making
+
+Contact: [Benjamin Black Consulting](https://www.linkedin.com/in/benjaminblackconsulting/)

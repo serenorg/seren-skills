@@ -153,3 +153,4 @@ First Regional Bank has made initial progress in AI governance but lacks formal 
 ---
 
 *Assessment generated using AI Governance Readiness Assessment skill*
+*Provided by Benjamin Black Consulting*
