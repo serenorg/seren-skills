@@ -56,7 +56,7 @@ description: "Multi-chain Curve gauge yield trading skill with paper-first defau
 
 ## Quick Start
 
-1. Copy `.env.example` to `.env` and set `SEREN_API_KEY`.
+1. Create/get your `SEREN_API_KEY` by following [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.md), then set it in your environment (for example: `export SEREN_API_KEY=...`).
 2. Copy `config.example.json` to `config.json`.
 3. Install dependencies:
    - `pip install -r requirements.txt`
