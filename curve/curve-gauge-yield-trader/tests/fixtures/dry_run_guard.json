@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "skill": "curve-gauge-yield-trader",
+  "dry_run": true,
+  "blocked_action": "live_execution"
+}

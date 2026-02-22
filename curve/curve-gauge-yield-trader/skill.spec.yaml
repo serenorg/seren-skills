@@ -1,0 +1,144 @@
+skill: curve-gauge-yield-trader
+description: Multi-chain Curve gauge yield trading skill with paper-first defaults. Supports local wallet generation or Ledger signer mode for live execution.
+triggers:
+  - find the best curve gauge rewards
+  - paper trade curve gauge liquidity
+  - trade live on curve gauges
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  chain:
+    type: string
+    enum:
+      - ethereum
+      - arbitrum
+      - base
+      - optimism
+      - polygon
+      - avalanche
+      - bsc
+      - gnosis
+      - zksync
+      - scroll
+    default: ethereum
+  wallet_mode:
+    type: string
+    enum:
+      - local
+      - ledger
+    default: local
+  live_mode:
+    type: boolean
+    default: false
+  deposit_token:
+    type: string
+    default: USDC
+  deposit_amount_usd:
+    type: number
+    min: 0
+    default: 100
+  top_n_gauges:
+    type: integer
+    min: 1
+    max: 20
+    default: 3
+secrets:
+  - SEREN_API_KEY
+connectors:
+  curve_api:
+    kind: seren_publisher
+    publisher: curve-finance
+  evm_exec:
+    kind: seren_publisher
+    publisher: evm-exec
+  seren_cron:
+    kind: seren_publisher
+    publisher: seren-cron
+  rpc_ethereum:
+    kind: seren_publisher
+    publisher: seren-ethereum
+  rpc_arbitrum:
+    kind: seren_publisher
+    publisher: seren-arbitrum
+  rpc_base:
+    kind: seren_publisher
+    publisher: seren-base
+  rpc_optimism:
+    kind: seren_publisher
+    publisher: seren-optimism
+  rpc_polygon:
+    kind: seren_publisher
+    publisher: seren-polygon
+  rpc_avalanche:
+    kind: seren_publisher
+    publisher: seren-avalanche
+  rpc_bsc:
+    kind: seren_publisher
+    publisher: seren-binance
+  rpc_gnosis:
+    kind: seren_publisher
+    publisher: seren-gnosis
+  rpc_zksync:
+    kind: seren_publisher
+    publisher: seren-zksync
+  rpc_scroll:
+    kind: seren_publisher
+    publisher: seren-scroll
+state:
+  trades:
+    kind: sqlite
+    file: state/trades.db
+policies:
+  dry_run_default: true
+  idempotency_required: true
+  max_daily_spend_usd: 250
+  max_notional_usd: 1000
+  max_slippage_bps: 80
+workflow:
+  steps:
+    - id: fetch_top_gauges
+      use: connector.curve_api.get
+      with:
+        path: /gauges/highest-rewards
+        chain: "{chain}"
+        limit: "{top_n_gauges}"
+    - id: choose_trade
+      use: transform.select_best_gauge
+      with:
+        from_step: fetch_top_gauges
+        token: "{deposit_token}"
+        amount_usd: "{deposit_amount_usd}"
+    - id: signer_setup
+      use: transform.setup_signer
+      with:
+        wallet_mode: "{wallet_mode}"
+        chain: "{chain}"
+    - id: preflight
+      use: connector.evm_exec.post
+      with:
+        path: /preflight/liquidity
+        body_from: choose_trade
+    - id: live_guard
+      use: transform.guard_live_execution
+      with:
+        from_step: preflight
+        live_mode: "{live_mode}"
+        warning: Live execution uses real funds. Keep dry-run until wallet funding and signer checks are complete.
+    - id: execute_liquidity_trade
+      use: connector.evm_exec.post
+      with:
+        path: /trade/liquidity
+        body_from: live_guard
+tests:
+  quick:
+    - validates_chain_and_signer_inputs
+    - enforces_risk_caps
+  smoke:
+    - dry_run_preflight_is_successful
+    - live_mode_requires_explicit_opt_in
+publish:
+  org: curve
+  slug: curve-gauge-yield-trader
+metadata:
+  category: trading

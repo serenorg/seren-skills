@@ -1,0 +1,78 @@
+{
+  "connectors": [
+    "curve_api",
+    "evm_exec",
+    "rpc_arbitrum",
+    "rpc_avalanche",
+    "rpc_base",
+    "rpc_bsc",
+    "rpc_ethereum",
+    "rpc_gnosis",
+    "rpc_optimism",
+    "rpc_polygon",
+    "rpc_scroll",
+    "rpc_zksync"
+  ],
+  "dry_run": true,
+  "api": {
+    "base_url": "https://api.serendb.com"
+  },
+  "inputs": {
+    "chain": "ethereum",
+    "deposit_amount_usd": 100,
+    "deposit_token": "USDC",
+    "live_mode": false,
+    "top_n_gauges": 3,
+    "wallet_mode": "local"
+  },
+  "wallet": {
+    "path": "state/wallet.local.json",
+    "ledger_address": ""
+  },
+  "position_sync": {
+    "enabled": true,
+    "path": "/positions/update"
+  },
+  "rpc_capability": {
+    "required": true,
+    "probes": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "body": {}
+      },
+      {
+        "method": "POST",
+        "path": "/",
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "eth_chainId",
+          "params": []
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/rpc",
+        "body": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "eth_chainId",
+          "params": []
+        }
+      }
+    ]
+  },
+  "rpc_publishers": {},
+  "cron": {
+    "enabled": false,
+    "job_name": "curve-gauge-yield-trader",
+    "schedule": "*/30 * * * *",
+    "run_url": "http://localhost:8080/run"
+  },
+  "warnings": [
+    "Dry-run is the default mode. No live transactions are sent unless live_mode=true and --yes-live is set.",
+    "Live mode uses real funds. Fund wallet carefully and keep position limits conservative."
+  ],
+  "skill": "curve-gauge-yield-trader"
+}

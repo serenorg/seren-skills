@@ -1,0 +1,24 @@
+{
+  "status": "error",
+  "skill": "curve-gauge-yield-trader",
+  "error_code": "connector_failure",
+  "connector": "curve_api",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "curve_api": {
+      "get": {
+        "status": "error",
+        "connector": "curve_api",
+        "action": "get",
+        "error_code": "connector_failure"
+      }
+    },
+    "evm_exec": {
+      "post": {
+        "status": "ok",
+        "connector": "evm_exec",
+        "action": "post"
+      }
+    }
+  }
+}

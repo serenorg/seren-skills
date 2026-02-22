@@ -1,0 +1,30 @@
+{
+  "status": "ok",
+  "skill": "curve-gauge-yield-trader",
+  "workflow_step_count": 6,
+  "dry_run": true,
+  "inputs": {
+    "chain": "ethereum",
+    "deposit_amount_usd": 100,
+    "deposit_token": "USDC",
+    "live_mode": false,
+    "top_n_gauges": 3,
+    "wallet_mode": "local"
+  },
+  "connectors": {
+    "curve_api": {
+      "get": {
+        "status": "ok",
+        "connector": "curve_api",
+        "action": "get"
+      }
+    },
+    "evm_exec": {
+      "post": {
+        "status": "ok",
+        "connector": "evm_exec",
+        "action": "post"
+      }
+    }
+  }
+}
