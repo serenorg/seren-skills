@@ -1,0 +1,15 @@
+{
+  "connectors": [],
+  "dry_run": true,
+  "inputs": {
+    "app_name": "Ethereum",
+    "blind_sign_allowed": true,
+    "clear_sign_required": true,
+    "derivation_path": "44'/60'/0'/0/0",
+    "payload_hex": "",
+    "payload_kind": "transaction",
+    "request_summary": "",
+    "signing_mode": "auto"
+  },
+  "skill": "ledger-signing"
+}

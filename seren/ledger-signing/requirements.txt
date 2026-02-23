@@ -1,0 +1,2 @@
+ledgerblue==0.1.55
+hidapi==0.15.0
