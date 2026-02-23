@@ -49,3 +49,5 @@ python scripts/agent.py --config config.json --execute
 - `dry_run=true` cannot sign.
 - `--execute` is required for live device signing.
 - The runtime uses direct Ledger USB/HID transport through `ledgerblue`.
+- For session-based automation, the owner may extend the Ledger auto-lock timeout (if supported), then unlock once and keep the session open while the agent signs.
+- Warning: extended unlocked sessions weaken physical security. Anyone with physical access to the unlocked device may be able to approve/sign transactions.
