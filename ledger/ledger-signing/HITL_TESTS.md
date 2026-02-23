@@ -36,6 +36,23 @@
    - Ledger prompts to review/sign transaction fields.
    - Output contains `status=signed` and `signature_hex`.
 
+## Test 3: EIP-712 typed data signing (hashed mode)
+
+1. Copy config:
+   - `cp config.example.json config.live-typed-data.json`
+2. Edit config:
+   - `"dry_run": false`
+   - `"inputs.payload_kind": "typed_data"`
+   - `"inputs.derivation_path": "44'/60'/0'/0/0"`
+   - `"inputs.domain_separator_hex": "<32-byte domain separator hex>"`
+   - `"inputs.hash_struct_message_hex": "<32-byte hashStruct(message) hex>"`
+   - leave `"inputs.payload_hex": ""` (or set 64-byte combined fallback)
+3. Run:
+   - `python scripts/agent.py --config config.live-typed-data.json --execute`
+4. Expect:
+   - Ledger prompts to review/sign typed data hash payload.
+   - Output contains `status=signed` and `signature_hex`.
+
 ## Safety Gate Check
 
 Run with default config:

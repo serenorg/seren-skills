@@ -16,6 +16,7 @@ CHUNK_SIZE = 255
 ETH_CLA = 0xE0
 INS_SIGN_TX = 0x04
 INS_SIGN_PERSONAL_MESSAGE = 0x08
+INS_SIGN_EIP712_HASHED_MESSAGE = 0x0C
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,6 +56,13 @@ def _parse_hex(value: str, *, name: str) -> bytes:
         return bytes.fromhex(cleaned)
     except ValueError as exc:
         raise ValueError(f"invalid {name} hex payload") from exc
+
+
+def _parse_fixed_hex(value: str, *, name: str, size: int) -> bytes:
+    payload = _parse_hex(value, name=name)
+    if len(payload) != size:
+        raise ValueError(f"{name} must be exactly {size} bytes ({size * 2} hex chars)")
+    return payload
 
 
 def _encode_bip32_path(path: str) -> bytes:
@@ -123,6 +131,23 @@ def _decode_signature(response: bytes) -> dict[str, str | int]:
     }
 
 
+def _decode_signature_vrs(response: bytes) -> dict[str, str | int]:
+    if len(response) < 65:
+        raise RuntimeError(
+            f"unexpected Ledger response length for signature: {len(response)} bytes"
+        )
+
+    v = response[0]
+    r = response[1:33]
+    s = response[33:65]
+    return {
+        "r": "0x" + r.hex(),
+        "s": "0x" + s.hex(),
+        "v": int(v),
+        "signature_hex": "0x" + (r + s + bytes([v])).hex(),
+    }
+
+
 def _sign_transaction(*, dongle: Any, derivation_path: str, payload_hex: str) -> dict[str, Any]:
     path_bytes = _encode_bip32_path(derivation_path)
     payload = _parse_hex(payload_hex, name="transaction")
@@ -148,12 +173,69 @@ def _sign_message(*, dongle: Any, derivation_path: str, payload_hex: str) -> dic
     return _decode_signature(response)
 
 
+def _resolve_typed_data_hashes(
+    *,
+    payload_hex: str,
+    domain_separator_hex: str,
+    hash_struct_message_hex: str,
+) -> tuple[bytes, bytes]:
+    # Preferred shape: explicit EIP-712 hashes.
+    if domain_separator_hex or hash_struct_message_hex:
+        if not domain_separator_hex or not hash_struct_message_hex:
+            raise ValueError(
+                "typed_data requires both inputs.domain_separator_hex and "
+                "inputs.hash_struct_message_hex"
+            )
+        domain_separator = _parse_fixed_hex(
+            domain_separator_hex, name="domain_separator_hex", size=32
+        )
+        hash_struct_message = _parse_fixed_hex(
+            hash_struct_message_hex, name="hash_struct_message_hex", size=32
+        )
+        return domain_separator, hash_struct_message
+
+    # Backward-compatible fallback: payload_hex is a concatenated 64-byte blob
+    # [domainSeparator(32) || hashStruct(message)(32)].
+    if payload_hex:
+        combined = _parse_fixed_hex(payload_hex, name="typed_data payload_hex", size=64)
+        return combined[:32], combined[32:]
+
+    raise ValueError(
+        "typed_data requires either both inputs.domain_separator_hex + "
+        "inputs.hash_struct_message_hex, or inputs.payload_hex as 64-byte "
+        "combined hash data."
+    )
+
+
+def _sign_typed_data(
+    *,
+    dongle: Any,
+    derivation_path: str,
+    payload_hex: str,
+    domain_separator_hex: str,
+    hash_struct_message_hex: str,
+) -> dict[str, Any]:
+    path_bytes = _encode_bip32_path(derivation_path)
+    domain_separator, hash_struct_message = _resolve_typed_data_hashes(
+        payload_hex=payload_hex,
+        domain_separator_hex=domain_separator_hex,
+        hash_struct_message_hex=hash_struct_message_hex,
+    )
+    payload = path_bytes + domain_separator + hash_struct_message
+    response = dongle.exchange(
+        _apdu(ETH_CLA, INS_SIGN_EIP712_HASHED_MESSAGE, 0x00, 0x00, payload)
+    )
+    return _decode_signature_vrs(response)
+
+
 def _execute_hid_sign(inputs: dict[str, Any]) -> dict[str, Any]:
     payload_kind = str(inputs.get("payload_kind", "transaction"))
     payload_hex = str(inputs.get("payload_hex", "")).strip()
+    domain_separator_hex = str(inputs.get("domain_separator_hex", "")).strip()
+    hash_struct_message_hex = str(inputs.get("hash_struct_message_hex", "")).strip()
     derivation_path = str(inputs.get("derivation_path", "44'/60'/0'/0/0"))
 
-    if not payload_hex:
+    if payload_kind in ("transaction", "message") and not payload_hex:
         raise ValueError("inputs.payload_hex is required for HID signing")
 
     try:
@@ -178,9 +260,12 @@ def _execute_hid_sign(inputs: dict[str, Any]) -> dict[str, Any]:
                 payload_hex=payload_hex,
             )
         elif payload_kind == "typed_data":
-            raise NotImplementedError(
-                "typed_data signing is not implemented in this runtime. "
-                "Use transaction/message payloads or extend APDU flow for EIP-712."
+            signature = _sign_typed_data(
+                dongle=dongle,
+                derivation_path=derivation_path,
+                payload_hex=payload_hex,
+                domain_separator_hex=domain_separator_hex,
+                hash_struct_message_hex=hash_struct_message_hex,
             )
         else:
             raise ValueError(

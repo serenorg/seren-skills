@@ -6,6 +6,8 @@
     "blind_sign_allowed": true,
     "clear_sign_required": true,
     "derivation_path": "44'/60'/0'/0/0",
+    "domain_separator_hex": "",
+    "hash_struct_message_hex": "",
     "payload_hex": "",
     "payload_kind": "transaction",
     "request_summary": "",

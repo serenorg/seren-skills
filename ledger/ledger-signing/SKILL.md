@@ -28,7 +28,6 @@ Direct USB/HID runtime execution for Ledger signing flows.
 - Supported payload kinds:
   - `transaction`
   - `message`
-- Not yet implemented:
   - `typed_data` (EIP-712)
 
 ## Session Automation Guidance
@@ -54,7 +53,11 @@ Required disclaimer to include:
    - `dry_run=false`
    - `inputs.payload_kind`
    - `inputs.derivation_path`
-   - `inputs.payload_hex`
+   - `inputs.payload_hex` for `transaction` / `message`
+   - EIP-712 `typed_data`:
+     - preferred: `inputs.domain_separator_hex` + `inputs.hash_struct_message_hex`
+     - compatible fallback: `inputs.payload_hex` as 64-byte combined
+       `[domainSeparator || hashStruct(message)]`
 4. Run live signing:
    - `python scripts/agent.py --config config.json --execute`
 
