@@ -1,0 +1,7 @@
+{
+  "status": "error",
+  "skill": "customer-support-intake",
+  "error_code": "policy_violation",
+  "policy": "max_notional_usd",
+  "message": "Requested notional exceeds configured cap."
+}

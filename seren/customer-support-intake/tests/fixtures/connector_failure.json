@@ -1,0 +1,31 @@
+{
+  "status": "error",
+  "skill": "customer-support-intake",
+  "error_code": "connector_failure",
+  "connector": "diagnostics",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "diagnostics": {
+      "post": {
+        "status": "error",
+        "connector": "diagnostics",
+        "action": "post",
+        "error_code": "connector_failure"
+      }
+    },
+    "playwright": {
+      "post": {
+        "status": "ok",
+        "connector": "playwright",
+        "action": "post"
+      }
+    },
+    "storage": {
+      "post": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "post"
+      }
+    }
+  }
+}

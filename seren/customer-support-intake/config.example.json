@@ -1,0 +1,20 @@
+{
+  "connectors": [
+    "diagnostics",
+    "playwright",
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "consent_token": "",
+    "customer_id": "",
+    "incident_id": "",
+    "incident_url": "",
+    "include_chat_history": true,
+    "include_logs": true,
+    "lookback_hours": 24,
+    "retention_days": 30,
+    "support_access_grant_token": ""
+  },
+  "skill": "customer-support-intake"
+}

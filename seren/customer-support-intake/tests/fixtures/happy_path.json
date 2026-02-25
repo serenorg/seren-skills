@@ -1,0 +1,40 @@
+{
+  "status": "ok",
+  "skill": "customer-support-intake",
+  "workflow_step_count": 13,
+  "dry_run": true,
+  "inputs": {
+    "consent_token": "",
+    "customer_id": "",
+    "incident_id": "",
+    "incident_url": "",
+    "include_chat_history": true,
+    "include_logs": true,
+    "lookback_hours": 24,
+    "retention_days": 30,
+    "support_access_grant_token": ""
+  },
+  "connectors": {
+    "diagnostics": {
+      "post": {
+        "status": "ok",
+        "connector": "diagnostics",
+        "action": "post"
+      }
+    },
+    "playwright": {
+      "post": {
+        "status": "ok",
+        "connector": "playwright",
+        "action": "post"
+      }
+    },
+    "storage": {
+      "post": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "post"
+      }
+    }
+  }
+}
