@@ -38,27 +38,34 @@ if [ -f .env ]; then
     echo "   To reconfigure, delete .env and run this script again"
 else
     echo ""
-    echo "Enter your SEREN_API_KEY (required for testing):"
+    echo "Enter your SEREN_API_KEY (optional if API_KEY is injected by Seren Desktop):"
     echo "(Get it from https://app.serendb.com/settings/api-keys)"
     read -r SEREN_API_KEY
 
-    if [ -z "$SEREN_API_KEY" ]; then
-        echo "❌ SEREN_API_KEY is required"
+    if [ -z "$SEREN_API_KEY" ] && [ -z "${API_KEY:-}" ]; then
+        echo "❌ Missing gateway key. Provide SEREN_API_KEY or run with API_KEY injected."
         exit 1
     fi
 
+    if [ -n "$SEREN_API_KEY" ]; then
+        SEREN_KEY_LINE="SEREN_API_KEY=$SEREN_API_KEY"
+    else
+        SEREN_KEY_LINE="# SEREN_API_KEY is not set here (using runtime API_KEY instead)"
+    fi
+
     cat > .env << EOF2
-# Seren API credentials (REQUIRED)
-SEREN_API_KEY=$SEREN_API_KEY
+# Seren API credentials (required via SEREN_API_KEY or runtime API_KEY)
+$SEREN_KEY_LINE
 
 # Desktop sidecar/keychain mode (recommended)
+# Configure Polymarket publisher credentials in Seren Desktop Settings > Publisher MCPs.
 SEREN_DESKTOP_PUBLISHER_AUTH=true
 
 # Optional legacy fallback (set SEREN_DESKTOP_PUBLISHER_AUTH=false)
-# POLY_API_KEY=mock_key_for_testing
-# POLY_PASSPHRASE=mock_passphrase_for_testing
-# POLY_SECRET=mock_secret_for_testing
-# POLY_ADDRESS=0xMockAddressForTesting
+# POLY_API_KEY=your_polymarket_api_key
+# POLY_PASSPHRASE=your_polymarket_passphrase
+# POLY_SECRET=your_polymarket_secret
+# POLY_ADDRESS=your_wallet_address
 EOF2
 
     echo "✅ .env created"

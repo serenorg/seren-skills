@@ -6,7 +6,9 @@ Get the Polymarket Trading Bot running in 5 minutes.
 
 - Python 3.9+
 - $550+ total budget (see [SKILL.md Phase 4](SKILL.md#phase-4-fund-your-wallets) for why)
-- Seren API key from [app.serendb.com/settings/api-keys](https://app.serendb.com/settings/api-keys)
+- Seren gateway auth via:
+  - `SEREN_API_KEY` (standalone), or
+  - runtime `API_KEY` when launched by Seren Desktop
 
 ## One-Command Setup (Recommended)
 
@@ -16,7 +18,7 @@ Get the Polymarket Trading Bot running in 5 minutes.
 
 This script will:
 - ✅ Install Python dependencies
-- ✅ Create `.env` with your SEREN_API_KEY
+- ✅ Create `.env` with desktop-auth defaults
 - ✅ Create `config.json` with safe defaults
 - ✅ Run syntax validation tests
 - ✅ Run dry-run tests
@@ -66,7 +68,7 @@ Review the settings - defaults are safe for testing.
 # Syntax validation (no credentials needed)
 python3 scripts/test_syntax.py
 
-# Dry-run test (needs SEREN_API_KEY)
+# Dry-run test (needs SEREN_API_KEY or runtime API_KEY)
 python3 scripts/test_dry_run.py
 ```
 
@@ -120,7 +122,7 @@ tail -f logs/trading_*.log
 pip3 install -r requirements.txt
 ```
 
-### "SEREN_API_KEY not found"
+### "SEREN_API_KEY/API_KEY not found"
 
 Check your `.env` file:
 
@@ -128,7 +130,7 @@ Check your `.env` file:
 cat .env | grep SEREN_API_KEY
 ```
 
-Make sure it's set and the file is in the same directory as the bot scripts.
+For desktop-launched runs, `API_KEY` may be injected automatically.
 
 ### "Polymarket desktop publisher authentication failed"
 

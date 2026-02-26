@@ -29,8 +29,8 @@ cp .env.example .env
 ```
 
 Edit `.env` and add:
-- **SEREN_API_KEY**: Get from [app.serendb.com/settings/api-keys](https://app.serendb.com/settings/api-keys)
-- **SEREN_DESKTOP_PUBLISHER_AUTH=true** (recommended): desktop sidecar/keychain auth flow
+- **SEREN_API_KEY** (or runtime `API_KEY` when launched by Seren Desktop): Get from [app.serendb.com/settings/api-keys](https://app.serendb.com/settings/api-keys)
+- **SEREN_DESKTOP_PUBLISHER_AUTH=true** (recommended): use desktop sidecar/keychain publisher auth
 
 Desktop sidecar/keychain flow (recommended):
 - Configure Polymarket publisher credentials in Seren Desktop Settings → Publisher MCPs

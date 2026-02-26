@@ -64,14 +64,16 @@ def main():
     print()
 
     # Check for API key
-    if not os.getenv('SEREN_API_KEY'):
-        print("❌ Error: SEREN_API_KEY environment variable not set")
+    if not (os.getenv('SEREN_API_KEY') or os.getenv('API_KEY')):
+        print("❌ Error: Seren API key not found")
         print()
-        print("Set your API key:")
+        print("Set your API key (standalone mode):")
         print("  export SEREN_API_KEY='your-api-key'")
         print()
         print("Or add it to .env file:")
         print("  SEREN_API_KEY=your-api-key")
+        print()
+        print("When launched by Seren Desktop, API_KEY may be injected automatically.")
         print()
         sys.exit(1)
 
