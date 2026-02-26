@@ -36,8 +36,8 @@ This skill backs the **grant-intake** Seren Cloud agent: a five-phase state mach
 
 ## Deploy and invoke
 
-- **Agent ID (current):** `bc2491df-5ca0-466e-8acb-3dafd1b32bec`
-- **Invoke URL:** `https://api.serendb.com/publishers/seren-cloud/agents/bc2491df-5ca0-466e-8acb-3dafd1b32bec/runs`
+- **Agent ID (current):** `dbe3af9b-088a-4a32-9e6e-a46cbfeece7b`
+- **Invoke URL:** `https://api.serendb.com/publishers/seren-cloud/agents/dbe3af9b-088a-4a32-9e6e-a46cbfeece7b/runs`
 - **Auth:** `Authorization: Bearer $SEREN_API_KEY`
 
 See [docs/seren/README.md](https://github.com/serendb/seren-sql-interface-402mcp-server/blob/main/docs/seren/README.md) in the source repo for full control-plane and deploy steps.

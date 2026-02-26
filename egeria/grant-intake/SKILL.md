@@ -30,3 +30,13 @@ Structured five-phase grant consultant intake to produce a Grant Readiness Summa
 ## Sectors
 
 Predefined sectors: Workforce Development, Health/Human Services, Green Economy, Education/Youth, Housing, Arts/Culture, Agriculture. Custom sectors are supported.
+
+## Ralph Wiggum behavior (don't stop in the middle)
+
+The skill is designed to keep going until the goal is reached and not drop information:
+
+- **Out-of-phase input:** If the user provides information that belongs to another phase (e.g. sectors while in Phase 1), the skill stores it in the right place and acknowledges briefly ("I've noted your sectors for Phase 2."), then continues the current phase. Nothing is lost.
+- **Phase already filled:** When entering a phase whose data was already provided earlier, the skill shows "Here's what we have: … Anything to add or change?" and waits for confirmation ("no" / "continue") or additional data before advancing.
+- **Unrecognized input:** If the user says something that doesn't map to any phase, the skill asks one short clarifying question ("Did you mean to provide [expected fields], or something else?") and can store the reply as a note; it then continues the current step.
+- **Export with blanks:** The user can confirm and export the summary even if some fields are still blank; the summary may have empty sections.
+- **Continue without changes:** To move on when a phase already has data, the client can send `continue_without_changes: true` or `no_changes: true` in the input.
