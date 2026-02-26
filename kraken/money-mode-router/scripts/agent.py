@@ -204,26 +204,55 @@ def format_report(
     return "\n".join(lines)
 
 
+def _get_seren_api_key() -> str | None:
+    return os.getenv("SEREN_API_KEY") or os.getenv("API_KEY")
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _build_store_from_env() -> SerenDBStore:
+    api_key = _get_seren_api_key()
+    if not api_key:
+        raise ValueError("SEREN_API_KEY is required (or API_KEY when launched by Seren Desktop).")
+
+    return SerenDBStore(
+        api_key=api_key,
+        project_name=os.getenv("SERENDB_PROJECT_NAME"),
+        database_name=os.getenv("SERENDB_DATABASE"),
+        branch_name=os.getenv("SERENDB_BRANCH"),
+        project_region=os.getenv("SERENDB_REGION", "aws-us-east-1"),
+        auto_create=_env_flag("SERENDB_AUTO_CREATE", default=True),
+        mcp_command=os.getenv("SEREN_MCP_COMMAND", "seren-mcp"),
+    )
+
+
 def run_init_db(args: argparse.Namespace) -> int:
     load_dotenv()
-    connection_string = os.getenv("SERENDB_CONNECTION_STRING")
-    if not connection_string:
-        print("SERENDB_CONNECTION_STRING is required", file=sys.stderr)
+    try:
+        store = _build_store_from_env()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
-    store = SerenDBStore(connection_string)
-    store.ensure_schema()
-    print("SerenDB schema initialized.")
+    try:
+        store.ensure_schema()
+    except Exception as exc:  # noqa: BLE001
+        print(f"Router persistence failed via seren-mcp: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+
+    print("SerenDB schema initialized via seren-mcp.")
     return 0
 
 
 def run_recommend(args: argparse.Namespace) -> int:
     load_dotenv()
-
-    connection_string = os.getenv("SERENDB_CONNECTION_STRING")
-    if not connection_string:
-        print("SERENDB_CONNECTION_STRING is required", file=sys.stderr)
-        return 1
 
     config_path = args.config
     if not Path(config_path).exists():
@@ -250,64 +279,77 @@ def run_recommend(args: argparse.Namespace) -> int:
     session_id = str(uuid.uuid4())
     profile_name = args.profile_name
 
-    store = SerenDBStore(connection_string)
-    store.ensure_schema()
-    store.create_session(session_id, profile_name)
-    store.save_answers(session_id, answers)
+    try:
+        store = _build_store_from_env()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
-    account_snapshot: Dict[str, Any] = {}
-    api_key = os.getenv("SEREN_API_KEY")
+    try:
+        store.ensure_schema()
+        store.create_session(session_id, profile_name)
+        store.save_answers(session_id, answers)
 
-    if api_key:
-        kraken = KrakenClient(
-            api_key=api_key,
-            base_url=os.getenv("SEREN_GATEWAY_BASE_URL", "https://api.serendb.com"),
-            publisher=os.getenv("KRAKEN_SPOT_PUBLISHER", "kraken-spot-trading"),
+        account_snapshot: Dict[str, Any] = {}
+        api_key = _get_seren_api_key()
+
+        if api_key:
+            kraken = KrakenClient(
+                api_key=api_key,
+                base_url=os.getenv("SEREN_GATEWAY_BASE_URL", "https://api.serendb.com"),
+                publisher=os.getenv("KRAKEN_SPOT_PUBLISHER", "kraken-spot-trading"),
+                kraken_api_key=os.getenv("KRAKEN_API_KEY"),
+                kraken_api_secret=os.getenv("KRAKEN_API_SECRET"),
+            )
+            account_snapshot = kraken.get_account_snapshot()
+            store.save_event(session_id, "account_snapshot", account_snapshot)
+        else:
+            store.save_event(session_id, "account_snapshot", {"skipped": "SEREN_API_KEY not set"})
+
+        engine = ModeEngine(config)
+        ranked, mode_coverage = engine.recommend(answers)
+
+        recommendations = [asdict(item) for item in ranked]
+        store.save_recommendations(session_id, recommendations)
+
+        primary_mode = recommendations[0]["mode_id"]
+        action_plan = engine.build_action_plan(primary_mode)
+        store.save_actions(session_id, primary_mode, action_plan)
+
+        store.save_event(session_id, "mode_coverage", mode_coverage)
+        store.save_event(
+            session_id,
+            "final_result",
+            {
+                "primary_mode": primary_mode,
+                "backup_mode": recommendations[1]["mode_id"] if len(recommendations) > 1 else None,
+                "answers": answers,
+            },
         )
-        account_snapshot = kraken.get_account_snapshot()
-        store.save_event(session_id, "account_snapshot", account_snapshot)
-    else:
-        store.save_event(session_id, "account_snapshot", {"skipped": "SEREN_API_KEY not set"})
 
-    engine = ModeEngine(config)
-    ranked, mode_coverage = engine.recommend(answers)
+        report = format_report(
+            session_id=session_id,
+            recommendations=recommendations,
+            actions=action_plan,
+            mode_coverage=mode_coverage,
+        )
+        print(report)
 
-    recommendations = [asdict(item) for item in ranked]
-    store.save_recommendations(session_id, recommendations)
-
-    primary_mode = recommendations[0]["mode_id"]
-    action_plan = engine.build_action_plan(primary_mode)
-    store.save_actions(session_id, primary_mode, action_plan)
-
-    store.save_event(session_id, "mode_coverage", mode_coverage)
-    store.save_event(
-        session_id,
-        "final_result",
-        {
-            "primary_mode": primary_mode,
-            "backup_mode": recommendations[1]["mode_id"] if len(recommendations) > 1 else None,
-            "answers": answers,
-        },
-    )
-
-    report = format_report(
-        session_id=session_id,
-        recommendations=recommendations,
-        actions=action_plan,
-        mode_coverage=mode_coverage,
-    )
-    print(report)
-
-    if args.json:
-        result_payload = {
-            "session_id": session_id,
-            "answers": answers,
-            "account_snapshot": account_snapshot,
-            "recommendations": recommendations,
-            "action_plan": action_plan,
-            "mode_coverage": mode_coverage,
-        }
-        print(json.dumps(result_payload, indent=2))
+        if args.json:
+            result_payload = {
+                "session_id": session_id,
+                "answers": answers,
+                "account_snapshot": account_snapshot,
+                "recommendations": recommendations,
+                "action_plan": action_plan,
+                "mode_coverage": mode_coverage,
+            }
+            print(json.dumps(result_payload, indent=2))
+    except Exception as exc:  # noqa: BLE001
+        print(f"Router persistence failed via seren-mcp: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
 
     return 0
 
