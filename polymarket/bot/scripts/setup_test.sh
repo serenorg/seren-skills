@@ -51,12 +51,14 @@ else
 # Seren API credentials (REQUIRED)
 SEREN_API_KEY=$SEREN_API_KEY
 
-# Polymarket credentials (optional for dry-run testing)
-# For live trading, get these from https://polymarket.com/settings/api
-POLY_API_KEY=mock_key_for_testing
-POLY_PASSPHRASE=mock_passphrase_for_testing
-POLY_SECRET=mock_secret_for_testing
-POLY_ADDRESS=0xMockAddressForTesting
+# Desktop sidecar/keychain mode (recommended)
+SEREN_DESKTOP_PUBLISHER_AUTH=true
+
+# Optional legacy fallback (set SEREN_DESKTOP_PUBLISHER_AUTH=false)
+# POLY_API_KEY=mock_key_for_testing
+# POLY_PASSPHRASE=mock_passphrase_for_testing
+# POLY_SECRET=mock_secret_for_testing
+# POLY_ADDRESS=0xMockAddressForTesting
 EOF2
 
     echo "✅ .env created"
@@ -107,7 +109,8 @@ echo "2. Run a single dry-run scan (no live trades):"
 echo "   python3 scripts/agent.py --config config.json --dry-run"
 echo ""
 echo "3. When ready for live trading:"
-echo "   - Update .env with real Polymarket API credentials"
+echo "   - Configure Polymarket publisher credentials in Seren Desktop Settings > Publisher MCPs"
+echo "     (or set SEREN_DESKTOP_PUBLISHER_AUTH=false and provide POLY_* in .env)"
 echo "   - Review config.json risk parameters"
 echo "   - Ensure you have $550+ total budget (see SKILL.md Phase 4)"
 echo "   - Start the agent server: python3 scripts/run_agent_server.py --config config.json"

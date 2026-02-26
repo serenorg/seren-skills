@@ -155,7 +155,8 @@ This skill helps users set up and manage an autonomous trading agent that:
 
 **Pure Python Implementation**
 - Python agent calls Seren publishers via HTTP
-- Credentials stored in `.env` file (environment variables)
+- Desktop sidecar/keychain publisher auth is the default path
+- Legacy direct `POLY_*` headers remain as fallback
 - Logs written to JSONL files
 - Seren-cron executes Python script on schedule
 
@@ -173,10 +174,11 @@ This skill helps users set up and manage an autonomous trading agent that:
   - Response includes: market IDs, questions, token IDs, prices, liquidity
   - Verified working with 100+ markets returned
 
-- `polymarket-trading-serenai` - Polymarket CLOB trading API
+- `polymarket-trading` (preferred) / `polymarket-trading-serenai` (fallback) - Polymarket CLOB trading API
   - Place/cancel orders with server-side EIP-712 signing
   - Query positions, open orders, balances
-  - Requires Polymarket L2 credentials (API key, passphrase, secret, address)
+  - Desktop mode: uses keychain-backed publisher credentials
+  - Legacy mode: requires Polymarket L2 credentials (API key, passphrase, secret, address)
 
 - `perplexity` - Perplexity AI research (via OpenRouter)
   - Model: `sonar` for fast research
@@ -219,21 +221,27 @@ Create `.env` file from template:
 cp .env.example .env
 ```
 
-Edit `.env` and add your credentials:
+Edit `.env`:
 
 ```bash
 # Seren API key - get from https://app.serendb.com/settings/api-keys
 SEREN_API_KEY=your_seren_api_key_here
 
-# Polymarket credentials - get from https://polymarket.com
-# (Settings > API Keys > Derive API Key)
-POLY_API_KEY=your_polymarket_api_key_here
-POLY_PASSPHRASE=your_polymarket_passphrase_here
-POLY_SECRET=your_polymarket_secret_here
-POLY_ADDRESS=your_wallet_address_here
+# Desktop sidecar/keychain mode (recommended)
+SEREN_DESKTOP_PUBLISHER_AUTH=true
 ```
 
-**How to get Polymarket credentials:**
+**Desktop sidecar flow (recommended):**
+1. Open Seren Desktop
+2. Go to Settings > Publisher MCPs
+3. Configure Polymarket publisher credentials
+4. Ensure publisher is enabled
+
+**Legacy fallback mode (optional):**
+Set `SEREN_DESKTOP_PUBLISHER_AUTH=false` and provide:
+`POLY_API_KEY`, `POLY_PASSPHRASE`, `POLY_SECRET`, `POLY_ADDRESS`
+
+**How to derive Polymarket credentials (legacy mode):**
 1. Visit [polymarket.com](https://polymarket.com)
 2. Connect your wallet
 3. Navigate to Settings > API Keys
@@ -846,19 +854,20 @@ def calculate_position_size(fair_value, market_price, bankroll, max_kelly=0.06):
 - ✅ AI research via `perplexity` publisher (Perplexity AI integration)
 - ✅ Fair value estimation via `seren-models` publisher (Claude Sonnet 4.5)
 - ✅ Kelly Criterion position sizing
-- ✅ Order placement via `polymarket-trading-serenai` publisher (server-side EIP-712 signing)
+- ✅ Order placement via sidecar-first trading publisher path (`polymarket-trading` with legacy fallback)
 - ✅ Position tracking with unrealized P&L calculation
 - ✅ Comprehensive JSONL logging (trades, scans, positions)
 
 **Infrastructure:**
 - ✅ Seren API client with publisher routing
-- ✅ Environment variable credential management
+- ✅ Desktop sidecar/keychain publisher auth support
+- ✅ Legacy environment-variable credential fallback
 - ✅ Dry-run mode (simulation without placing trades)
 - ✅ Configuration system (JSON-based risk parameters)
 
 **Seren Publishers Used:**
 - `polymarket-data` - Real-time market data (prices, liquidity, volumes)
-- `polymarket-trading-serenai` - Order placement with server-side signing
+- `polymarket-trading` / `polymarket-trading-serenai` - Order placement with server-side signing
 - `perplexity` - AI-powered market research
 - `seren-models` - LLM inference (Claude, GPT, Gemini, etc.)
 - `seren-cron` - Autonomous job scheduling
@@ -904,15 +913,17 @@ Per scan cycle:
 - Add your Seren API key
 
 ### "Polymarket credentials required"
-- Add `POLY_API_KEY`, `POLY_PASSPHRASE`, `POLY_ADDRESS` to `.env`
+- Recommended: enable desktop keychain mode in `.env` with `SEREN_DESKTOP_PUBLISHER_AUTH=true`
+- Then configure Polymarket publisher credentials in Seren Desktop Settings > Publisher MCPs
+- Legacy mode only: add `POLY_API_KEY`, `POLY_PASSPHRASE`, `POLY_ADDRESS` to `.env`
 
 ### "Low SerenBucks balance"
 - Deposit at: https://app.serendb.com/wallet/deposit
 - Maintain at least $20 for smooth operation
 
 ### "Publisher call failed: 401"
-- Check your API keys are correct
-- Verify credentials haven't expired
+- In desktop mode: verify Polymarket publisher credentials are configured/enabled in Seren Desktop
+- In legacy mode: check `POLY_*` values and verify credentials haven't expired
 
 ---
 

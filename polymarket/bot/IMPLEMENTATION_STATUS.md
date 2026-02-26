@@ -20,7 +20,8 @@
 
 ### Configuration
 - ✅ **config.example.json** - Risk parameter template
-- ✅ Environment variable-based credential management
+- ✅ Desktop sidecar/keychain auth mode (default)
+- ✅ Environment variable-based legacy credential fallback
 - ✅ Dry-run mode support
 
 ### Features Implemented
@@ -35,7 +36,7 @@
 - ✅ Dry-run mode
 - ✅ Configuration validation
 - ✅ Market scanning via polymarket-data publisher
-- ✅ Order placement via polymarket-trading-serenai (handles EIP-712 signing server-side)
+- ✅ Order placement via sidecar-first trading publisher path (legacy fallback included)
 
 ### Legal & Compliance
 - ✅ Geographic restriction warnings (US ban)
@@ -67,21 +68,21 @@
 ---
 
 #### 2. Order Placement ✅ **COMPLETED**
-**Status:** Fully implemented via polymarket-trading-serenai publisher
+**Status:** Fully implemented with sidecar-first publisher routing and legacy fallback
 
 **What was added:**
-- Order placement via polymarket-trading-serenai Seren MCP publisher
+- Order placement via sidecar slug (`polymarket-trading`) with fallback to `polymarket-trading-serenai`
 - EIP-712 signing handled server-side by the publisher
 - Simplified client-side code (no cryptography needed)
-- Uses Polymarket API credentials for authentication
+- Supports desktop keychain auth by default, legacy `POLY_*` headers as fallback
 
 **Implementation:**
-- `place_order()` calls polymarket-trading-serenai publisher with order params
+- `place_order()` routes through `PolymarketClient._call_trading()` publisher fallback chain
 - Publisher handles all EIP-712 signing, nonce management, and submission
-- Credentials passed via headers (POLY_API_KEY, POLY_PASSPHRASE, POLY_ADDRESS)
+- Desktop mode uses configured publisher credentials; legacy mode passes `POLY_*` headers
 - No client-side private key or signing library required
 
-**Note:** The polymarket-trading-serenai MCP server abstracts away all cryptographic complexity
+**Note:** Polymarket trading publishers abstract away cryptographic complexity
 
 ---
 

@@ -14,11 +14,12 @@ class KrakenClient:
         self,
         api_key: str,
         base_url: str = "https://api.serendb.com",
-        publisher: str = "kraken-spot-trading",
+        publisher: str = "kraken-trading",
+        fallback_publisher: str = "kraken-spot-trading",
     ):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
-        self.publisher = publisher
+        self.publishers = [publisher, fallback_publisher]
 
     def _call(
         self,
@@ -27,26 +28,47 @@ class KrakenClient:
         body: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        url = f"{self.base_url}/publishers/{self.publisher}{path}"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
-        response = requests.request(
-            method=method,
-            url=url,
-            headers=headers,
-            json=body,
-            params=params,
-            timeout=30,
-        )
-        response.raise_for_status()
+        last_error: Optional[Exception] = None
+        for idx, publisher in enumerate(self.publishers):
+            url = f"{self.base_url}/publishers/{publisher}{path}"
+            try:
+                response = requests.request(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    json=body,
+                    params=params,
+                    timeout=30,
+                )
+                if response.status_code >= 400:
+                    if response.status_code in (401, 403):
+                        if idx < len(self.publishers) - 1:
+                            raise requests.HTTPError("unauthorized", response=response)
+                        raise requests.HTTPError(
+                            "Kraken publisher authentication failed. Configure the Kraken "
+                            "publisher key in Seren Desktop Settings and ensure it is enabled.",
+                            response=response,
+                        )
+                    response.raise_for_status()
 
-        payload = response.json()
-        if isinstance(payload, dict) and "body" in payload:
-            return payload["body"]
-        return payload
+                payload = response.json()
+                if isinstance(payload, dict) and "body" in payload:
+                    return payload["body"]
+                return payload
+            except requests.HTTPError as exc:
+                if getattr(exc.response, "status_code", None) in (401, 403, 404):
+                    last_error = exc
+                    continue
+                raise
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                continue
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("No Kraken publisher configured")
 
     def get_balance(self) -> Dict[str, Any]:
         return self._call(method="POST", path="/private/Balance", body={})

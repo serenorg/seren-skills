@@ -20,10 +20,12 @@ Grid trading places a ladder of buy orders below the market price and sell order
 
 ## Setup
 
-1. Copy `.env.example` to `.env` and fill in your Seren API credentials
-2. Copy `config.example.json` to `config.json` and configure your grid parameters
-3. Install dependencies: `pip install -r requirements.txt`
-4. Run: `python scripts/agent.py`
+1. Configure Coinbase publisher credentials in Seren Desktop Settings → Publisher MCPs (desktop sidecar/keychain flow)
+2. Copy `.env.example` to `.env` and set `SEREN_API_KEY` (`SEREN_DESKTOP_PUBLISHER_AUTH=true` is recommended)
+3. Optional legacy fallback: set `SEREN_DESKTOP_PUBLISHER_AUTH=false` and fill `CB_ACCESS_*` values
+4. Copy `config.example.json` to `config.json` and configure your grid parameters
+5. Install dependencies: `pip install -r requirements.txt`
+6. Run: `python scripts/agent.py`
 
 ## SerenDB Persistence (MCP-native)
 

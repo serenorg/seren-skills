@@ -37,13 +37,20 @@ pip3 install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` and add your SEREN_API_KEY:
+Edit `.env` and add:
 
 ```bash
 SEREN_API_KEY=your_actual_key_here
+SEREN_DESKTOP_PUBLISHER_AUTH=true
 ```
 
-For testing, you can use mock Polymarket credentials. For live trading, get real ones from [polymarket.com/settings/api](https://polymarket.com/settings/api).
+Desktop sidecar/keychain mode (recommended):
+- Configure Polymarket publisher credentials in Seren Desktop Settings → Publisher MCPs
+- No `POLY_*` vars required in this mode
+
+Legacy fallback:
+- Set `SEREN_DESKTOP_PUBLISHER_AUTH=false`
+- Add `POLY_API_KEY`, `POLY_PASSPHRASE`, `POLY_SECRET`, `POLY_ADDRESS`
 
 ### 3. Create `config.json`
 
@@ -81,7 +88,7 @@ The bot will:
 
 ### Live Trading Mode
 
-⚠️ **Only use this with real Polymarket credentials and $550+ budget**
+⚠️ **Only use this with real Polymarket publisher credentials and $550+ budget**
 
 1. Start the agent server:
 
@@ -122,6 +129,13 @@ cat .env | grep SEREN_API_KEY
 ```
 
 Make sure it's set and the file is in the same directory as the bot scripts.
+
+### "Polymarket desktop publisher authentication failed"
+
+Open Seren Desktop → Settings → Publisher MCPs and:
+1. Configure Polymarket publisher credentials
+2. Ensure the publisher is enabled
+3. Retry the bot
 
 ### "SSL Warning about LibreSSL"
 

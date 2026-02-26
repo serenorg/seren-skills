@@ -74,6 +74,7 @@ class TestSign:
 class TestCallUnwrap:
     def _mock_response(self, payload):
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.json.return_value = payload
         mock_resp.raise_for_status.return_value = None
         return mock_resp
@@ -91,6 +92,53 @@ class TestCallUnwrap:
         with patch('requests.request', return_value=self._mock_response(raw)):
             result = client._call('GET', '/accounts')
         assert result == raw
+
+
+# ========== Publisher-Authenticated (Desktop Keychain) Mode ==========
+
+class TestPublisherAuthenticatedMode:
+    def _mock_response(self, payload, status_code=200):
+        mock_resp = MagicMock()
+        mock_resp.status_code = status_code
+        mock_resp.json.return_value = payload
+        mock_resp.raise_for_status.return_value = None
+        return mock_resp
+
+    def test_auto_detects_publisher_authenticated_when_cb_keys_absent(self):
+        client = SerenClient(seren_api_key='sb_test')
+        assert client.publisher_authenticated is True
+        assert client.auth_mode == 'publisher_authenticated'
+
+    def test_auto_detects_direct_mode_when_cb_keys_present(self):
+        client = make_client()
+        assert client.publisher_authenticated is False
+        assert client.auth_mode == 'direct_coinbase_headers'
+
+    def test_direct_mode_requires_all_cb_credentials(self):
+        with pytest.raises(ValueError, match=r"Legacy Coinbase header mode requires"):
+            SerenClient(
+                seren_api_key='sb_test',
+                publisher_authenticated=False
+            )
+
+    def test_publisher_authenticated_mode_skips_cb_headers(self):
+        client = SerenClient(seren_api_key='sb_test')
+        with patch.object(client, '_sign', side_effect=AssertionError("should not sign")):
+            with patch('requests.request', return_value=self._mock_response({'body': []})) as mock_req:
+                client._call('GET', '/accounts')
+
+        sent_headers = mock_req.call_args.kwargs['headers']
+        assert 'CB-ACCESS-KEY' not in sent_headers
+        assert 'CB-ACCESS-SIGN' not in sent_headers
+        assert 'CB-ACCESS-TIMESTAMP' not in sent_headers
+        assert 'CB-ACCESS-PASSPHRASE' not in sent_headers
+
+    def test_publisher_authenticated_401_has_desktop_hint(self):
+        client = SerenClient(seren_api_key='sb_test')
+        resp = self._mock_response({'error': 'unauthorized'}, status_code=401)
+        with patch('requests.request', return_value=resp):
+            with pytest.raises(Exception, match=r"desktop keychain mode"):
+                client._call('GET', '/accounts')
 
 
 # ========== get_account_balance ==========
