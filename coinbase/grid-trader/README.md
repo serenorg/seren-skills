@@ -45,10 +45,20 @@ SEREN_API_KEY=sb_...        # Get at app.serendb.com → API Keys
 CB_ACCESS_KEY=...           # Coinbase Exchange API key
 CB_ACCESS_SECRET=...        # Base64-encoded secret
 CB_ACCESS_PASSPHRASE=...    # Passphrase set when creating API key
+
+# Optional SerenDB target (MCP-native persistence)
+SERENDB_PROJECT_NAME=coinbase
+SERENDB_DATABASE=coinbase
+SERENDB_BRANCH=
+SERENDB_REGION=aws-us-east-1
+SERENDB_AUTO_CREATE=true
+SEREN_MCP_COMMAND=seren-mcp
 ```
 
 To create a Coinbase Exchange API key: [Coinbase Exchange → Profile → API](https://pro.coinbase.com/profile/api)
 - Required permissions: **View**, **Trade**
+
+When SerenDB target vars are unset, the bot first tries existing Coinbase-related SerenDB databases and then auto-creates `coinbase/coinbase` (if `SERENDB_AUTO_CREATE=true`).
 
 ### 3. Create config
 
@@ -155,6 +165,18 @@ All activity is logged to `logs/` as JSONL (one JSON object per line):
 | `fills.jsonl` | All trade executions with fees |
 | `positions.jsonl` | Position snapshots each cycle |
 | `errors.jsonl` | All errors with context |
+
+## SerenDB Persistence
+
+When `seren-mcp` is available, the bot also persists to SerenDB:
+
+- `coinbase_grid_sessions`
+- `coinbase_grid_orders`
+- `coinbase_grid_fills`
+- `coinbase_grid_positions`
+- `coinbase_grid_events`
+
+SerenDB persistence is best-effort; if unavailable, trading continues with local logs.
 
 ---
 

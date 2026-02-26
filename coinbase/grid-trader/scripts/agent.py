@@ -15,15 +15,44 @@ import json
 import os
 import sys
 import time
+import uuid
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 
 from seren_client import SerenClient
 from grid_manager import GridManager
 from position_tracker import PositionTracker
 from logger import GridTraderLogger
+from serendb_store import SerenDBStore
 import pair_selector
+
+
+def _get_seren_api_key() -> str | None:
+    return os.getenv("SEREN_API_KEY") or os.getenv("API_KEY")
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _build_store_from_env() -> SerenDBStore:
+    api_key = _get_seren_api_key()
+    if not api_key:
+        raise ValueError("SEREN_API_KEY is required (or API_KEY when launched by Seren Desktop).")
+
+    return SerenDBStore(
+        api_key=api_key,
+        project_name=os.getenv("SERENDB_PROJECT_NAME"),
+        database_name=os.getenv("SERENDB_DATABASE"),
+        branch_name=os.getenv("SERENDB_BRANCH"),
+        project_region=os.getenv("SERENDB_REGION", "aws-us-east-1"),
+        auto_create=_env_flag("SERENDB_AUTO_CREATE", default=True),
+        mcp_command=os.getenv("SEREN_MCP_COMMAND", "seren-mcp"),
+    )
 
 
 class CoinbaseGridTrader:
@@ -63,11 +92,74 @@ class CoinbaseGridTrader:
             cb_passphrase=cb_passphrase
         )
         self.logger = GridTraderLogger(logs_dir='logs')
+        self.store: Optional[SerenDBStore] = None
+        self.session_id = str(uuid.uuid4())
+        self._session_started = False
 
         self.grid: GridManager = None
         self.tracker: PositionTracker = None
         self.running = False
         self.active_orders: Dict[str, Dict] = {}  # order_id -> {side, price, size}
+
+        try:
+            self.store = _build_store_from_env()
+            self.store.ensure_schema()
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: SerenDB persistence unavailable: {exc}", file=sys.stderr)
+            self.store = None
+
+    def close(self):
+        """Close any external resources."""
+        if self.store is None:
+            return
+        try:
+            self.store.close()
+        finally:
+            self.store = None
+
+    def _store_call(self, context: str, fn):
+        """Execute a store operation safely without interrupting trading."""
+        if self.store is None:
+            return
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: SerenDB persistence failed ({context}): {exc}", file=sys.stderr)
+            try:
+                self.store.close()
+            finally:
+                self.store = None
+
+    def _ensure_session_started(self):
+        """Create a persistence session."""
+        if self.store is None or self._session_started:
+            return
+
+        campaign_name = str(self.config.get("campaign_name", "coinbase-grid-trader"))
+        trading_pair = str(self.config.get("trading_pair") or "UNKNOWN")
+
+        self._store_call(
+            "create_session",
+            lambda: self.store.create_session(
+                session_id=self.session_id,
+                campaign_name=campaign_name,
+                trading_pair=trading_pair,
+                dry_run=self.is_dry_run,
+            ),
+        )
+        self._store_call(
+            "session_started_event",
+            lambda: self.store.save_event(
+                self.session_id,
+                "session_started",
+                {
+                    "campaign_name": campaign_name,
+                    "trading_pair": trading_pair,
+                    "dry_run": self.is_dry_run,
+                },
+            ),
+        )
+        self._session_started = True
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load and validate configuration"""
@@ -129,6 +221,7 @@ class CoinbaseGridTrader:
 
         # Initialize grid
         self._init_grid()
+        self._ensure_session_started()
 
         reference_price = self.grid.get_reference_price()
         print(f"\nReference Price: ${reference_price:,.2f} (midpoint of price range)")
@@ -165,6 +258,25 @@ class CoinbaseGridTrader:
             price_range=strategy['price_range'],
             status='success'
         )
+        self._store_call(
+            "setup_complete_event",
+            lambda: self.store.save_event(
+                self.session_id,
+                "setup_complete",
+                {
+                    "campaign_name": self.config['campaign_name'],
+                    "product_id": product_id,
+                    "grid_levels": strategy['grid_levels'],
+                    "grid_spacing_percent": strategy['grid_spacing_percent'],
+                    "order_size_percent": strategy['order_size_percent'],
+                    "price_range": strategy['price_range'],
+                    "scan_interval_seconds": strategy['scan_interval_seconds'],
+                    "stop_loss_bankroll": risk['stop_loss_bankroll'],
+                    "reference_price": reference_price,
+                    "expected": expected,
+                },
+            ),
+        )
 
         print("\n✓ Setup complete!")
         print("\nNext steps:")
@@ -185,6 +297,15 @@ class CoinbaseGridTrader:
         product_id = self.config['trading_pair']
         scan_interval = self.config['strategy']['scan_interval_seconds']
         reference_price = self.grid.get_reference_price()
+        self._ensure_session_started()
+        self._store_call(
+            "dry_run_started_event",
+            lambda: self.store.save_event(
+                self.session_id,
+                "dry_run_started",
+                {"product_id": product_id, "cycles": cycles, "scan_interval_seconds": scan_interval},
+            ),
+        )
 
         print(f"Simulating {cycles} cycles (reference price: ${reference_price:,.2f})")
         print(f"Scan interval: {scan_interval}s\n")
@@ -206,6 +327,14 @@ class CoinbaseGridTrader:
             time.sleep(2)
 
         print("✓ Dry run complete!")
+        self._store_call(
+            "dry_run_completed_event",
+            lambda: self.store.save_event(
+                self.session_id,
+                "dry_run_completed",
+                {"product_id": product_id, "cycles": cycles},
+            ),
+        )
         print("\nTo run live mode:")
         print("  python scripts/agent.py start --config config.json")
         print("============================================================\n")
@@ -223,11 +352,24 @@ class CoinbaseGridTrader:
         product_id = self.config['trading_pair']
         scan_interval = self.config['strategy']['scan_interval_seconds']
         stop_loss = self.config['risk_management']['stop_loss_bankroll']
+        self._ensure_session_started()
 
         print(f"Trading Pair:    {product_id}")
         print(f"Scan Interval:   {scan_interval}s")
         print(f"Stop Loss:       ${stop_loss:,.2f}")
         print("\nStarting live trading... (Press Ctrl+C to stop)\n")
+        self._store_call(
+            "live_trading_started_event",
+            lambda: self.store.save_event(
+                self.session_id,
+                "live_trading_started",
+                {
+                    "product_id": product_id,
+                    "scan_interval_seconds": scan_interval,
+                    "stop_loss_bankroll": stop_loss,
+                },
+            ),
+        )
 
         self.running = True
         try:
@@ -263,6 +405,19 @@ class CoinbaseGridTrader:
             if self.tracker.should_stop_loss(reference_price, stop_loss):
                 portfolio_value = self.tracker.get_current_value(reference_price)
                 print(f"\n⚠ STOP LOSS TRIGGERED at ${portfolio_value:,.2f}")
+                self._store_call(
+                    "stop_loss_event",
+                    lambda: self.store.save_event(
+                        self.session_id,
+                        "stop_loss_triggered",
+                        {
+                            "product_id": product_id,
+                            "reference_price": reference_price,
+                            "portfolio_value": portfolio_value,
+                            "stop_loss_bankroll": stop_loss,
+                        },
+                    ),
+                )
                 self.stop()
                 return
 
@@ -280,6 +435,18 @@ class CoinbaseGridTrader:
                 unrealized_pnl=self.tracker.get_unrealized_pnl(reference_price),
                 open_orders=len(self.active_orders)
             )
+            self._store_call(
+                "position_snapshot",
+                lambda: self.store.save_position(
+                    session_id=self.session_id,
+                    trading_pair=product_id,
+                    base_balance=base_bal,
+                    quote_balance=usd_bal,
+                    total_value_usd=self.tracker.get_current_value(reference_price),
+                    unrealized_pnl=self.tracker.get_unrealized_pnl(reference_price),
+                    open_orders=len(self.active_orders),
+                ),
+            )
 
             # 6. Print status line
             ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
@@ -296,6 +463,17 @@ class CoinbaseGridTrader:
                 operation='trading_cycle',
                 error_type=type(exc).__name__,
                 error_message=err
+            )
+            self._store_call(
+                "trading_cycle_error_event",
+                lambda: self.store.save_event(
+                    self.session_id,
+                    "trading_cycle_error",
+                    {
+                        "error_type": type(exc).__name__,
+                        "error_message": err,
+                    },
+                ),
             )
 
     def _place_grid_orders(self, required: Dict, open_prices: set, product_id: str):
@@ -336,6 +514,21 @@ class CoinbaseGridTrader:
                 size=size,
                 status='placed'
             )
+            self._store_call(
+                "order_placed",
+                lambda: self.store.save_order(
+                    session_id=self.session_id,
+                    order_id=order_id,
+                    side=side,
+                    price=price,
+                    size=size,
+                    status='placed',
+                    payload={
+                        "product_id": product_id,
+                        "post_only": True,
+                    },
+                ),
+            )
             print(f"✓ Placed {side} order: {size:.8f} {base} @ ${price:,.2f} (ID: {order_id})")
 
         except Exception as exc:
@@ -346,6 +539,21 @@ class CoinbaseGridTrader:
                 error_type=type(exc).__name__,
                 error_message=err,
                 context={'side': side, 'price': price, 'size': size}
+            )
+            self._store_call(
+                "order_error_event",
+                lambda: self.store.save_event(
+                    self.session_id,
+                    "order_error",
+                    {
+                        "product_id": product_id,
+                        "side": side,
+                        "price": price,
+                        "size": size,
+                        "error_type": type(exc).__name__,
+                        "error_message": err,
+                    },
+                ),
             )
 
     def _process_fill(self, order_id: str):
@@ -376,6 +584,19 @@ class CoinbaseGridTrader:
             fee=fee,
             cost=cost
         )
+        self._store_call(
+            "fill_recorded",
+            lambda: self.store.save_fill(
+                session_id=self.session_id,
+                order_id=order_id,
+                side=side,
+                price=price,
+                size=size,
+                fee=fee,
+                cost=cost,
+                payload={"product_id": self.config['trading_pair']},
+            ),
+        )
         print(f"✓ FILLED {side.upper()}: {size:.8f} @ ${price:,.2f} (Fee: ${fee:.4f})")
 
     def status(self):
@@ -390,6 +611,18 @@ class CoinbaseGridTrader:
         """Stop trading and cancel all open orders"""
         print("\nStopping trading...")
         self.running = False
+        self._ensure_session_started()
+        self._store_call(
+            "stop_requested_event",
+            lambda: self.store.save_event(
+                self.session_id,
+                "stop_requested",
+                {
+                    "is_dry_run": self.is_dry_run,
+                    "active_orders": len(self.active_orders),
+                },
+            ),
+        )
 
         product_id = self.config['trading_pair']
 
@@ -400,6 +633,14 @@ class CoinbaseGridTrader:
                 print(f"✓ Cancelled {cancelled} orders")
             except Exception as exc:
                 print(f"ERROR cancelling orders: {exc}")
+                self._store_call(
+                    "cancel_orders_error_event",
+                    lambda: self.store.save_event(
+                        self.session_id,
+                        "cancel_orders_error",
+                        {"error_type": type(exc).__name__, "error_message": str(exc)},
+                    ),
+                )
 
         if self.tracker:
             reference_price = self.grid.get_reference_price()
@@ -440,18 +681,21 @@ def main():
     dry_run = (args.command == 'dry-run')
     agent = CoinbaseGridTrader(config_path=args.config, dry_run=dry_run)
 
-    if args.command == 'setup':
-        agent.setup()
-    elif args.command == 'dry-run':
-        agent.setup()
-        agent.dry_run(cycles=args.cycles)
-    elif args.command == 'start':
-        agent.setup()
-        agent.start()
-    elif args.command == 'status':
-        agent.status()
-    elif args.command == 'stop':
-        agent.stop()
+    try:
+        if args.command == 'setup':
+            agent.setup()
+        elif args.command == 'dry-run':
+            agent.setup()
+            agent.dry_run(cycles=args.cycles)
+        elif args.command == 'start':
+            agent.setup()
+            agent.start()
+        elif args.command == 'status':
+            agent.status()
+        elif args.command == 'stop':
+            agent.stop()
+    finally:
+        agent.close()
 
 
 if __name__ == '__main__':

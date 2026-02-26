@@ -7,6 +7,13 @@ description: "Automated grid trading bot for Coinbase Exchange — profits from 
 
 Automated grid trading bot for Coinbase Exchange, powered by the Seren Gateway.
 
+## What This Skill Provides
+
+- Automated Coinbase Exchange grid trading with dry-run and live modes
+- Price-range based grid generation with risk controls
+- JSONL logs for setup, orders, fills, positions, and errors
+- MCP-native SerenDB persistence for sessions, events, orders, fills, and position snapshots
+
 ## What is Grid Trading?
 
 Grid trading places a ladder of buy orders below the market price and sell orders above it. When a buy fills, a sell is placed one spacing above it. When a sell fills, a buy is placed one spacing below. Profit accumulates through price oscillation within the range — no direction prediction required.
@@ -17,6 +24,19 @@ Grid trading places a ladder of buy orders below the market price and sell order
 2. Copy `config.example.json` to `config.json` and configure your grid parameters
 3. Install dependencies: `pip install -r requirements.txt`
 4. Run: `python scripts/agent.py`
+
+## SerenDB Persistence (MCP-native)
+
+Set these optional environment variables in `.env`:
+
+- `SERENDB_PROJECT_NAME` (default auto target: `coinbase`)
+- `SERENDB_DATABASE` (default auto target: `coinbase`)
+- `SERENDB_BRANCH` (optional)
+- `SERENDB_REGION` (default: `aws-us-east-1`)
+- `SERENDB_AUTO_CREATE` (default: `true`)
+- `SEREN_MCP_COMMAND` (default: `seren-mcp`)
+
+Persistence is best-effort: if SerenDB/MCP is unavailable, trading still runs and logs locally.
 
 ## Configuration
 

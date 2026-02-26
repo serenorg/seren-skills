@@ -49,6 +49,19 @@ echo "SEREN_API_KEY=sb_your_key_here" > .env
 
 Get your Seren API key at: https://serendb.com
 
+Optional MCP-native SerenDB settings in `.env`:
+
+```bash
+SERENDB_PROJECT_NAME=krakent
+SERENDB_DATABASE=krakent
+SERENDB_BRANCH=
+SERENDB_REGION=aws-us-east-1
+SERENDB_AUTO_CREATE=true
+SEREN_MCP_COMMAND=seren-mcp
+```
+
+When unset, the bot first tries existing Kraken-related SerenDB targets, then auto-creates `krakent/krakent` (if `SERENDB_AUTO_CREATE=true`).
+
 ### 3. Configure Trading Parameters
 
 ```bash
@@ -191,6 +204,18 @@ All operations logged to `logs/` directory as JSONL files:
 - `fills.jsonl` - Trade executions
 - `positions.jsonl` - Position snapshots
 - `errors.jsonl` - Errors and warnings
+
+## SerenDB Persistence
+
+When `seren-mcp` is available, the bot also persists to SerenDB:
+
+- `kraken_grid_sessions`
+- `kraken_grid_orders`
+- `kraken_grid_fills`
+- `kraken_grid_positions`
+- `kraken_grid_events`
+
+SerenDB persistence is best-effort; if unavailable, trading continues with local logs.
 
 ## Safety Features
 
