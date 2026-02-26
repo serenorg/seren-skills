@@ -48,7 +48,10 @@ def main():
         print()
     except Exception as e:
         print(f"Error initializing Seren client: {e}")
-        print("\nMake sure SEREN_API_KEY is set in your .env file or environment.")
+        print(
+            "\nMake sure SEREN_API_KEY (standalone) or API_KEY "
+            "(Seren Desktop runtime) is available."
+        )
         sys.exit(1)
 
     # Create cron job

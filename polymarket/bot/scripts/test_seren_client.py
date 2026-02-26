@@ -89,3 +89,33 @@ class TestExtractText:
         response = {'result': 'some unexpected key'}
         with pytest.raises(ValueError, match=r"Unsupported model response shape"):
             CLIENT._extract_text(response)
+
+
+class TestSerenClientApiKeyResolution:
+    def test_explicit_api_key_wins(self):
+        with patch.dict('os.environ', {}, clear=True), patch(
+            'seren_client.requests.Session'
+        ):
+            client = SerenClient(api_key='explicit-key')
+            assert client.api_key == 'explicit-key'
+
+    def test_uses_seren_api_key_env(self):
+        with patch.dict('os.environ', {'SEREN_API_KEY': 'seren-key'}, clear=True), patch(
+            'seren_client.requests.Session'
+        ):
+            client = SerenClient()
+            assert client.api_key == 'seren-key'
+
+    def test_falls_back_to_api_key_env(self):
+        with patch.dict('os.environ', {'API_KEY': 'desktop-key'}, clear=True), patch(
+            'seren_client.requests.Session'
+        ):
+            client = SerenClient()
+            assert client.api_key == 'desktop-key'
+
+    def test_raises_when_no_key_available(self):
+        with patch.dict('os.environ', {}, clear=True), patch(
+            'seren_client.requests.Session'
+        ):
+            with pytest.raises(ValueError, match=r"SEREN_API_KEY.*API_KEY"):
+                SerenClient()

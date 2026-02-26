@@ -37,23 +37,19 @@ print()
 
 # Test 2: Check environment
 print("Test 2: Checking environment...")
-required_vars = ['SEREN_API_KEY']
-legacy_optional_vars = ['POLY_API_KEY', 'POLY_PASSPHRASE', 'POLY_ADDRESS']
+optional_vars = ['POLY_API_KEY', 'POLY_PASSPHRASE', 'POLY_ADDRESS']
 
-missing_required = []
-missing_legacy_optional = []
+missing_optional = []
+seren_api_key = os.getenv('SEREN_API_KEY') or os.getenv('API_KEY')
 
-for var in required_vars:
+for var in optional_vars:
     if not os.getenv(var):
-        missing_required.append(var)
+        missing_optional.append(var)
 
-for var in legacy_optional_vars:
-    if not os.getenv(var):
-        missing_legacy_optional.append(var)
-
-if missing_required:
-    print(f"❌ Missing required: {', '.join(missing_required)}")
-    print("   Set SEREN_API_KEY in .env file or environment")
+if not seren_api_key:
+    print("❌ Missing required key: SEREN_API_KEY or API_KEY")
+    print("   Set SEREN_API_KEY in .env for standalone runs")
+    print("   or launch via Seren Desktop with API_KEY injected")
     sys.exit(1)
 
 desktop_auth = os.getenv('SEREN_DESKTOP_PUBLISHER_AUTH', 'true').strip().lower() in (
@@ -61,12 +57,12 @@ desktop_auth = os.getenv('SEREN_DESKTOP_PUBLISHER_AUTH', 'true').strip().lower()
 )
 if desktop_auth:
     print("✅ Desktop publisher-auth mode enabled (SEREN_DESKTOP_PUBLISHER_AUTH=true)")
-elif missing_legacy_optional:
-    print(f"⚠️  Missing optional legacy POLY_* vars: {', '.join(missing_legacy_optional)}")
+elif missing_optional:
+    print(f"⚠️  Missing optional legacy POLY_* vars: {', '.join(missing_optional)}")
 else:
     print("✅ Legacy Polymarket credentials found")
 
-print("✅ SEREN_API_KEY found")
+print("✅ Seren gateway key found (SEREN_API_KEY/API_KEY)")
 print()
 
 # Test 3: Initialize Seren client

@@ -221,10 +221,10 @@ Create `.env` file from template:
 cp .env.example .env
 ```
 
-Edit `.env`:
+Edit `.env` and add:
 
 ```bash
-# Seren API key - get from https://app.serendb.com/settings/api-keys
+# Seren API key (standalone mode) - get from https://app.serendb.com/settings/api-keys
 SEREN_API_KEY=your_seren_api_key_here
 
 # Desktop sidecar/keychain mode (recommended)
@@ -867,7 +867,7 @@ def calculate_position_size(fair_value, market_price, bankroll, max_kelly=0.06):
 
 **Seren Publishers Used:**
 - `polymarket-data` - Real-time market data (prices, liquidity, volumes)
-- `polymarket-trading` / `polymarket-trading-serenai` - Order placement with server-side signing
+- `polymarket-trading` (preferred) / `polymarket-trading-serenai` (fallback) - Order placement with server-side signing
 - `perplexity` - AI-powered market research
 - `seren-models` - LLM inference (Claude, GPT, Gemini, etc.)
 - `seren-cron` - Autonomous job scheduling
@@ -908,9 +908,10 @@ Per scan cycle:
 
 ## Troubleshooting
 
-### "SEREN_API_KEY is required"
+### "SEREN_API_KEY/API_KEY is required"
 - Create `.env` file from `.env.example`
-- Add your Seren API key
+- Add `SEREN_API_KEY` for standalone runs
+- For desktop-launched runs, ensure runtime `API_KEY` is injected
 
 ### "Polymarket credentials required"
 - Recommended: enable desktop keychain mode in `.env` with `SEREN_DESKTOP_PUBLISHER_AUTH=true`

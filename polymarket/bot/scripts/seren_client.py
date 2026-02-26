@@ -22,11 +22,14 @@ class SerenClient:
         Initialize Seren client
 
         Args:
-            api_key: Seren API key (defaults to SEREN_API_KEY env var)
+            api_key: Seren API key (defaults to SEREN_API_KEY or API_KEY env var)
         """
-        self.api_key = api_key or os.getenv('SEREN_API_KEY')
+        self.api_key = api_key or os.getenv('SEREN_API_KEY') or os.getenv('API_KEY')
         if not self.api_key:
-            raise ValueError("SEREN_API_KEY is required")
+            raise ValueError(
+                "Seren API key is required. Set SEREN_API_KEY (standalone) "
+                "or API_KEY (Seren Desktop runtime)."
+            )
 
         self.gateway_url = os.getenv('SEREN_GATEWAY_URL', "https://api.serendb.com")
         self.session = requests.Session()
