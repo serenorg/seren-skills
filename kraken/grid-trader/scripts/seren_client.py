@@ -11,16 +11,23 @@ from typing import Dict, Any, Optional, List
 class SerenClient:
     """Wrapper for Seren Gateway API"""
 
-    def __init__(self, api_key: str, base_url: str = 'https://api.serendb.com'):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = 'https://api.serendb.com',
+        publishers: Optional[List[str]] = None,
+    ):
         """
         Initialize Seren client
 
         Args:
             api_key: Seren API key (starts with 'sb_')
             base_url: Gateway base URL
+            publishers: Ordered Kraken publisher slug candidates.
         """
         self.api_key = api_key
         self.base_url = base_url
+        self.publishers = publishers or ['kraken-trading', 'kraken-spot-trading']
 
     def _call_publisher(
         self,
@@ -68,6 +75,52 @@ class SerenClient:
             return data['body']
         return data
 
+    def _call_kraken(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Call Kraken publisher using configured slug candidates.
+
+        Tries sidecar-aligned publisher slug first, then legacy slug fallback.
+        """
+        last_error: Optional[Exception] = None
+        for idx, publisher in enumerate(self.publishers):
+            try:
+                return self._call_publisher(
+                    publisher=publisher,
+                    method=method,
+                    path=path,
+                    body=body,
+                    params=params,
+                )
+            except requests.HTTPError as exc:
+                status = getattr(exc.response, 'status_code', None)
+                if status in (401, 403):
+                    if idx < len(self.publishers) - 1:
+                        last_error = exc
+                        continue
+                    raise requests.HTTPError(
+                        "Kraken publisher authentication failed. "
+                        "Configure the Kraken publisher API key in Seren Desktop Settings "
+                        "and ensure the publisher is enabled.",
+                        response=exc.response,
+                    ) from exc
+                if status == 404:
+                    last_error = exc
+                    continue
+                raise
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("No Kraken publisher configured")
+
     # ========== Kraken Market Data ==========
 
     def get_ticker(self, pair: str) -> Dict[str, Any]:
@@ -80,8 +133,7 @@ class SerenClient:
         Returns:
             Ticker data with current price, volume, etc.
         """
-        return self._call_publisher(
-            publisher='kraken-spot-trading',
+        return self._call_kraken(
             method='GET',
             path='/public/Ticker',
             params={'pair': pair}
@@ -130,8 +182,7 @@ class SerenClient:
         Returns:
             Pair info (fees, min order size, etc.)
         """
-        return self._call_publisher(
-            publisher='kraken-spot-trading',
+        return self._call_kraken(
             method='GET',
             path='/public/AssetPairs',
             params={'pair': pair}
@@ -146,8 +197,7 @@ class SerenClient:
         Returns:
             Dict of asset balances (e.g., {'XXBT': 0.5, 'ZUSD': 1000})
         """
-        return self._call_publisher(
-            publisher='kraken-spot-trading',
+        return self._call_kraken(
             method='POST',
             path='/private/Balance',
             body={}
@@ -160,8 +210,7 @@ class SerenClient:
         Returns:
             Dict of open orders by order ID
         """
-        return self._call_publisher(
-            publisher='kraken-spot-trading',
+        return self._call_kraken(
             method='POST',
             path='/private/OpenOrders',
             body={}
@@ -177,8 +226,7 @@ class SerenClient:
         Returns:
             Trade balance info
         """
-        return self._call_publisher(
-            publisher='kraken-spot-trading',
+        return self._call_kraken(
             method='POST',
             path='/private/TradeBalance',
             body={'asset': asset}
@@ -222,8 +270,7 @@ class SerenClient:
         if validate:
             body['validate'] = 'true'
 
-        return self._call_publisher(
-            publisher='kraken-spot-trading',
+        return self._call_kraken(
             method='POST',
             path='/private/AddOrder',
             body=body
@@ -239,8 +286,7 @@ class SerenClient:
         Returns:
             Cancellation response
         """
-        return self._call_publisher(
-            publisher='kraken-spot-trading',
+        return self._call_kraken(
             method='POST',
             path='/private/CancelOrder',
             body={'txid': order_id}
@@ -253,8 +299,7 @@ class SerenClient:
         Returns:
             Cancellation response with count
         """
-        return self._call_publisher(
-            publisher='kraken-spot-trading',
+        return self._call_kraken(
             method='POST',
             path='/private/CancelAll',
             body={}
@@ -281,8 +326,7 @@ class SerenClient:
         if start is not None:
             body['start'] = start
 
-        return self._call_publisher(
-            publisher='kraken-spot-trading',
+        return self._call_kraken(
             method='POST',
             path='/private/ClosedOrders',
             body=body
@@ -309,8 +353,7 @@ class SerenClient:
         if start is not None:
             body['start'] = start
 
-        return self._call_publisher(
-            publisher='kraken-spot-trading',
+        return self._call_kraken(
             method='POST',
             path='/private/TradesHistory',
             body=body

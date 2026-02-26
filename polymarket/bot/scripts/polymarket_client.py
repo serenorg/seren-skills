@@ -1,7 +1,8 @@
 """
 Polymarket Client - Wrapper for Polymarket CLOB API via Seren
 
-Uses the polymarket-trading-serenai publisher to:
+Uses Polymarket trading publishers (`polymarket-trading` first, then legacy fallback)
+to:
 - Get market data (prices, order book, positions)
 - Place and cancel orders
 - Track positions and P&L
@@ -22,7 +23,8 @@ class PolymarketClient:
         poly_api_key: Optional[str] = None,
         poly_passphrase: Optional[str] = None,
         poly_secret: Optional[str] = None,
-        poly_address: Optional[str] = None
+        poly_address: Optional[str] = None,
+        desktop_publisher_auth: Optional[bool] = None,
     ):
         """
         Initialize Polymarket client
@@ -33,6 +35,10 @@ class PolymarketClient:
             poly_passphrase: Polymarket passphrase
             poly_secret: Polymarket secret
             poly_address: Polymarket wallet address
+            desktop_publisher_auth:
+                - True: use desktop sidecar/keychain publisher auth (no POLY_* env vars)
+                - False: use legacy POLY_* header passthrough mode
+                - None: auto-detect (desktop mode when POLY_* are absent)
         """
         self.seren = seren_client
 
@@ -42,18 +48,79 @@ class PolymarketClient:
         self.poly_secret = poly_secret or os.getenv('POLY_SECRET')
         self.poly_address = poly_address or os.getenv('POLY_ADDRESS')
 
-        if not all([self.poly_api_key, self.poly_passphrase, self.poly_address]):
+        has_legacy_credentials = bool(
+            self.poly_api_key and self.poly_passphrase and self.poly_address
+        )
+        self.desktop_publisher_auth = (
+            (not has_legacy_credentials)
+            if desktop_publisher_auth is None
+            else desktop_publisher_auth
+        )
+        if not self.desktop_publisher_auth and not has_legacy_credentials:
             raise ValueError(
                 "Polymarket credentials required: POLY_API_KEY, POLY_PASSPHRASE, POLY_ADDRESS"
             )
+        self.auth_mode = (
+            'desktop_publisher_auth'
+            if self.desktop_publisher_auth
+            else 'direct_polymarket_headers'
+        )
+        publishers_env = os.getenv('POLYMARKET_TRADING_PUBLISHERS', '').strip()
+        if publishers_env:
+            self.trading_publishers = [
+                slug.strip() for slug in publishers_env.split(',') if slug.strip()
+            ]
+        else:
+            # Sidecar-native slug first, legacy slug second.
+            self.trading_publishers = ['polymarket-trading', 'polymarket-trading-serenai']
 
     def _get_auth_headers(self) -> Dict[str, str]:
         """Get authentication headers for Polymarket API"""
+        if self.desktop_publisher_auth:
+            return {}
         return {
-            'POLY_API_KEY': self.poly_api_key,
-            'POLY_PASSPHRASE': self.poly_passphrase,
-            'POLY_ADDRESS': self.poly_address
+            'POLY_API_KEY': self.poly_api_key or '',
+            'POLY_PASSPHRASE': self.poly_passphrase or '',
+            'POLY_ADDRESS': self.poly_address or '',
         }
+
+    def _call_trading(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        headers = self._get_auth_headers()
+        last_error: Optional[Exception] = None
+        for idx, publisher in enumerate(self.trading_publishers):
+            try:
+                return self.seren.call_publisher(
+                    publisher=publisher,
+                    method=method,
+                    path=path,
+                    headers=headers or None,
+                    body=body,
+                )
+            except Exception as exc:
+                message = str(exc)
+                # Try next publisher alias only for not found errors.
+                if '404' in message and idx < len(self.trading_publishers) - 1:
+                    last_error = exc
+                    continue
+                if ('401' in message or '403' in message) and idx < len(self.trading_publishers) - 1:
+                    last_error = exc
+                    continue
+                if self.desktop_publisher_auth and ('401' in message or '403' in message):
+                    raise Exception(
+                        "Polymarket desktop publisher authentication failed. "
+                        "Configure Polymarket publisher credentials in Seren Desktop "
+                        "and ensure the publisher is enabled."
+                    ) from exc
+                raise
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("No Polymarket trading publisher configured")
 
     def get_markets(self, limit: int = 500, active: bool = True) -> List[Dict]:
         """
@@ -157,12 +224,10 @@ class PolymarketClient:
         Returns:
             Price as float (0.0-1.0)
         """
-        response = self.seren.call_publisher(
-            publisher='polymarket-trading-serenai',
+        response = self._call_trading(
             method='GET',
             path='/price',
-            headers=self._get_auth_headers(),
-            body={'token_id': token_id, 'side': side}
+            body={'token_id': token_id, 'side': side},
         )
         return float(response.get('price', 0))
 
@@ -176,12 +241,10 @@ class PolymarketClient:
         Returns:
             Midpoint price as float (0.0-1.0)
         """
-        response = self.seren.call_publisher(
-            publisher='polymarket-trading-serenai',
+        response = self._call_trading(
             method='GET',
             path='/midpoint',
-            headers=self._get_auth_headers(),
-            body={'token_id': token_id}
+            body={'token_id': token_id},
         )
         return float(response.get('mid', 0))
 
@@ -192,11 +255,9 @@ class PolymarketClient:
         Returns:
             List of position dicts with market, size, entry_price, etc.
         """
-        response = self.seren.call_publisher(
-            publisher='polymarket-trading-serenai',
+        response = self._call_trading(
             method='GET',
             path='/positions',
-            headers=self._get_auth_headers()
         )
         return response.get('data', [])
 
@@ -214,12 +275,10 @@ class PolymarketClient:
         if market:
             body['market'] = market
 
-        response = self.seren.call_publisher(
-            publisher='polymarket-trading-serenai',
+        response = self._call_trading(
             method='GET',
             path='/orders',
-            headers=self._get_auth_headers(),
-            body=body if body else None
+            body=body if body else None,
         )
         return response.get('data', [])
 
@@ -234,8 +293,9 @@ class PolymarketClient:
         """
         Place an order
 
-        Note: The polymarket-trading-serenai publisher handles EIP-712 signing
-        server-side using the credentials provided in headers.
+        Note: Trading publisher handles EIP-712 signing server-side.
+        In desktop publisher-auth mode, credentials come from keychain.
+        In legacy mode, credentials are passed via POLY_* headers.
 
         Args:
             token_id: ERC1155 token ID
@@ -255,12 +315,10 @@ class PolymarketClient:
             'type': order_type
         }
 
-        response = self.seren.call_publisher(
-            publisher='polymarket-trading-serenai',
+        response = self._call_trading(
             method='POST',
             path='/order',
-            headers=self._get_auth_headers(),
-            body=order_data
+            body=order_data,
         )
         return response
 
@@ -274,12 +332,10 @@ class PolymarketClient:
         Returns:
             Cancellation confirmation
         """
-        response = self.seren.call_publisher(
-            publisher='polymarket-trading-serenai',
+        response = self._call_trading(
             method='DELETE',
             path='/order',
-            headers=self._get_auth_headers(),
-            body={'orderID': order_id}
+            body={'orderID': order_id},
         )
         return response
 
@@ -291,11 +347,9 @@ class PolymarketClient:
             Balance in USDC
         """
         try:
-            response = self.seren.call_publisher(
-                publisher='polymarket-trading-serenai',
+            response = self._call_trading(
                 method='GET',
                 path='/balance',
-                headers=self._get_auth_headers()
             )
 
             # Parse response - may be wrapped in 'body' field

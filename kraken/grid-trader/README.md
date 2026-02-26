@@ -47,6 +47,10 @@ cp .env.example .env
 echo "SEREN_API_KEY=sb_your_key_here" > .env
 ```
 
+Desktop sidecar/keychain flow (recommended):
+- Configure Kraken publisher credentials in Seren Desktop Settings → Publisher MCPs
+- Keep default publisher slug order (`kraken-trading`, fallback `kraken-spot-trading`)
+
 Get your Seren API key at: https://serendb.com
 
 Optional MCP-native SerenDB settings in `.env`:
@@ -234,6 +238,15 @@ Create a `.env` file with your API key:
 ```bash
 echo "SEREN_API_KEY=sb_your_key_here" > .env
 ```
+
+### "Kraken publisher authentication failed"
+
+This means Desktop publisher credentials are not configured/authorized.
+
+1. Open Seren Desktop → Settings → Publisher MCPs
+2. Configure Kraken publisher API key
+3. Ensure publisher is enabled
+4. Retry the bot
 
 ### "Insufficient funds"
 

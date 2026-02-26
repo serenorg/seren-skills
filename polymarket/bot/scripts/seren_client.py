@@ -2,7 +2,7 @@
 Seren Client - HTTP client for calling Seren MCP publishers
 
 Handles authentication and routing to Seren publishers:
-- polymarket-trading-serenai (market data + trading)
+- polymarket-trading / polymarket-trading-serenai (trading)
 - perplexity (AI-powered research)
 - seren-models (LLM inference)
 - seren-cron (job scheduling)
@@ -28,7 +28,7 @@ class SerenClient:
         if not self.api_key:
             raise ValueError("SEREN_API_KEY is required")
 
-        self.gateway_url = "https://api.serendb.com"
+        self.gateway_url = os.getenv('SEREN_GATEWAY_URL', "https://api.serendb.com")
         self.session = requests.Session()
         self.session.headers.update({
             'Authorization': f'Bearer {self.api_key}',

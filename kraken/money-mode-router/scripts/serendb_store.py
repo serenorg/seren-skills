@@ -24,7 +24,7 @@ class DBTarget:
 
 
 class _SerenMCPClient:
-    def __init__(self, api_key: str, mcp_command: str = "seren-mcp", timeout_seconds: int = 30):
+    def __init__(self, api_key: Optional[str] = None, mcp_command: str = "seren-mcp", timeout_seconds: int = 30):
         self.api_key = api_key
         self.mcp_command = mcp_command
         self.timeout_seconds = timeout_seconds
@@ -36,7 +36,8 @@ class _SerenMCPClient:
             return
 
         env = os.environ.copy()
-        env["API_KEY"] = self.api_key
+        if self.api_key:
+            env["API_KEY"] = self.api_key
 
         self._process = subprocess.Popen(
             [self.mcp_command, "start"],
@@ -183,7 +184,7 @@ class SerenDBStore:
 
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
         project_name: Optional[str] = None,
         database_name: Optional[str] = None,
         branch_name: Optional[str] = None,

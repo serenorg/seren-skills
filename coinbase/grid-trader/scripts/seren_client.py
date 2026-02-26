@@ -1,8 +1,9 @@
 """
-Seren Gateway API Client - Routes Coinbase Exchange calls through Seren Gateway
+Seren Gateway API Client - Routes Coinbase Exchange calls through Seren.
 
-All Coinbase Exchange API calls go through api.serendb.com/publishers/coinbase-trading
-Auth headers (CB-ACCESS-*) are passed through to Coinbase by the gateway.
+Supports two authentication modes:
+- `publisher_authenticated` (Desktop sidecar/keychain flow): no CB_ACCESS_* env vars needed
+- `direct_coinbase_headers` (legacy): CB-ACCESS-* signature headers passed through the gateway
 """
 
 import base64
@@ -22,26 +23,47 @@ class SerenClient:
     def __init__(
         self,
         seren_api_key: str,
-        cb_access_key: str,
-        cb_secret: str,
-        cb_passphrase: str,
-        base_url: str = 'https://api.serendb.com'
+        cb_access_key: Optional[str] = None,
+        cb_secret: Optional[str] = None,
+        cb_passphrase: Optional[str] = None,
+        base_url: str = 'https://api.serendb.com',
+        publisher_authenticated: Optional[bool] = None,
     ):
         """
         Initialize Seren client with Coinbase credentials
 
         Args:
             seren_api_key: Seren API key (starts with 'sb_')
-            cb_access_key: Coinbase API key
-            cb_secret: Coinbase API secret (base64-encoded)
-            cb_passphrase: Coinbase API passphrase
+            cb_access_key: Coinbase API key (legacy direct header mode)
+            cb_secret: Coinbase API secret (base64-encoded; legacy mode)
+            cb_passphrase: Coinbase API passphrase (legacy mode)
             base_url: Seren Gateway base URL
+            publisher_authenticated:
+                - True: desktop keychain/publisher-authenticated mode
+                - False: legacy direct CB-ACCESS-* signature mode
+                - None: auto-detect (use publisher-authenticated if CB creds are absent)
         """
         self.seren_api_key = seren_api_key
         self.cb_access_key = cb_access_key
         self.cb_secret = cb_secret
         self.cb_passphrase = cb_passphrase
         self.base_url = base_url
+        has_direct_credentials = bool(cb_access_key and cb_secret and cb_passphrase)
+        self.publisher_authenticated = (
+            (not has_direct_credentials)
+            if publisher_authenticated is None
+            else publisher_authenticated
+        )
+        if not self.publisher_authenticated and not has_direct_credentials:
+            raise ValueError(
+                "Legacy Coinbase header mode requires CB_ACCESS_KEY, "
+                "CB_ACCESS_SECRET, and CB_ACCESS_PASSPHRASE"
+            )
+        self.auth_mode = (
+            'publisher_authenticated'
+            if self.publisher_authenticated
+            else 'direct_coinbase_headers'
+        )
 
     def _sign(self, method: str, path: str, body_str: str = '') -> tuple:
         """
@@ -83,24 +105,24 @@ class SerenClient:
         Raises:
             requests.HTTPError: On API errors
         """
-        # Build the full path including query string for signing
-        query_string = ''
-        if params:
-            query_string = '?' + '&'.join(f'{k}={v}' for k, v in params.items())
-        full_path = path + query_string
-
-        body_str = json.dumps(body) if body else ''
-        signature, timestamp = self._sign(method, full_path, body_str)
-
         url = f"{self.base_url}/publishers/{self.PUBLISHER}{path}"
-        headers = {
+        body_str = json.dumps(body) if body else ''
+        headers: Dict[str, str] = {
             'Authorization': f'Bearer {self.seren_api_key}',
-            'CB-ACCESS-KEY': self.cb_access_key,
-            'CB-ACCESS-SIGN': signature,
-            'CB-ACCESS-TIMESTAMP': timestamp,
-            'CB-ACCESS-PASSPHRASE': self.cb_passphrase,
             'Content-Type': 'application/json',
         }
+        if not self.publisher_authenticated:
+            query_string = ''
+            if params:
+                query_string = '?' + '&'.join(f'{k}={v}' for k, v in params.items())
+            full_path = path + query_string
+            signature, timestamp = self._sign(method, full_path, body_str)
+            headers.update({
+                'CB-ACCESS-KEY': self.cb_access_key or '',
+                'CB-ACCESS-SIGN': signature,
+                'CB-ACCESS-TIMESTAMP': timestamp,
+                'CB-ACCESS-PASSPHRASE': self.cb_passphrase or '',
+            })
 
         response = requests.request(
             method=method,
@@ -110,7 +132,15 @@ class SerenClient:
             params=params,
             timeout=30
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            if self.publisher_authenticated and response.status_code in (401, 403):
+                raise requests.HTTPError(
+                    "Coinbase publisher authentication failed in desktop keychain mode. "
+                    "Configure the Coinbase publisher API key in Seren Desktop Settings "
+                    "and ensure the publisher is enabled.",
+                    response=response,
+                )
+            response.raise_for_status()
         data = response.json()
 
         # Unwrap Seren Gateway envelope if present

@@ -1,7 +1,7 @@
 {
   "skill_name": "Kraken Money Mode Router",
   "available_publishers": [
-    "kraken-spot-trading",
+    "kraken-trading",
     "kraken-ramp"
   ],
   "mode_order": [
@@ -49,10 +49,10 @@
   },
   "publisher_requirements": {
     "payments": ["kraken-ramp"],
-    "investing": ["kraken-spot-trading"],
-    "active-trading": ["kraken-spot-trading"],
-    "onchain": ["kraken-spot-trading"],
-    "automation": ["kraken-spot-trading"]
+    "investing": ["kraken-trading"],
+    "active-trading": ["kraken-trading"],
+    "onchain": ["kraken-trading"],
+    "automation": ["kraken-trading"]
   },
   "mode_endpoint_catalog": {
     "payments": [
@@ -63,29 +63,29 @@
       {"publisher": "kraken-ramp", "method": "GET", "path": "/b2b/ramp/checkout"}
     ],
     "investing": [
-      {"publisher": "kraken-spot-trading", "method": "GET", "path": "/public/AssetPairs"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/Balance"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/AddOrder"}
+      {"publisher": "kraken-trading", "method": "GET", "path": "/public/AssetPairs"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/Balance"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/AddOrder"}
     ],
     "active-trading": [
-      {"publisher": "kraken-spot-trading", "method": "GET", "path": "/public/Ticker"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/OpenOrders"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/AddOrder"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/CancelOrder"}
+      {"publisher": "kraken-trading", "method": "GET", "path": "/public/Ticker"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/OpenOrders"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/AddOrder"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/CancelOrder"}
     ],
     "onchain": [
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/DepositMethods"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/DepositAddresses"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/WithdrawMethods"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/WithdrawInfo"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/Withdraw"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/WalletTransfer"}
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/DepositMethods"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/DepositAddresses"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/WithdrawMethods"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/WithdrawInfo"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/Withdraw"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/WalletTransfer"}
     ],
     "automation": [
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/AddOrderBatch"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/CancelOrderBatch"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/CancelAllOrdersAfter"},
-      {"publisher": "kraken-spot-trading", "method": "POST", "path": "/private/GetWebSocketsToken"}
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/AddOrderBatch"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/CancelOrderBatch"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/CancelAllOrdersAfter"},
+      {"publisher": "kraken-trading", "method": "POST", "path": "/private/GetWebSocketsToken"}
     ]
   }
 }

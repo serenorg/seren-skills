@@ -60,6 +60,10 @@ class CoinbaseGridTrader:
 
     MAKER_FEE_RATE = 0.0040  # 0.40% for < $10K 30-day volume
 
+    @staticmethod
+    def _is_truthy(value: str) -> bool:
+        return str(value).strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
     def __init__(self, config_path: str, dry_run: bool = False):
         """
         Initialize grid trader
@@ -80,16 +84,19 @@ class CoinbaseGridTrader:
 
         if not seren_key:
             raise ValueError("SEREN_API_KEY environment variable is required")
-        if not cb_key or not cb_secret or not cb_passphrase:
-            raise ValueError(
-                "CB_ACCESS_KEY, CB_ACCESS_SECRET, and CB_ACCESS_PASSPHRASE are required"
-            )
+        publisher_authenticated_env = os.getenv('SEREN_DESKTOP_PUBLISHER_AUTH')
+        publisher_authenticated = (
+            self._is_truthy(publisher_authenticated_env)
+            if publisher_authenticated_env is not None
+            else None
+        )
 
         self.seren = SerenClient(
             seren_api_key=seren_key,
             cb_access_key=cb_key,
             cb_secret=cb_secret,
-            cb_passphrase=cb_passphrase
+            cb_passphrase=cb_passphrase,
+            publisher_authenticated=publisher_authenticated,
         )
         self.logger = GridTraderLogger(logs_dir='logs')
         self.store: Optional[SerenDBStore] = None
@@ -201,6 +208,7 @@ class CoinbaseGridTrader:
 
         print(f"Campaign:        {self.config['campaign_name']}")
         print(f"Trading Pair:    {product_id}")
+        print(f"Auth Mode:       {self.seren.auth_mode}")
         print(f"Bankroll:        ${strategy['bankroll']:,.2f}")
         print(f"Grid Levels:     {strategy['grid_levels']}")
         print(f"Grid Spacing:    {strategy['grid_spacing_percent']}%")

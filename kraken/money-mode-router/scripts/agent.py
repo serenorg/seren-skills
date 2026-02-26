@@ -217,9 +217,6 @@ def _env_flag(name: str, default: bool = True) -> bool:
 
 def _build_store_from_env() -> SerenDBStore:
     api_key = _get_seren_api_key()
-    if not api_key:
-        raise ValueError("SEREN_API_KEY is required (or API_KEY when launched by Seren Desktop).")
-
     return SerenDBStore(
         api_key=api_key,
         project_name=os.getenv("SERENDB_PROJECT_NAME"),

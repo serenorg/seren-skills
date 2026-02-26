@@ -20,6 +20,7 @@ import os
 import sys
 from typing import Dict, List, Optional
 from datetime import datetime
+from dotenv import load_dotenv
 
 # Import our modules
 from seren_client import SerenClient
@@ -33,6 +34,20 @@ import kelly
 class TradingAgent:
     """Autonomous Polymarket trading agent"""
 
+    @staticmethod
+    def _parse_optional_bool(value: Optional[str]) -> Optional[bool]:
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        if normalized in {'1', 'true', 'yes', 'y', 'on'}:
+            return True
+        if normalized in {'0', 'false', 'no', 'n', 'off'}:
+            return False
+        raise ValueError(
+            "SEREN_DESKTOP_PUBLISHER_AUTH must be one of "
+            "true/false/1/0/yes/no/on/off"
+        )
+
     def __init__(self, config_path: str, dry_run: bool = False):
         """
         Initialize trading agent
@@ -41,6 +56,8 @@ class TradingAgent:
             config_path: Path to config.json
             dry_run: If True, don't place actual trades
         """
+        load_dotenv()
+
         # Load config
         with open(config_path, 'r') as f:
             self.config = json.load(f)
@@ -52,7 +69,13 @@ class TradingAgent:
         self.seren = SerenClient()
 
         print("Initializing Polymarket client...")
-        self.polymarket = PolymarketClient(self.seren)
+        desktop_auth = self._parse_optional_bool(
+            os.getenv('SEREN_DESKTOP_PUBLISHER_AUTH')
+        )
+        self.polymarket = PolymarketClient(
+            self.seren,
+            desktop_publisher_auth=desktop_auth,
+        )
 
         # Initialize SerenDB storage
         print("Initializing SerenDB storage...")
@@ -81,6 +104,7 @@ class TradingAgent:
         self.min_liquidity = float(self.config.get('min_liquidity', 100.0))
 
         print(f"✓ Agent initialized (Dry-run: {dry_run})")
+        print(f"  Auth mode: {self.polymarket.auth_mode}")
         print(f"  Bankroll: ${self.bankroll:.2f}")
         print(f"  Mispricing threshold: {self.mispricing_threshold * 100:.1f}%")
         print(f"  Max Kelly fraction: {self.max_kelly_fraction * 100:.1f}%")

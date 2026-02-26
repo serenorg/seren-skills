@@ -2,7 +2,7 @@
 #
 # This skill uses Seren publishers for all Polymarket operations:
 # - polymarket-data: Market data (prices, volume, liquidity)
-# - polymarket-trading-serenai: Trading operations (orders, positions, balance)
+# - polymarket-trading / polymarket-trading-serenai: Trading operations
 
 # Core dependencies
 requests>=2.31.0

@@ -30,7 +30,16 @@ cp .env.example .env
 
 Edit `.env` and add:
 - **SEREN_API_KEY**: Get from [app.serendb.com/settings/api-keys](https://app.serendb.com/settings/api-keys)
-- **POLY_API_KEY, POLY_PASSPHRASE, POLY_ADDRESS**: Get from [polymarket.com](https://polymarket.com) (Settings > API Keys > Derive API Key)
+- **SEREN_DESKTOP_PUBLISHER_AUTH=true** (recommended): desktop sidecar/keychain auth flow
+
+Desktop sidecar/keychain flow (recommended):
+- Configure Polymarket publisher credentials in Seren Desktop Settings → Publisher MCPs
+- Keep `SEREN_DESKTOP_PUBLISHER_AUTH=true`
+- No `POLY_*` vars are required in this mode
+
+Legacy fallback (optional):
+- Set `SEREN_DESKTOP_PUBLISHER_AUTH=false`
+- Provide `POLY_API_KEY, POLY_PASSPHRASE, POLY_SECRET, POLY_ADDRESS` from [polymarket.com](https://polymarket.com) (Settings > API Keys > Derive API Key)
 
 ### 3. Create Configuration
 
@@ -119,7 +128,7 @@ polymarket-bot/
 - Caps at max_kelly_fraction of bankroll
 
 ### 6. Execution
-- Places orders via polymarket-trading-serenai publisher
+- Places orders via Polymarket trading publisher (desktop slug first, legacy fallback)
 - Tracks positions with entry price and size
 - Logs all activity to JSONL files
 

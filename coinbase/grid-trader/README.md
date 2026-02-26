@@ -41,10 +41,13 @@ cp .env.example .env
 Edit `.env`:
 
 ```
-SEREN_API_KEY=sb_...        # Get at app.serendb.com → API Keys
-CB_ACCESS_KEY=...           # Coinbase Exchange API key
-CB_ACCESS_SECRET=...        # Base64-encoded secret
-CB_ACCESS_PASSPHRASE=...    # Passphrase set when creating API key
+SEREN_API_KEY=sb_...                 # Get at app.serendb.com → API Keys
+SEREN_DESKTOP_PUBLISHER_AUTH=true    # Recommended: Desktop sidecar/keychain flow
+
+# Legacy fallback (optional):
+# CB_ACCESS_KEY=...                   # Coinbase Exchange API key
+# CB_ACCESS_SECRET=...                # Base64-encoded secret
+# CB_ACCESS_PASSPHRASE=...            # Passphrase set when creating API key
 
 # Optional SerenDB target (MCP-native persistence)
 SERENDB_PROJECT_NAME=coinbase
@@ -55,8 +58,14 @@ SERENDB_AUTO_CREATE=true
 SEREN_MCP_COMMAND=seren-mcp
 ```
 
-To create a Coinbase Exchange API key: [Coinbase Exchange → Profile → API](https://pro.coinbase.com/profile/api)
-- Required permissions: **View**, **Trade**
+Desktop flow requirements:
+- Configure Coinbase publisher credentials in Seren Desktop Settings → Publisher MCPs
+- Keep `SEREN_DESKTOP_PUBLISHER_AUTH=true`
+
+Legacy fallback (optional):
+- Set `SEREN_DESKTOP_PUBLISHER_AUTH=false`
+- Provide `CB_ACCESS_KEY`, `CB_ACCESS_SECRET`, `CB_ACCESS_PASSPHRASE` in `.env`
+- Required Coinbase API permissions: **View**, **Trade**
 
 When SerenDB target vars are unset, the bot first tries existing Coinbase-related SerenDB databases and then auto-creates `coinbase/coinbase` (if `SERENDB_AUTO_CREATE=true`).
 
@@ -199,7 +208,9 @@ SerenDB persistence is best-effort; if unavailable, trading continues with local
 
 ## Troubleshooting
 
-**`CB-ACCESS-SIGN` errors**: Ensure `CB_ACCESS_SECRET` is the raw base64-encoded secret, not URL-decoded.
+**Desktop auth 401/403 errors**: Configure Coinbase publisher credentials in Seren Desktop Settings → Publisher MCPs and ensure the publisher is enabled.
+
+**Legacy `CB-ACCESS-SIGN` errors**: Ensure `CB_ACCESS_SECRET` is the raw base64-encoded secret, not URL-decoded.
 
 **Orders rejected**: Check that your Coinbase API key has **Trade** permissions and is not IP-restricted to a different address.
 
