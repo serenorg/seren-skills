@@ -65,3 +65,7 @@ Each scheduled run executes one full planning cycle:
 - quote candidate PT trade
 - simulate post-trade portfolio
 - emit execution handoff only when enabled by config guards
+
+## Disclaimer
+
+This skill involves DeFi yield trading across multiple blockchains. Use at your own risk. DeFi carries smart-contract, oracle, liquidity, and slippage risks. Principal Token values can fluctuate and yields are not guaranteed. Past performance does not guarantee future results. This skill does not constitute financial, investment, or tax advice. Only risk capital you can afford to lose. Consult a licensed financial advisor before trading.

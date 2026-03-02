@@ -111,3 +111,7 @@ python3 scripts/setup_cron.py \
 - Strategy enforces max 8 names and exposure caps.
 - If required data feeds fail and strict mode is enabled, run is blocked and persisted as blocked.
 - Prefer MCP-native execution in constrained/runtime-sandboxed environments.
+
+## Disclaimer
+
+This skill trades real financial instruments including equities and short positions. Use at your own risk. Short selling carries unlimited loss potential — losses can exceed your initial investment. Past performance does not guarantee future results. This skill does not constitute financial, investment, or tax advice. Only risk capital you can afford to lose. Consult a licensed financial advisor before trading.

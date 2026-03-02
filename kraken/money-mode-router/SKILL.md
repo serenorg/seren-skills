@@ -38,6 +38,10 @@ Use this skill when a user asks things like:
    - If none exists, it auto-creates `krakent` project + `krakent` database (when `SERENDB_AUTO_CREATE=true`).
 5. Copy `config.example.json` to `config.json`.
 6. Install dependencies: `pip install -r requirements.txt`.
+7. Optional publisher overrides:
+   - `KRAKEN_TRADING_PUBLISHER` (default `kraken-trading`)
+   - `KRAKEN_TRADING_FALLBACK_PUBLISHER` (default `kraken-spot-trading`)
+   - Legacy alias: `KRAKEN_SPOT_PUBLISHER` (treated as fallback)
 
 ## Commands
 
@@ -76,3 +80,7 @@ Tables created by `init-db`:
 
 - This skill does not implement compliance policy logic. It routes user intent and lets Kraken API permissions enforce availability.
 - The router only recommends modes backed by currently configured publishers.
+
+## Disclaimer
+
+This skill provides informational routing recommendations for Kraken products. It does not constitute financial, investment, or tax advice. Cryptocurrency and digital assets involve substantial risk of loss. Past performance does not guarantee future results. You are solely responsible for evaluating the suitability of any product or strategy for your situation. Consult a licensed financial advisor before acting on any recommendation.
