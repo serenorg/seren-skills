@@ -1,0 +1,45 @@
+{
+  "status": "error",
+  "skill": "peer-to-peer-payments-exchange",
+  "error_code": "connector_failure",
+  "connector": "model",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "model": {
+      "post": {
+        "status": "error",
+        "connector": "model",
+        "action": "post",
+        "error_code": "connector_failure"
+      }
+    },
+    "peer_activity": {
+      "get": {
+        "status": "ok",
+        "connector": "peer_activity",
+        "action": "get"
+      }
+    },
+    "peer_analytics": {
+      "get": {
+        "status": "ok",
+        "connector": "peer_analytics",
+        "action": "get"
+      }
+    },
+    "peer_explorer": {
+      "get": {
+        "status": "ok",
+        "connector": "peer_explorer",
+        "action": "get"
+      }
+    },
+    "peer_market": {
+      "get": {
+        "status": "ok",
+        "connector": "peer_market",
+        "action": "get"
+      }
+    }
+  }
+}

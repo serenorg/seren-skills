@@ -1,0 +1,51 @@
+{
+  "status": "ok",
+  "skill": "peer-to-peer-payments-exchange",
+  "workflow_step_count": 8,
+  "dry_run": true,
+  "inputs": {
+    "amount_usd": 100,
+    "fiat_currency": "USD",
+    "include_analytics": true,
+    "intent": "check-fx-rates",
+    "live_mode": false,
+    "payment_platform": "wise"
+  },
+  "connectors": {
+    "model": {
+      "post": {
+        "status": "ok",
+        "connector": "model",
+        "action": "post"
+      }
+    },
+    "peer_activity": {
+      "get": {
+        "status": "ok",
+        "connector": "peer_activity",
+        "action": "get"
+      }
+    },
+    "peer_analytics": {
+      "get": {
+        "status": "ok",
+        "connector": "peer_analytics",
+        "action": "get"
+      }
+    },
+    "peer_explorer": {
+      "get": {
+        "status": "ok",
+        "connector": "peer_explorer",
+        "action": "get"
+      }
+    },
+    "peer_market": {
+      "get": {
+        "status": "ok",
+        "connector": "peer_market",
+        "action": "get"
+      }
+    }
+  }
+}

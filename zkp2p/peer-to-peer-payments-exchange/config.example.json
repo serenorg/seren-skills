@@ -1,0 +1,26 @@
+{
+  "connectors": [
+    "model",
+    "peer_activity",
+    "peer_analytics",
+    "peer_checkout",
+    "peer_explorer",
+    "peer_lp",
+    "peer_market",
+    "peer_offramp",
+    "peer_onramp",
+    "peer_rate_optimizer",
+    "peer_transfer",
+    "peer_vault"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "amount_usd": 100,
+    "fiat_currency": "USD",
+    "include_analytics": true,
+    "intent": "check-fx-rates",
+    "live_mode": false,
+    "payment_platform": "wise"
+  },
+  "skill": "peer-to-peer-payments-exchange"
+}
