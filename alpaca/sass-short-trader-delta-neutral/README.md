@@ -1,0 +1,100 @@
+# Alpaca SaaS Short Trader Delta Neutral
+
+Production-oriented autonomous skill for shorting AI-vulnerable SaaS equities via Alpaca while adding a long market hedge leg for delta-neutral positioning.
+
+Default execution backend is MCP-native (`mcp__seren-mcp` tools). Python scripts are fallback.
+
+## Directory
+
+```
+alpaca/sass-short-trader-delta-neutral/
+├── SKILL.md
+├── README.md
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── config.example.json
+└── scripts/
+    ├── dry_run_checklist.md
+    ├── dry_run_prompt.txt
+    ├── mcp_native_runbook.md
+    ├── run_agent_server.py
+    ├── setup_cron.py
+    ├── setup_serendb.py
+    ├── strategy_engine.py
+    ├── serendb_storage.py
+    ├── seren_client.py
+    ├── self_learning.py
+    ├── serendb_schema.sql
+    └── self_learning_schema.sql
+```
+
+## Quick Start
+
+### MCP-native (Recommended)
+
+Use the single prompt in `scripts/dry_run_prompt.txt` with your agent.  
+It will:
+- Use Seren MCP to resolve/create the project + database
+- Apply schemas via MCP SQL
+- Pull feed data via MCP publishers
+- Persist scan/orders/PnL/learning rows via MCP SQL
+- Build short basket + long hedge (`hedge_ticker`, `hedge_ratio`)
+
+### Legacy Python/API Fallback
+
+```bash
+python3 -m pip install -r requirements.txt
+cp .env.example .env
+cp config.example.json config.json
+python3 scripts/setup_serendb.py --api-key "$SEREN_API_KEY"
+python3 scripts/strategy_engine.py --api-key "$SEREN_API_KEY" --run-type scan --mode paper-sim --strict-required-feeds --config config.json
+```
+
+## Continuous Operation
+
+### MCP-native
+
+Run from agent automation (for example via `seren-cron` publisher) and keep all writes in `alpaca_sass_short_bot_dn` through MCP SQL operations.
+
+### Legacy Python Runner
+
+```bash
+SEREN_API_KEY="$SEREN_API_KEY" SASS_SHORT_TRADER_DELTA_NEUTRAL_WEBHOOK_SECRET="$SASS_SHORT_TRADER_DELTA_NEUTRAL_WEBHOOK_SECRET" \
+python3 scripts/run_agent_server.py --port 8787
+```
+
+```bash
+python3 scripts/setup_cron.py \
+  --runner-url "https://YOUR_PUBLIC_RUNNER_URL" \
+  --webhook-secret "$SASS_SHORT_TRADER_DELTA_NEUTRAL_WEBHOOK_SECRET"
+```
+
+## Notes
+
+- Use `paper-sim` first.
+- Default hedge settings are in `config.example.json` (`hedge_ticker="QQQ"`, `hedge_ratio=1.0`).
+- MCP-native is the primary and preferred path.
+- Self-learning promotion requires gate checks; it does not auto-promote to live.
+- Use `scripts/dry_run_prompt.txt` for a single copy/paste test run.
+
+## Disclaimers
+
+### Legal and Regulatory
+
+- This software is for informational and execution-automation purposes only.
+- You are responsible for ensuring your use complies with all applicable laws, broker rules, exchange rules, and jurisdictional restrictions.
+- Some strategies, instruments, and execution patterns may be restricted in certain jurisdictions or account types.
+
+### Investment and Risk
+
+- This is not investment advice, portfolio advice, legal advice, or tax advice.
+- Trading equities, especially short-selling, involves substantial risk including unlimited loss potential, recalls, borrow constraints, hedge basis drift, and rapid market moves.
+- Past performance, simulations, and paper results do not guarantee future results.
+- You are solely responsible for all trading decisions and outcomes.
+
+### Tax
+
+- Trades, short-sale proceeds, borrow fees, dividends-in-lieu, and realized/unrealized PnL may have tax consequences.
+- You are responsible for all tax reporting and payments in your jurisdiction.
+- Consult a qualified tax professional before live deployment.

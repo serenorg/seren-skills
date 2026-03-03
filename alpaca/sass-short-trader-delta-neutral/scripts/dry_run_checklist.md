@@ -1,0 +1,72 @@
+# Dry Run Checklist
+
+Use this checklist before every strategy dry run.
+
+## 1) MCP Environment
+
+- Confirm Seren MCP connectivity is available.
+- Confirm your MCP identity can access the target Seren org/project.
+- Confirm payment method/balance is available for publisher calls.
+
+## 2) Data + Storage Readiness
+
+- Ensure project exists: `alpaca-sass-short-trader-delta-neutral`.
+- Ensure database exists: `alpaca_sass_short_bot_dn`.
+- Apply schemas via MCP SQL using:
+  - `scripts/serendb_schema.sql`
+  - `scripts/self_learning_schema.sql`
+- Verify key tables exist:
+  - `trading.strategy_runs`
+  - `trading.candidate_scores`
+  - `trading.order_events`
+  - `trading.position_marks_daily`
+  - `trading.pnl_daily`
+  - learning tables from `self_learning_schema.sql`
+
+## 3) Publisher Readiness
+
+- Ensure these publishers are active and callable through MCP:
+  - `alpaca`
+  - `sec-filings-intelligence`
+  - `google-trends`
+  - `perplexity` (preferred)
+  - `exa` (news fallback)
+
+## 4) Strategy Config
+
+- Universe size is 30 names (`max_names_scored=30`).
+- Planned order cap is 8 names (`max_names_orders=8`).
+- Hedge leg is enabled (`hedge_ticker`, `hedge_ratio` in config).
+- Default mode is `paper-sim`.
+- `strict_required_feeds=true` for production-like dry runs.
+
+## 5) Execute One Full Dry Run
+
+- Use `scripts/dry_run_prompt.txt` as a single copy/paste prompt.
+- Execute with MCP-native tools only:
+  - publisher calls via `call_publisher`
+  - DB writes via `run_sql` / `run_sql_transaction`
+  - no Python script execution for the default path
+
+## 6) Validate Outputs
+
+- Confirm selected short basket count is `<= 8`.
+- Confirm exactly one planned hedge long order is present.
+- Confirm runs are persisted in `trading.strategy_runs` with `status='completed'`.
+- Confirm orders landed in `trading.order_events`.
+- Confirm daily marks and PnL landed in:
+  - `trading.position_marks_daily`
+  - `trading.pnl_daily`
+- Confirm net exposure is near zero relative to gross exposure (target controlled by `hedge_ratio`).
+- Confirm learning artifacts exist:
+  - `learning_feature_snapshots`
+  - `learning_outcome_labels`
+  - `learning_policy_versions`
+  - `learning_policy_assignments`
+  - `learning_events`
+
+## 7) Failure Handling
+
+- If a required publisher fails, run should be blocked when strict mode is on.
+- If `perplexity` fails, use `exa` fallback and capture this in run metadata.
+- Fix upstream issue, then rerun full dry run.

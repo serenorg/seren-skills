@@ -1,0 +1,36 @@
+Run a complete dry run for `sass-short-trader-delta-neutral` using MCP-native execution only (no Python script execution).
+
+Requirements:
+- Mode: `paper-sim`
+- Score exactly 30 SaaS names (`max_names_scored=30`)
+- Cap planned shorts at 8 (`max_names_orders=8`)
+- Add one long hedge leg using `hedge_ticker` (default `QQQ`) and `hedge_ratio` (default `1.0`)
+- Use publishers:
+  - `alpaca`
+  - `sec-filings-intelligence`
+  - `google-trends`
+  - `perplexity` (fallback `exa`)
+- Persist all state in SerenDB database `alpaca_sass_short_bot_dn` under project `alpaca-sass-short-trader-delta-neutral`
+
+Execution steps:
+1. Use Seren MCP to resolve/create project `alpaca-sass-short-trader-delta-neutral`, default branch, and database `alpaca_sass_short_bot_dn`.
+2. Apply schemas from:
+   - `scripts/serendb_schema.sql`
+   - `scripts/self_learning_schema.sql`
+3. Pull data from publishers (MCP calls), score 30 names, select top 8 with conviction >= 65, then create a long hedge leg.
+4. Write rows into:
+   - `trading.strategy_runs`
+   - `trading.candidate_scores`
+   - `trading.order_events` (planned simulated shorts + hedge long)
+   - `trading.position_marks_daily`
+   - `trading.pnl_daily` (`paper-sim`, `paper`, `live`)
+   - learning tables (`learning_feature_snapshots`, `learning_outcome_labels`, `learning_policy_versions`, `learning_policy_assignments`, `learning_events`)
+5. Mark run status completed and return summary.
+
+Return:
+1. `run_id`
+2. The 8 selected names (ticker + conviction + rank)
+3. Feed status per publisher
+4. Simulated 5D/10D/20D net PnL and hit rate
+5. Gross and net exposure snapshot proving delta-neutral construction
+6. Proof-of-write counts for each table listed above
