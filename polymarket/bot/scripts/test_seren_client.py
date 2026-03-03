@@ -117,5 +117,5 @@ class TestSerenClientApiKeyResolution:
         with patch.dict('os.environ', {}, clear=True), patch(
             'seren_client.requests.Session'
         ):
-            with pytest.raises(ValueError, match=r"SEREN_API_KEY.*API_KEY"):
+            with pytest.raises(ValueError, match=r"E_AUTH_BOOTSTRAP_REQUIRED"):
                 SerenClient()

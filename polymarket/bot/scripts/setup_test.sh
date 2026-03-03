@@ -38,24 +38,17 @@ if [ -f .env ]; then
     echo "   To reconfigure, delete .env and run this script again"
 else
     echo ""
-    echo "Enter your SEREN_API_KEY (optional if API_KEY is injected by Seren Desktop):"
-    echo "(Get it from https://app.serendb.com/settings/api-keys)"
-    read -r SEREN_API_KEY
-
-    if [ -z "$SEREN_API_KEY" ] && [ -z "${API_KEY:-}" ]; then
-        echo "❌ Missing gateway key. Provide SEREN_API_KEY or run with API_KEY injected."
+    if [ -z "${SEREN_API_KEY:-}" ] && [ -z "${API_KEY:-}" ]; then
+        echo "❌ Missing auth context."
+        echo "   Ensure Seren Desktop session auth is active"
+        echo "   or run auth_bootstrap, then rerun this script."
         exit 1
     fi
 
-    if [ -n "$SEREN_API_KEY" ]; then
-        SEREN_KEY_LINE="SEREN_API_KEY=$SEREN_API_KEY"
-    else
-        SEREN_KEY_LINE="# SEREN_API_KEY is not set here (using runtime API_KEY instead)"
-    fi
-
     cat > .env << EOF2
-# Seren API credentials (required via SEREN_API_KEY or runtime API_KEY)
-$SEREN_KEY_LINE
+# Seren auth is resolved from Desktop session context by default.
+# If session auth is unavailable, run auth_bootstrap before using this skill.
+# Manual SEREN_API_KEY setup is unsupported.
 
 # Desktop sidecar/keychain mode (recommended)
 # Configure Polymarket publisher credentials in Seren Desktop Settings > Publisher MCPs.

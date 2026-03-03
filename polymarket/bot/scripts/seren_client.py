@@ -22,13 +22,13 @@ class SerenClient:
         Initialize Seren client
 
         Args:
-            api_key: Seren API key (defaults to SEREN_API_KEY or API_KEY env var)
+            api_key: Optional runtime key override (otherwise uses env-resolved auth context)
         """
         self.api_key = api_key or os.getenv('SEREN_API_KEY') or os.getenv('API_KEY')
         if not self.api_key:
             raise ValueError(
-                "Seren API key is required. Set SEREN_API_KEY (standalone) "
-                "or API_KEY (Seren Desktop runtime)."
+                "E_AUTH_BOOTSTRAP_REQUIRED: Seren auth context missing. "
+                "Use Desktop/MCP session auth, or run auth_bootstrap and retry."
             )
 
         self.gateway_url = os.getenv('SEREN_GATEWAY_URL', "https://api.serendb.com")

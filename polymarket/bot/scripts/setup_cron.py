@@ -49,8 +49,7 @@ def main():
     except Exception as e:
         print(f"Error initializing Seren client: {e}")
         print(
-            "\nMake sure SEREN_API_KEY (standalone) or API_KEY "
-            "(Seren Desktop runtime) is available."
+            "\nEnsure Desktop/MCP session auth is active, or run auth_bootstrap and retry."
         )
         sys.exit(1)
 

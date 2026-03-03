@@ -65,15 +65,12 @@ def main():
 
     # Check for API key
     if not (os.getenv('SEREN_API_KEY') or os.getenv('API_KEY')):
-        print("❌ Error: Seren API key not found")
+        print("❌ Error: Seren auth context missing")
         print()
-        print("Set your API key (standalone mode):")
-        print("  export SEREN_API_KEY='your-api-key'")
-        print()
-        print("Or add it to .env file:")
-        print("  SEREN_API_KEY=your-api-key")
-        print()
-        print("When launched by Seren Desktop, API_KEY may be injected automatically.")
+        print("Use the supported auth path:")
+        print("  1. Ensure Seren Desktop session auth is active")
+        print("  2. If session auth is unavailable, run auth_bootstrap")
+        print("  3. Retry setup")
         print()
         sys.exit(1)
 

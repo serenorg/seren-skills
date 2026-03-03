@@ -6,9 +6,9 @@ Get the Polymarket Trading Bot running in 5 minutes.
 
 - Python 3.9+
 - $550+ total budget (see [SKILL.md Phase 4](SKILL.md#phase-4-fund-your-wallets) for why)
-- Seren gateway auth via:
-  - `SEREN_API_KEY` (standalone), or
-  - runtime `API_KEY` when launched by Seren Desktop
+- Seren auth via Desktop/MCP session context (preferred)
+- Fallback auth path: run `auth_bootstrap` before running the bot
+- Manual `SEREN_API_KEY` setup is unsupported
 
 ## One-Command Setup (Recommended)
 
@@ -42,7 +42,6 @@ cp .env.example .env
 Edit `.env` and add:
 
 ```bash
-SEREN_API_KEY=your_actual_key_here
 SEREN_DESKTOP_PUBLISHER_AUTH=true
 ```
 
@@ -68,7 +67,7 @@ Review the settings - defaults are safe for testing.
 # Syntax validation (no credentials needed)
 python3 scripts/test_syntax.py
 
-# Dry-run test (needs SEREN_API_KEY or runtime API_KEY)
+# Dry-run test (requires active auth context)
 python3 scripts/test_dry_run.py
 ```
 
@@ -122,15 +121,12 @@ tail -f logs/trading_*.log
 pip3 install -r requirements.txt
 ```
 
-### "SEREN_API_KEY/API_KEY not found"
+### "Seren auth context missing"
 
-Check your `.env` file:
-
-```bash
-cat .env | grep SEREN_API_KEY
-```
-
-For desktop-launched runs, `API_KEY` may be injected automatically.
+Use the supported auth path:
+1. Confirm Seren Desktop session auth is active.
+2. If session auth is unavailable, run `auth_bootstrap`.
+3. Retry the command.
 
 ### "Polymarket desktop publisher authentication failed"
 

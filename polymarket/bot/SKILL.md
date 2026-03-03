@@ -224,12 +224,14 @@ cp .env.example .env
 Edit `.env` and add:
 
 ```bash
-# Seren API key (standalone mode) - get from https://app.serendb.com/settings/api-keys
-SEREN_API_KEY=your_seren_api_key_here
-
 # Desktop sidecar/keychain mode (recommended)
 SEREN_DESKTOP_PUBLISHER_AUTH=true
 ```
+
+Auth prerequisites:
+- Preferred: Seren Desktop session auth + Polymarket publisher credentials configured in Settings > Publisher MCPs
+- Fallback: run `auth_bootstrap`, then retry
+- Manual `SEREN_API_KEY` setup is unsupported
 
 **Desktop sidecar flow (recommended):**
 1. Open Seren Desktop
@@ -908,10 +910,10 @@ Per scan cycle:
 
 ## Troubleshooting
 
-### "SEREN_API_KEY/API_KEY is required"
-- Create `.env` file from `.env.example`
-- Add `SEREN_API_KEY` for standalone runs
-- For desktop-launched runs, ensure runtime `API_KEY` is injected
+### "Seren auth context missing"
+- Confirm Seren Desktop session auth is active
+- If session auth is unavailable, run `auth_bootstrap`
+- Retry the command
 
 ### "Polymarket credentials required"
 - Recommended: enable desktop keychain mode in `.env` with `SEREN_DESKTOP_PUBLISHER_AUTH=true`

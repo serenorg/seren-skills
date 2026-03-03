@@ -47,9 +47,9 @@ for var in optional_vars:
         missing_optional.append(var)
 
 if not seren_api_key:
-    print("❌ Missing required key: SEREN_API_KEY or API_KEY")
-    print("   Set SEREN_API_KEY in .env for standalone runs")
-    print("   or launch via Seren Desktop with API_KEY injected")
+    print("❌ Missing auth context: Desktop/MCP session or runtime key")
+    print("   Ensure Desktop session auth is active")
+    print("   or run auth_bootstrap and retry")
     sys.exit(1)
 
 desktop_auth = os.getenv('SEREN_DESKTOP_PUBLISHER_AUTH', 'true').strip().lower() in (
@@ -62,7 +62,7 @@ elif missing_optional:
 else:
     print("✅ Legacy Polymarket credentials found")
 
-print("✅ Seren gateway key found (SEREN_API_KEY/API_KEY)")
+print("✅ Seren auth context found")
 print()
 
 # Test 3: Initialize Seren client
