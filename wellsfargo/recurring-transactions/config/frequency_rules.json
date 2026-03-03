@@ -1,0 +1,35 @@
+{
+  "_comment": "Rules for detecting transaction frequency from day-of-month intervals.",
+  "frequencies": {
+    "weekly": {
+      "label": "Weekly",
+      "interval_days_min": 5,
+      "interval_days_max": 9,
+      "expected_interval": 7
+    },
+    "biweekly": {
+      "label": "Bi-Weekly",
+      "interval_days_min": 12,
+      "interval_days_max": 16,
+      "expected_interval": 14
+    },
+    "monthly": {
+      "label": "Monthly",
+      "interval_days_min": 25,
+      "interval_days_max": 35,
+      "expected_interval": 30
+    },
+    "quarterly": {
+      "label": "Quarterly",
+      "interval_days_min": 80,
+      "interval_days_max": 100,
+      "expected_interval": 91
+    },
+    "annual": {
+      "label": "Annual",
+      "interval_days_min": 350,
+      "interval_days_max": 380,
+      "expected_interval": 365
+    }
+  }
+}

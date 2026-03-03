@@ -1,0 +1,64 @@
+skill: recurring-transactions
+description: Detect and track recurring subscriptions, bills, and regular payments from Wells Fargo transaction data stored in SerenDB.
+triggers:
+  - detect wells fargo recurring transactions
+  - find wellsfargo subscriptions and bills
+  - track recurring payments from wells fargo data
+runtime:
+  language: python
+  entrypoint: scripts/run.py
+inputs:
+  months:
+    type: integer
+    min: 3
+    max: 24
+    default: 12
+  start:
+    type: string
+    description: Start date (YYYY-MM-DD). Overrides months if provided.
+  end:
+    type: string
+    description: End date (YYYY-MM-DD). Defaults to today if start is provided.
+  min_confidence:
+    type: number
+    min: 0.0
+    max: 1.0
+    default: 0.5
+  out:
+    type: string
+    default: artifacts/recurring-transactions
+  skip_persist:
+    type: boolean
+    default: false
+connectors:
+  serendb:
+    kind: seren_publisher
+    publisher: serendb
+state:
+  checkpoints:
+    kind: sqlite
+    file: artifacts/recurring-transactions/state/checkpoint.json
+policies:
+  dry_run_default: false
+  idempotency_required: true
+workflow:
+  steps:
+    - id: resolve_serendb
+      use: connector.serendb.connect
+    - id: query_transactions
+      use: connector.serendb.query
+    - id: detect_recurring
+      use: transform.detect_patterns
+    - id: score_patterns
+      use: transform.score_patterns
+    - id: render_report
+      use: transform.render
+    - id: persist_patterns
+      use: connector.serendb.upsert
+publish:
+  org: seren-skills
+  slug: recurring-transactions
+metadata:
+  category: finance
+  depends_on:
+    - bank-statement-processing

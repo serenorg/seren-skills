@@ -1,0 +1,22 @@
+{
+  "runtime": {
+    "artifacts_subdir": "recurring-transactions"
+  },
+  "serendb": {
+    "enabled": true,
+    "database_url_env": "WF_SERENDB_URL",
+    "auto_resolve_via_seren_cli": true,
+    "pooled_connection": true,
+    "project_id": "",
+    "branch_id": "",
+    "schema_path": "sql/schema.sql",
+    "project_name": "",
+    "branch_name": "",
+    "database_name": "serendb"
+  },
+  "detection": {
+    "min_occurrences": 3,
+    "amount_tolerance_pct": 0.15,
+    "min_confidence": 0.5
+  }
+}
