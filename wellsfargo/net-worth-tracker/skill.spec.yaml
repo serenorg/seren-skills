@@ -1,0 +1,56 @@
+skill: net-worth-tracker
+description: Track net worth trends over time from Wells Fargo transaction data stored in SerenDB.
+triggers:
+  - track wells fargo net worth
+  - wellsfargo balance history
+runtime:
+  language: python
+  entrypoint: scripts/run.py
+inputs:
+  months:
+    type: integer
+    min: 1
+    max: 60
+    default: 12
+  start:
+    type: string
+  end:
+    type: string
+  starting_balance:
+    type: number
+    default: 0.0
+    description: Known starting balance at period start.
+  out:
+    type: string
+    default: artifacts/net-worth-tracker
+  skip_persist:
+    type: boolean
+    default: false
+connectors:
+  serendb:
+    kind: seren_publisher
+    publisher: serendb
+policies:
+  dry_run_default: false
+  idempotency_required: true
+workflow:
+  steps:
+    - id: resolve_serendb
+      use: connector.serendb.connect
+    - id: query_transactions
+      use: connector.serendb.query
+    - id: compute_monthly
+      use: transform.aggregate_monthly
+    - id: compute_running_balance
+      use: transform.running_balance
+    - id: render_report
+      use: transform.render
+    - id: persist_snapshot
+      use: connector.serendb.upsert
+publish:
+  org: seren-skills
+  slug: net-worth-tracker
+metadata:
+  category: finance
+  depends_on:
+    - bank-statement-processing

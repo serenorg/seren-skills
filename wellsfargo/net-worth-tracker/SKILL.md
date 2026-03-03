@@ -1,22 +1,59 @@
 ---
 name: net-worth-tracker
-description: "Track account balances from Wells Fargo statement data with optional manual asset and liability entries to produce a simplified balance sheet and net worth trajectory over time."
+description: "Track net worth trends over time from Wells Fargo transaction data stored in SerenDB."
 ---
 
-# Net Worth Tracker
+# Wells Fargo Net Worth Tracker
 
-## When to Use
+## When To Use
 
-- track my net worth over time
-- generate balance sheet from wells fargo data
-- show net worth trajectory
+- Track net worth trends from cumulative transaction balances over time.
+- Compute monthly inflow/outflow totals and running balance.
+- Visualize net worth trajectory across configurable periods.
+- Persist net worth snapshots into SerenDB for trend analysis.
 
-## Workflow Summary
+## Prerequisites
 
-1. `resolve_serendb` uses `connector.serendb.connect`
-2. `query_balances` uses `connector.serendb.query`
-3. `load_manual_entries` uses `transform.load_manual_entries`
-4. `compute_balance_sheet` uses `transform.compute_balance_sheet`
-5. `compute_net_worth_trajectory` uses `transform.compute_net_worth_trajectory`
-6. `render_report` uses `transform.render`
-7. `persist_networth_data` uses `connector.serendb.upsert`
+- The `bank-statement-processing` skill must have completed at least one successful run with SerenDB sync enabled.
+- SerenDB must contain populated `wf_transactions` and `wf_txn_categories` tables.
+
+## Safety Profile
+
+- Read-only against SerenDB source tables.
+- Writes only to dedicated `wf_networth_*` tables (never modifies upstream data).
+- No browser automation required.
+- No credentials stored or transmitted.
+
+## Quick Start
+
+```bash
+cd wellsfargo/net-worth-tracker
+python3 -m pip install -r requirements.txt
+cp .env.example .env && cp config.example.json config.json
+python3 scripts/run.py --config config.json --months 12 --out artifacts/net-worth-tracker
+```
+
+## Commands
+
+```bash
+python3 scripts/run.py --config config.json --months 12 --out artifacts/net-worth-tracker
+python3 scripts/run.py --config config.json --start 2025-01-01 --end 2025-12-31 --out artifacts/net-worth-tracker
+python3 scripts/run.py --config config.json --months 12 --skip-persist --out artifacts/net-worth-tracker
+```
+
+## Outputs
+
+- Markdown report: `artifacts/net-worth-tracker/reports/<run_id>.md`
+- JSON report: `artifacts/net-worth-tracker/reports/<run_id>.json`
+- Monthly export: `artifacts/net-worth-tracker/exports/<run_id>.monthly.jsonl`
+
+## SerenDB Tables
+
+- `wf_networth_runs` - net worth tracking runs
+- `wf_networth_monthly` - monthly inflow/outflow/balance per run
+- `wf_networth_snapshots` - summary snapshot per run
+
+## Reusable Views
+
+- `v_wf_networth_latest` - most recent net worth snapshot
+- `v_wf_networth_trend` - monthly net worth trend from latest run

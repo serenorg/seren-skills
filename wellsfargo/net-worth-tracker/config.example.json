@@ -1,15 +1,16 @@
 {
-  "connectors": [
-    "serendb"
-  ],
-  "dry_run": false,
-  "inputs": {
-    "end": "",
-    "manual_entries_file": "config/manual_entries.json",
-    "months": 12,
-    "out": "artifacts/net-worth-tracker",
-    "skip_persist": false,
-    "start": ""
+  "runtime": { "artifacts_subdir": "net-worth-tracker" },
+  "serendb": {
+    "enabled": true,
+    "database_url_env": "WF_SERENDB_URL",
+    "auto_resolve_via_seren_cli": true,
+    "pooled_connection": true,
+    "project_id": "",
+    "branch_id": "",
+    "schema_path": "sql/schema.sql",
+    "project_name": "",
+    "branch_name": "",
+    "database_name": "serendb"
   },
-  "skill": "net-worth-tracker"
+  "starting_balance": 0.0
 }
