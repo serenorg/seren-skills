@@ -1,4 +1,4 @@
-skill: bank-statement-retrieval
+skill: wellsfargo-bank-statement-processing
 description: Authenticate to Wells Fargo with runtime prompts, download statements as local PDFs, extract and categorize transactions, and persist masked metadata into SerenDB.
 triggers:
   - download my wells fargo statements
@@ -59,6 +59,6 @@ workflow:
       use: transform.write_report
 publish:
   org: seren-skills
-  slug: wellsfargo-bank-statement-retrieval
+  slug: wellsfargo-bank-statement-processing
 metadata:
   category: finance
