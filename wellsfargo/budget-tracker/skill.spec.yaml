@@ -1,0 +1,59 @@
+skill: budget-tracker
+description: Track budget vs. actual spending by category from Wells Fargo transaction data stored in SerenDB.
+triggers:
+  - track wells fargo budget
+  - compare wellsfargo spending to budget
+  - budget vs actual from wells fargo data
+runtime:
+  language: python
+  entrypoint: scripts/run.py
+inputs:
+  months:
+    type: integer
+    min: 1
+    max: 24
+    default: 1
+  start:
+    type: string
+    description: Start date (YYYY-MM-DD). Overrides months if provided.
+  end:
+    type: string
+    description: End date (YYYY-MM-DD). Defaults to today if start is provided.
+  out:
+    type: string
+    default: artifacts/budget-tracker
+  skip_persist:
+    type: boolean
+    default: false
+connectors:
+  serendb:
+    kind: seren_publisher
+    publisher: serendb
+state:
+  checkpoints:
+    kind: sqlite
+    file: artifacts/budget-tracker/state/checkpoint.json
+policies:
+  dry_run_default: false
+  idempotency_required: true
+workflow:
+  steps:
+    - id: resolve_serendb
+      use: connector.serendb.connect
+    - id: query_transactions
+      use: connector.serendb.query
+    - id: aggregate_actuals
+      use: transform.aggregate_by_category
+    - id: compare_budget
+      use: transform.compare_budget
+    - id: render_report
+      use: transform.render
+    - id: persist_snapshot
+      use: connector.serendb.upsert
+publish:
+  org: seren-skills
+  slug: budget-tracker
+metadata:
+  category: finance
+  depends_on:
+    - bank-statement-processing

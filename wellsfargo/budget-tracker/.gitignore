@@ -1,0 +1,6 @@
+config.json
+.env
+artifacts/
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,50 @@
+{
+  "_comment": "Monthly budget targets by category. Amounts are per-month limits.",
+  "targets": {
+    "housing": {
+      "label": "Housing & Rent",
+      "monthly_limit": 2500.00
+    },
+    "utilities": {
+      "label": "Utilities",
+      "monthly_limit": 300.00
+    },
+    "groceries": {
+      "label": "Groceries",
+      "monthly_limit": 600.00
+    },
+    "dining": {
+      "label": "Dining & Restaurants",
+      "monthly_limit": 400.00
+    },
+    "transportation": {
+      "label": "Transportation",
+      "monthly_limit": 350.00
+    },
+    "insurance": {
+      "label": "Insurance",
+      "monthly_limit": 500.00
+    },
+    "healthcare": {
+      "label": "Healthcare",
+      "monthly_limit": 200.00
+    },
+    "subscriptions": {
+      "label": "Subscriptions & Memberships",
+      "monthly_limit": 150.00
+    },
+    "shopping": {
+      "label": "Shopping & Retail",
+      "monthly_limit": 300.00
+    },
+    "fees": {
+      "label": "Bank Fees & Charges",
+      "monthly_limit": 50.00
+    },
+    "other_expense": {
+      "label": "Other Expenses",
+      "monthly_limit": 500.00
+    }
+  },
+  "total_monthly_budget": 5850.00
+}
