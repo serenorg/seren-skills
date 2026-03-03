@@ -1,0 +1,33 @@
+{
+  "status": "ok",
+  "skill": "net-worth-tracker",
+  "workflow_step_count": 7,
+  "dry_run": false,
+  "inputs": {
+    "end": "",
+    "manual_entries_file": "config/manual_entries.json",
+    "months": 12,
+    "out": "artifacts/net-worth-tracker",
+    "skip_persist": false,
+    "start": ""
+  },
+  "connectors": {
+    "serendb": {
+      "connect": {
+        "status": "ok",
+        "connector": "serendb",
+        "action": "connect"
+      },
+      "query": {
+        "status": "ok",
+        "connector": "serendb",
+        "action": "query"
+      },
+      "upsert": {
+        "status": "ok",
+        "connector": "serendb",
+        "action": "upsert"
+      }
+    }
+  }
+}

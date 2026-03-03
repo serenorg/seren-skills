@@ -1,0 +1,15 @@
+{
+  "connectors": [
+    "serendb"
+  ],
+  "dry_run": false,
+  "inputs": {
+    "end": "",
+    "manual_entries_file": "config/manual_entries.json",
+    "months": 12,
+    "out": "artifacts/net-worth-tracker",
+    "skip_persist": false,
+    "start": ""
+  },
+  "skill": "net-worth-tracker"
+}

@@ -1,0 +1,29 @@
+{
+  "status": "error",
+  "skill": "net-worth-tracker",
+  "error_code": "connector_failure",
+  "connector": "serendb",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "serendb": {
+      "connect": {
+        "status": "error",
+        "connector": "serendb",
+        "action": "connect",
+        "error_code": "connector_failure"
+      },
+      "query": {
+        "status": "error",
+        "connector": "serendb",
+        "action": "query",
+        "error_code": "connector_failure"
+      },
+      "upsert": {
+        "status": "error",
+        "connector": "serendb",
+        "action": "upsert",
+        "error_code": "connector_failure"
+      }
+    }
+  }
+}
