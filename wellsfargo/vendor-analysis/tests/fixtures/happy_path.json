@@ -1,0 +1,33 @@
+{
+  "status": "ok",
+  "skill": "vendor-analysis",
+  "workflow_step_count": 7,
+  "dry_run": false,
+  "inputs": {
+    "end": "",
+    "months": 12,
+    "out": "artifacts/vendor-analysis",
+    "skip_persist": false,
+    "start": "",
+    "top_n": 20
+  },
+  "connectors": {
+    "serendb": {
+      "connect": {
+        "status": "ok",
+        "connector": "serendb",
+        "action": "connect"
+      },
+      "query": {
+        "status": "ok",
+        "connector": "serendb",
+        "action": "query"
+      },
+      "upsert": {
+        "status": "ok",
+        "connector": "serendb",
+        "action": "upsert"
+      }
+    }
+  }
+}

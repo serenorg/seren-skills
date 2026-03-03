@@ -1,0 +1,15 @@
+{
+  "connectors": [
+    "serendb"
+  ],
+  "dry_run": false,
+  "inputs": {
+    "end": "",
+    "months": 12,
+    "out": "artifacts/vendor-analysis",
+    "skip_persist": false,
+    "start": "",
+    "top_n": 20
+  },
+  "skill": "vendor-analysis"
+}
