@@ -1,0 +1,55 @@
+skill: vendor-analysis
+description: Analyze spending by vendor/merchant from Wells Fargo transaction data stored in SerenDB.
+triggers:
+  - analyze wells fargo vendor spending
+  - wellsfargo merchant analysis
+runtime:
+  language: python
+  entrypoint: scripts/run.py
+inputs:
+  months:
+    type: integer
+    min: 1
+    max: 24
+    default: 12
+  start:
+    type: string
+  end:
+    type: string
+  top:
+    type: integer
+    default: 50
+  out:
+    type: string
+    default: artifacts/vendor-analysis
+  skip_persist:
+    type: boolean
+    default: false
+connectors:
+  serendb:
+    kind: seren_publisher
+    publisher: serendb
+policies:
+  dry_run_default: false
+  idempotency_required: true
+workflow:
+  steps:
+    - id: resolve_serendb
+      use: connector.serendb.connect
+    - id: query_transactions
+      use: connector.serendb.query
+    - id: normalize_vendors
+      use: transform.normalize_payees
+    - id: aggregate_vendors
+      use: transform.aggregate_vendors
+    - id: render_report
+      use: transform.render
+    - id: persist_vendors
+      use: connector.serendb.upsert
+publish:
+  org: seren-skills
+  slug: vendor-analysis
+metadata:
+  category: finance
+  depends_on:
+    - bank-statement-processing
