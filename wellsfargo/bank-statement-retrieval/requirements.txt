@@ -1,4 +1,0 @@
-pdfplumber>=0.11.5
-psycopg[binary]>=3.2.0
-python-dateutil>=2.9.0
-requests>=2.32.0
