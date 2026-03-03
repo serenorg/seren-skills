@@ -41,6 +41,7 @@ from wf_download import (
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MIN_STATEMENT_MONTHS = 3
+DEFAULT_STATEMENT_MONTHS = 12
 RUN_LOCK_FILENAME = ".run.lock.json"
 
 BROWSER_TARGETS: list[tuple[str, str]] = [
@@ -81,8 +82,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--months",
         type=int,
-        default=MIN_STATEMENT_MONTHS,
-        help=f"Number of statement rows to download (minimum {MIN_STATEMENT_MONTHS})",
+        default=DEFAULT_STATEMENT_MONTHS,
+        help=f"Number of statement rows to download (default {DEFAULT_STATEMENT_MONTHS}, minimum {MIN_STATEMENT_MONTHS})",
     )
     parser.add_argument("--out", default="artifacts/wellsfargo", help="Artifact root directory")
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")

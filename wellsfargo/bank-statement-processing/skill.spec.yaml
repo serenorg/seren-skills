@@ -17,7 +17,7 @@ inputs:
     type: integer
     min: 3
     max: 24
-    default: 3
+    default: 12
   out:
     type: string
     default: artifacts/wellsfargo

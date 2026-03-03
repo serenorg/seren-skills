@@ -28,7 +28,7 @@ description: "Wells Fargo bank statement retrieval skill for Seren Desktop: runt
   - Firefox path preserves the historically stable flow.
   - Chrome path enables isolated recovery/fallback logic for Chrome-only issues.
 - The run enforces a single active process lock per artifact directory to prevent multiple browser windows from concurrent runs.
-- The run enforces a minimum of 3 months of statements.
+- The run defaults to 12 months of statements (minimum 3).
 
 ## Workflow Summary
 
@@ -70,7 +70,7 @@ seren auth
 2. Run end-to-end (read-only):
 
 ```bash
-python3 scripts/run.py --config config.json --mode read-only --months 3 --out artifacts/wellsfargo
+python3 scripts/run.py --config config.json --mode read-only --months 12 --out artifacts/wellsfargo
 ```
 
 3. Resume a prior interrupted run:
@@ -83,16 +83,16 @@ python3 scripts/run.py --config config.json --mode read-only --resume --out arti
 
 ```bash
 # End-to-end run
-python3 scripts/run.py --mode read-only --months 3 --out artifacts/wellsfargo
+python3 scripts/run.py --mode read-only --months 12 --out artifacts/wellsfargo
 
 # End-to-end run with explicit browser override (skips browser prompt)
-python3 scripts/run.py --mode read-only --auth-method manual --browser-app "Google Chrome" --browser-type chrome --months 3 --out artifacts/wellsfargo
+python3 scripts/run.py --mode read-only --auth-method manual --browser-app "Google Chrome" --browser-type chrome --months 12 --out artifacts/wellsfargo
 
 # End-to-end run pinned to Firefox stable path
-python3 scripts/run.py --mode read-only --auth-method manual --browser-app "Firefox" --browser-type moz-firefox --months 3 --out artifacts/wellsfargo
+python3 scripts/run.py --mode read-only --auth-method manual --browser-app "Firefox" --browser-type moz-firefox --months 12 --out artifacts/wellsfargo
 
 # End-to-end run with passkey auth (requires local user approval prompt)
-python3 scripts/run.py --mode read-only --auth-method passkey --months 3 --out artifacts/wellsfargo
+python3 scripts/run.py --mode read-only --auth-method passkey --months 12 --out artifacts/wellsfargo
 
 # Parse local PDFs only (skip browser)
 python3 scripts/run.py --mode read-only --skip-download --out artifacts/wellsfargo
