@@ -18,6 +18,45 @@ class AllocationDrift:
 class PortfolioManager:
     """Builds allocation-aware DCA buy plans."""
 
+    _KNOWN_QUOTES = ("USDT", "USDC", "USD", "EUR", "GBP", "CAD", "JPY", "AUD")
+    _BASE_ALIASES = {
+        "BTC": "XXBT",
+        "XBT": "XXBT",
+        "ETH": "XETH",
+        "LTC": "XLTC",
+        "XRP": "XXRP",
+    }
+
+    @classmethod
+    def _base_asset_from_pair(cls, pair: str) -> str:
+        upper = pair.upper()
+        for quote in cls._KNOWN_QUOTES:
+            if upper.endswith(quote) and len(upper) > len(quote):
+                return upper[: -len(quote)]
+        return upper
+
+    @classmethod
+    def _balance_candidates(cls, pair: str) -> list[str]:
+        base = cls._base_asset_from_pair(pair)
+        raw = base.lstrip("XZ")
+        candidates = {
+            base,
+            raw,
+            f"X{raw}",
+            f"Z{raw}",
+            cls._BASE_ALIASES.get(base, ""),
+            cls._BASE_ALIASES.get(raw, ""),
+        }
+        return [candidate for candidate in candidates if candidate]
+
+    @classmethod
+    def _lookup_balance(cls, balances: dict[str, float], pair: str) -> float:
+        upper_balances = {key.upper(): float(value) for key, value in balances.items()}
+        for key in cls._balance_candidates(pair):
+            if key.upper() in upper_balances:
+                return float(upper_balances[key.upper()])
+        return 0.0
+
     @staticmethod
     def normalize_allocations(allocations: dict[str, float]) -> dict[str, float]:
         if not allocations:
@@ -35,8 +74,7 @@ class PortfolioManager:
     ) -> dict[str, float]:
         values: dict[str, float] = {}
         for asset in targets:
-            base = asset[:3]
-            qty = float(balances.get(base, 0.0))
+            qty = PortfolioManager._lookup_balance(balances, asset)
             px = float(prices.get(asset, 0.0))
             values[asset] = max(qty * px, 0.0)
 

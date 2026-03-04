@@ -5,8 +5,15 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
+
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover
+    from datetime import timezone
+
+    UTC = timezone.utc
 
 
 @dataclass
@@ -41,7 +48,7 @@ class OpportunityScanner:
 
     def _signal_id(self, signal_type: str, asset: str) -> str:
         raw = f"{signal_type}:{asset}:{datetime.now(tz=UTC).date().isoformat()}"
-        return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     def _cap(self, pct: float) -> float:
         return round(max(min(pct, self.max_reallocation_pct), 0.0), 2)
@@ -68,11 +75,27 @@ class OpportunityScanner:
 
             volume_ratio = float(row.get("volume_ratio", 1.0))
             rsi_14 = float(row.get("rsi_14", 50.0))
-            price_change_24h = float(row.get("price_change_24h_pct", 0.0))
-            price_change_7d = float(row.get("price_change_7d_pct", 0.0))
-            breakout = bool(row.get("ma50_breakout", False))
+            price = float(row.get("price", 0.0))
+            sma20 = float(row.get("sma20", 0.0))
             new_listing_days = int(row.get("new_listing_days", 999))
             accumulation_score = float(row.get("accumulation_score", 0.0))
+
+            if "oversold_rsi" in self.enabled_signals and rsi_14 < 30.0:
+                rsi_gap = max(30.0 - rsi_14, 0.0)
+                realloc = self._cap(8.0 + rsi_gap * 0.45)
+                signals.append(
+                    ScannerSignal(
+                        signal_id=self._signal_id("oversold_rsi", asset),
+                        signal_type="oversold_rsi",
+                        asset=asset,
+                        confidence_pct=round(min(62.0 + rsi_gap * 1.2, 90.0), 2),
+                        trigger_data={"rsi_14": rsi_14},
+                        suggestion=(
+                            f"Oversold RSI setup detected. Shift up to {realloc:.2f}% into {asset}"
+                        ),
+                        reallocation_pct=realloc,
+                    )
+                )
 
             if "volume_spike" in self.enabled_signals and volume_ratio >= 3.0:
                 realloc = self._cap(12.0 + (volume_ratio - 3.0) * 2.0)
@@ -90,41 +113,27 @@ class OpportunityScanner:
                     )
                 )
 
-            if "mean_reversion" in self.enabled_signals and rsi_14 <= 25.0 and price_change_7d <= -8.0:
-                realloc = self._cap(10.0 + abs(price_change_7d) * 0.3)
-                signals.append(
-                    ScannerSignal(
-                        signal_id=self._signal_id("mean_reversion", asset),
-                        signal_type="mean_reversion",
-                        asset=asset,
-                        confidence_pct=round(min(68.0 + abs(price_change_7d), 90.0), 2),
-                        trigger_data={"rsi_14": rsi_14, "price_change_7d_pct": price_change_7d},
-                        suggestion=(
-                            f"Mean-reversion candidate detected. Shift up to {realloc:.2f}% into {asset}"
-                        ),
-                        reallocation_pct=realloc,
+            if "mean_reversion" in self.enabled_signals and sma20 > 0 and price > 0:
+                deviation_pct = ((price - sma20) / sma20) * 100.0
+                if deviation_pct <= -10.0:
+                    realloc = self._cap(10.0 + abs(deviation_pct + 10.0) * 0.4)
+                    signals.append(
+                        ScannerSignal(
+                            signal_id=self._signal_id("mean_reversion", asset),
+                            signal_type="mean_reversion",
+                            asset=asset,
+                            confidence_pct=round(min(68.0 + abs(deviation_pct), 90.0), 2),
+                            trigger_data={
+                                "price": price,
+                                "sma20": sma20,
+                                "deviation_pct": round(deviation_pct, 4),
+                            },
+                            suggestion=(
+                                f"Mean-reversion candidate detected. Shift up to {realloc:.2f}% into {asset}"
+                            ),
+                            reallocation_pct=realloc,
+                        )
                     )
-                )
-
-            if "momentum_breakout" in self.enabled_signals and breakout and volume_ratio >= 2.0 and price_change_24h > 3.0:
-                realloc = self._cap(9.0 + price_change_24h * 0.5)
-                signals.append(
-                    ScannerSignal(
-                        signal_id=self._signal_id("momentum_breakout", asset),
-                        signal_type="momentum_breakout",
-                        asset=asset,
-                        confidence_pct=round(min(65.0 + price_change_24h * 2.5, 93.0), 2),
-                        trigger_data={
-                            "ma50_breakout": breakout,
-                            "price_change_24h_pct": price_change_24h,
-                            "volume_ratio": volume_ratio,
-                        },
-                        suggestion=(
-                            f"Breakout continuation setup. Shift up to {realloc:.2f}% into {asset}"
-                        ),
-                        reallocation_pct=realloc,
-                    )
-                )
 
             if "new_listing" in self.enabled_signals and new_listing_days <= 30 and accumulation_score >= 0.6:
                 realloc = self._cap(6.0 + accumulation_score * 10.0)

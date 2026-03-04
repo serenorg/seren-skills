@@ -2,13 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
-
-
-SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
 
 from agent import run_once
 
@@ -41,13 +35,9 @@ def _write_config(path: Path, mode: str) -> None:
             "max_reallocation_pct": 20.0,
             "min_24h_volume_usd": 1_000_000,
             "scan_interval_hours": 6,
-            "signals": ["volume_spike", "mean_reversion", "momentum_breakout", "new_listing"],
+            "signals": ["oversold_rsi", "volume_spike", "mean_reversion", "new_listing"],
             "require_approval": True,
-            "base_allocations": {
-                "XBTUSD": 0.6,
-                "ETHUSD": 0.25,
-                "SOLUSD": 0.15,
-            },
+            "approval_action": "pending",
         },
         "risk": {
             "max_daily_spend_usd": 500.0,
@@ -77,10 +67,25 @@ def test_single_asset_run_once_ok(tmp_path: Path, monkeypatch) -> None:
     result = run_once(
         config_path=str(config),
         allow_live=False,
-        accept_risk_disclaimer=False,
+        accept_risk_disclaimer=True,
     )
     assert result["status"] == "ok"
     assert result["mode"] == "single_asset"
+
+
+def test_first_run_requires_explicit_disclaimer_acceptance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SEREN_API_KEY", "sb_local_test")
+    config = tmp_path / "config.json"
+    _write_config(config, "single_asset")
+
+    result = run_once(
+        config_path=str(config),
+        allow_live=False,
+        accept_risk_disclaimer=False,
+    )
+    assert result["status"] == "error"
+    assert result["error_code"] == "policy_violation"
 
 
 def test_portfolio_mode_run_once_ok(tmp_path: Path, monkeypatch) -> None:
@@ -92,7 +97,7 @@ def test_portfolio_mode_run_once_ok(tmp_path: Path, monkeypatch) -> None:
     result = run_once(
         config_path=str(config),
         allow_live=False,
-        accept_risk_disclaimer=False,
+        accept_risk_disclaimer=True,
     )
     assert result["status"] == "ok"
     assert result["mode"] == "portfolio"
@@ -107,7 +112,7 @@ def test_scanner_mode_run_once_ok(tmp_path: Path, monkeypatch) -> None:
     result = run_once(
         config_path=str(config),
         allow_live=False,
-        accept_risk_disclaimer=False,
+        accept_risk_disclaimer=True,
     )
     assert result["status"] == "ok"
     assert result["mode"] == "scanner"
@@ -128,6 +133,6 @@ def test_live_mode_requires_explicit_flags(tmp_path: Path, monkeypatch) -> None:
     result = run_once(
         config_path=str(config),
         allow_live=False,
-        accept_risk_disclaimer=False,
+        accept_risk_disclaimer=True,
     )
     assert result["status"] == "error"

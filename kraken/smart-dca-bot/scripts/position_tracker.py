@@ -6,8 +6,15 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
+
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover
+    from datetime import timezone
+
+    UTC = timezone.utc
 
 
 @dataclass

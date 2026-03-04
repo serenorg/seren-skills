@@ -15,11 +15,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import signal
 import sqlite3
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,13 @@ from scanner import OpportunityScanner
 from seren_api_client import SerenAPIError, SerenAPIKeyManager
 from serendb_store import SerenDBStore
 
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover
+    from datetime import timezone
+
+    UTC = timezone.utc
+
 
 SKILL_NAME = "smart-dca-bot"
 DEFAULT_CONFIG_PATH = "config.json"
@@ -47,7 +55,7 @@ STATE_DB_PATH = Path("state/dca_runs.db")
 STATE_EXPORT_PATH = Path("state/last_state_export.json")
 DISCLAIMER_ACK_PATH = Path("state/disclaimer_seen.flag")
 
-SUPPORTED_MODES = {"single_asset", "portfolio", "scanner", "opportunity_scanner"}
+SUPPORTED_MODES = {"single_asset", "portfolio", "scanner"}
 SUPPORTED_FREQUENCIES = {"daily", "weekly", "biweekly", "monthly"}
 SUPPORTED_RISK_LEVELS = {"conservative", "moderate", "aggressive"}
 
@@ -92,6 +100,10 @@ IMPORTANT_DISCLAIMER = """IMPORTANT DISCLAIMERS — READ BEFORE USING
    arising from the use of this software.
 """
 
+TRADE_EXECUTION_NOTICE = (
+    "⚠️ This trade executes directly on Kraken. SerenAI does not custody your funds."
+)
+
 
 class ConfigError(RuntimeError):
     """Raised for invalid skill configuration."""
@@ -133,9 +145,9 @@ def _default_config() -> dict[str, Any]:
             "max_reallocation_pct": 20.0,
             "min_24h_volume_usd": 1_000_000,
             "scan_interval_hours": 6,
-            "signals": ["volume_spike", "mean_reversion", "momentum_breakout", "new_listing"],
+            "signals": ["oversold_rsi", "volume_spike", "mean_reversion", "new_listing"],
             "require_approval": True,
-            "base_allocations": {"XBTUSD": 0.6, "ETHUSD": 0.25, "SOLUSD": 0.15},
+            "approval_action": "pending",
         },
         "risk": {
             "max_daily_spend_usd": 500.0,
@@ -177,6 +189,24 @@ def load_config(path: str) -> dict[str, Any]:
 
 
 def validate_config(config: dict[str, Any]) -> list[str]:
+    def _validate_allocation_sum(
+        *,
+        name: str,
+        values: dict[str, Any],
+    ) -> str | None:
+        if not values:
+            return f"{name} must be a non-empty object"
+        try:
+            total = sum(float(value) for value in values.values())
+        except (TypeError, ValueError):
+            return f"{name} must contain numeric values"
+        if abs(total - 1.0) < 1e-6 or abs(total - 100.0) < 1e-3:
+            return None
+        return (
+            f"{name} values must sum to 1.0 (fractions) or 100.0 (percent). "
+            f"Current total={total:.6f}"
+        )
+
     errors: list[str] = []
     inputs = config.get("inputs", {})
 
@@ -217,15 +247,31 @@ def validate_config(config: dict[str, Any]) -> list[str]:
 
     portfolio = config.get("portfolio", {})
     allocations = portfolio.get("allocations", {})
-    if not isinstance(allocations, dict) or not allocations:
+    if not isinstance(allocations, dict):
         errors.append("portfolio.allocations must be a non-empty object")
+    else:
+        maybe_error = _validate_allocation_sum(name="portfolio.allocations", values=allocations)
+        if maybe_error:
+            errors.append(maybe_error)
 
     scanner = config.get("scanner", {})
     scanner_signals = scanner.get("signals", [])
-    allowed_signals = {"volume_spike", "mean_reversion", "momentum_breakout", "new_listing"}
+    allowed_signals = {"oversold_rsi", "volume_spike", "mean_reversion", "new_listing"}
     unknown_signals = [signal for signal in scanner_signals if signal not in allowed_signals]
     if unknown_signals:
         errors.append(f"scanner.signals contains unknown values: {unknown_signals}")
+
+    base_allocations = scanner.get("base_allocations")
+    if base_allocations is not None:
+        if not isinstance(base_allocations, dict):
+            errors.append("scanner.base_allocations must be an object when provided")
+        else:
+            maybe_error = _validate_allocation_sum(
+                name="scanner.base_allocations",
+                values=base_allocations,
+            )
+            if maybe_error:
+                errors.append(maybe_error)
 
     return errors
 
@@ -305,15 +351,19 @@ def _float(value: Any, fallback: float = 0.0) -> float:
 
 
 def _coerce_mode(raw_mode: str) -> str:
-    return "scanner" if raw_mode == "opportunity_scanner" else raw_mode
+    return raw_mode
 
 
-def show_disclaimer_if_first_run() -> bool:
+def show_disclaimer_if_first_run(*, accept_risk_disclaimer: bool) -> bool:
     if DISCLAIMER_ACK_PATH.exists():
         return False
+    print(IMPORTANT_DISCLAIMER)
+    if not accept_risk_disclaimer:
+        raise PolicyError(
+            "First run requires explicit acknowledgment. Re-run with --accept-risk-disclaimer."
+        )
     DISCLAIMER_ACK_PATH.parent.mkdir(parents=True, exist_ok=True)
     DISCLAIMER_ACK_PATH.write_text(datetime.now(tz=UTC).isoformat(), encoding="utf-8")
-    print(IMPORTANT_DISCLAIMER)
     return True
 
 
@@ -346,16 +396,32 @@ def ensure_seren_api_key(config: dict[str, Any]) -> str:
 
 
 def _mock_snapshot(pair: str) -> dict[str, Any]:
-    seed = sum(ord(ch) for ch in pair)
+    now = datetime.now(tz=UTC)
+    seed = sum(ord(ch) for ch in pair) + (now.hour * 60) + now.minute
+    rng = random.Random(seed)
     base_price = 80.0 + (seed % 300)
-    price = base_price * (1.0 + (seed % 7) / 100.0)
-    vwap = price * (1.0 + ((seed % 5) - 2) / 1000.0)
+    price = base_price * (1.0 + rng.uniform(-0.015, 0.02))
+    vwap = price * (1.0 + rng.uniform(-0.003, 0.003))
     bid = price * 0.999
     ask = price * 1.001
     low_24h = price * 0.975
     high_24h = price * 1.03
-    candles = [round(price * (0.99 + i * 0.001), 6) for i in range(20)]
+    candles = [round(price * (1.0 + rng.uniform(-0.02, 0.02)), 6) for _ in range(20)]
     candles[-1] = round(price, 6)
+
+    daily_closes: list[float] = []
+    daily_volumes_usd: list[float] = []
+    cursor = price * (1.0 + rng.uniform(-0.1, 0.1))
+    for _ in range(35):
+        cursor *= 1.0 + rng.uniform(-0.04, 0.04)
+        close = round(cursor, 6)
+        daily_closes.append(close)
+        daily_volumes_usd.append(float(rng.uniform(900_000, 8_000_000)))
+
+    price_7d_ago = daily_closes[-8] if len(daily_closes) >= 8 else daily_closes[0]
+    avg_volume_30d = sum(daily_volumes_usd[-30:]) / max(len(daily_volumes_usd[-30:]), 1)
+    volume_24h = daily_volumes_usd[-1]
+
     return {
         "pair": pair,
         "price": round(price, 6),
@@ -364,10 +430,13 @@ def _mock_snapshot(pair: str) -> dict[str, Any]:
         "ask": round(ask, 6),
         "low_24h": round(low_24h, 6),
         "high_24h": round(high_24h, 6),
-        "volume_24h_usd": float((seed % 20 + 1) * 450000),
+        "volume_24h_usd": float(volume_24h),
+        "avg_volume_30d_usd": float(avg_volume_30d),
+        "price_7d_ago": float(price_7d_ago),
         "depth_score": round(0.45 + (seed % 50) / 100.0, 4),
         "candles": candles,
-        "new_listing_days": int(seed % 45),
+        "daily_closes": daily_closes,
+        "new_listing_days": int(rng.randint(5, 500)),
     }
 
 
@@ -395,14 +464,36 @@ def get_market_snapshot(client: KrakenClient | None, pair: str) -> dict[str, Any
     if bid_depth + ask_depth > 0:
         depth_score = min((2.0 * min(bid_depth, ask_depth)) / (bid_depth + ask_depth), 1.0)
 
-    ohlc = client.get_ohlc(pair, interval=15)
-    ohlc_key = next((k for k in ohlc.keys() if k != "last"), pair)
-    candles_raw = ohlc.get(ohlc_key, [])
+    ohlc_15m = client.get_ohlc(pair, interval=15)
+    ohlc_15m_key = next((k for k in ohlc_15m.keys() if k != "last"), pair)
+    candles_raw = ohlc_15m.get(ohlc_15m_key, [])
     closes = [_float(item[4]) for item in candles_raw[-20:]]
     if not closes:
         closes = [price] * 20
 
+    ohlc_daily = client.get_ohlc(pair, interval=1440)
+    ohlc_daily_key = next((k for k in ohlc_daily.keys() if k != "last"), pair)
+    daily_raw = ohlc_daily.get(ohlc_daily_key, [])
+    daily_closes = [_float(item[4], fallback=price) for item in daily_raw]
+    if not daily_closes:
+        daily_closes = [price] * 30
+
+    daily_volume_usd = [
+        _float(item[6]) * _float(item[4], fallback=price)
+        for item in daily_raw
+    ]
     volume = _float(row.get("v", [0, 0])[1]) * price
+    if not daily_volume_usd:
+        daily_volume_usd = [volume] * min(len(daily_closes), 30)
+    avg_volume_30d = sum(daily_volume_usd[-30:]) / max(len(daily_volume_usd[-30:]), 1)
+    price_7d_ago = daily_closes[-8] if len(daily_closes) >= 8 else daily_closes[0]
+    listing_days = 999
+    if daily_raw:
+        first_ts = int(_float(daily_raw[0][0]))
+        if first_ts > 0:
+            listing_days = int(
+                max((datetime.now(tz=UTC).timestamp() - first_ts) / 86400.0, 0.0)
+            )
 
     return {
         "pair": pair,
@@ -413,9 +504,12 @@ def get_market_snapshot(client: KrakenClient | None, pair: str) -> dict[str, Any
         "low_24h": low_24h,
         "high_24h": high_24h,
         "volume_24h_usd": volume,
+        "avg_volume_30d_usd": avg_volume_30d,
+        "price_7d_ago": price_7d_ago,
         "depth_score": depth_score,
         "candles": closes,
-        "new_listing_days": 999,
+        "daily_closes": daily_closes,
+        "new_listing_days": listing_days,
     }
 
 
@@ -424,6 +518,7 @@ def apply_risk_policy(
     config: dict[str, Any],
     notional_usd: float,
     expected_slippage_bps: float,
+    check_daily_cap: bool = True,
 ) -> None:
     risk = config.get("risk", {})
     max_daily = _float(risk.get("max_daily_spend_usd"), 500.0)
@@ -435,16 +530,28 @@ def apply_risk_policy(
             f"notional_usd={notional_usd:.2f} exceeds risk.max_notional_usd={max_notional:.2f}"
         )
 
-    spent = local_daily_spend()
-    if spent + notional_usd > max_daily:
-        raise PolicyError(
-            "daily spend cap exceeded: "
-            f"spent={spent:.2f} + requested={notional_usd:.2f} > {max_daily:.2f}"
-        )
+    if check_daily_cap:
+        spent = local_daily_spend()
+        if spent + notional_usd > max_daily:
+            raise PolicyError(
+                "daily spend cap exceeded: "
+                f"spent={spent:.2f} + requested={notional_usd:.2f} > {max_daily:.2f}"
+            )
 
     if expected_slippage_bps > max_slippage:
         raise PolicyError(
             f"expected slippage {expected_slippage_bps:.2f} bps exceeds cap {max_slippage:.2f} bps"
+        )
+
+
+def enforce_plan_daily_budget(*, config: dict[str, Any], planned_notional_usd: float) -> None:
+    risk = config.get("risk", {})
+    max_daily = _float(risk.get("max_daily_spend_usd"), 500.0)
+    spent = local_daily_spend()
+    if spent + planned_notional_usd > max_daily:
+        raise PolicyError(
+            "daily spend cap exceeded for execution plan: "
+            f"spent={spent:.2f} + planned={planned_notional_usd:.2f} > {max_daily:.2f}"
         )
 
 
@@ -477,15 +584,18 @@ def execute_order(
     limit_price: float | None,
     execution_price_hint: float,
 ) -> dict[str, Any]:
+    print(TRADE_EXECUTION_NOTICE)
     if dry_run or client is None:
         qty = notional_usd / max(execution_price_hint, 1e-9)
         return {
             "status": "simulated",
             "order_id": "dry-run",
             "pair": pair,
+            "requested_notional_usd": round(notional_usd, 2),
             "executed_notional_usd": round(notional_usd, 2),
             "executed_price": round(execution_price_hint, 8),
             "executed_quantity": round(qty, 8),
+            "execution_notice": TRADE_EXECUTION_NOTICE,
         }
 
     if decision_order_type == "limit" and limit_price is not None:
@@ -498,12 +608,15 @@ def execute_order(
         )
         txid = payload.get("txid", [""])[0] if isinstance(payload.get("txid"), list) else ""
         return {
-            "status": "ok",
+            "status": "pending",
             "order_id": txid,
             "pair": pair,
-            "executed_notional_usd": round(notional_usd, 2),
-            "executed_price": round(limit_price, 8),
-            "executed_quantity": round(notional_usd / max(limit_price, 1e-9), 8),
+            "requested_notional_usd": round(notional_usd, 2),
+            "executed_notional_usd": 0.0,
+            "executed_price": None,
+            "executed_quantity": 0.0,
+            "limit_price": round(limit_price, 8),
+            "execution_notice": TRADE_EXECUTION_NOTICE,
         }
 
     payload = _build_market_order_payload(pair, notional_usd, execution_price_hint)
@@ -518,9 +631,93 @@ def execute_order(
         "status": "ok",
         "order_id": txid,
         "pair": pair,
+        "requested_notional_usd": round(notional_usd, 2),
         "executed_notional_usd": round(notional_usd, 2),
         "executed_price": round(execution_price_hint, 8),
         "executed_quantity": round(notional_usd / max(execution_price_hint, 1e-9), 8),
+        "execution_notice": TRADE_EXECUTION_NOTICE,
+    }
+
+
+def execute_decision_order(
+    *,
+    client: KrakenClient | None,
+    dry_run: bool,
+    pair: str,
+    notional_usd: float,
+    decision_order_type: str,
+    limit_price: float | None,
+    execution_price_hint: float,
+    decision_slices: list[float] | None = None,
+) -> dict[str, Any]:
+    if not decision_slices or len(decision_slices) <= 1:
+        return execute_order(
+            client=client,
+            dry_run=dry_run,
+            pair=pair,
+            notional_usd=notional_usd,
+            decision_order_type=decision_order_type,
+            limit_price=limit_price,
+            execution_price_hint=execution_price_hint,
+        )
+
+    positive_slices = [float(value) for value in decision_slices if float(value) > 0]
+    weight_total = sum(positive_slices)
+    if weight_total <= 0:
+        return execute_order(
+            client=client,
+            dry_run=dry_run,
+            pair=pair,
+            notional_usd=notional_usd,
+            decision_order_type=decision_order_type,
+            limit_price=limit_price,
+            execution_price_hint=execution_price_hint,
+        )
+
+    child_orders: list[dict[str, Any]] = []
+    for weight in positive_slices:
+        child_notional = round(notional_usd * (weight / weight_total), 2)
+        if child_notional <= 0:
+            continue
+        child_orders.append(
+            execute_order(
+                client=client,
+                dry_run=dry_run,
+                pair=pair,
+                notional_usd=child_notional,
+                decision_order_type=decision_order_type,
+                limit_price=limit_price,
+                execution_price_hint=execution_price_hint,
+            )
+        )
+
+    executed_notional = sum(_float(row.get("executed_notional_usd", 0.0)) for row in child_orders)
+    executed_quantity = sum(_float(row.get("executed_quantity", 0.0)) for row in child_orders)
+    weighted_price = (
+        executed_notional / max(executed_quantity, 1e-9)
+        if executed_notional > 0 and executed_quantity > 0
+        else None
+    )
+    statuses = [str(row.get("status", "")) for row in child_orders]
+    if any(status == "pending" for status in statuses):
+        status = "pending"
+    elif any(status == "simulated" for status in statuses):
+        status = "simulated"
+    else:
+        status = "ok"
+
+    order_ids = [str(row.get("order_id", "")).strip() for row in child_orders if str(row.get("order_id", "")).strip()]
+    return {
+        "status": status,
+        "order_id": ",".join(order_ids),
+        "pair": pair,
+        "requested_notional_usd": round(notional_usd, 2),
+        "executed_notional_usd": round(executed_notional, 2),
+        "executed_price": round(weighted_price, 8) if weighted_price is not None else None,
+        "executed_quantity": round(executed_quantity, 8),
+        "execution_notice": TRADE_EXECUTION_NOTICE,
+        "slice_count": len(child_orders),
+        "child_orders": child_orders,
     }
 
 
@@ -578,6 +775,7 @@ def _portfolio_mode(
     forced = should_force_fill(window, _now())
 
     executions: list[dict[str, Any]] = []
+    approved_orders: list[tuple[dict[str, Any], dict[str, Any], Any]] = []
     for order in plan["orders"]:
         pair = str(order["asset"])
         notional = _float(order["notional_usd"])
@@ -591,14 +789,25 @@ def _portfolio_mode(
         if not decision.should_execute:
             executions.append({"pair": pair, "status": "deferred", "decision": decision.__dict__})
             continue
+        approved_orders.append((order, snap, decision))
 
+    if approved_orders:
+        enforce_plan_daily_budget(
+            config=config,
+            planned_notional_usd=sum(_float(order["notional_usd"]) for order, _, _ in approved_orders),
+        )
+
+    for order, snap, decision in approved_orders:
+        pair = str(order["asset"])
+        notional = _float(order["notional_usd"])
         apply_risk_policy(
             config=config,
             notional_usd=notional,
             expected_slippage_bps=_estimated_slippage_bps(snap),
+            check_daily_cap=False,
         )
 
-        executed = execute_order(
+        executed = execute_decision_order(
             client=client,
             dry_run=dry_run,
             pair=pair,
@@ -606,29 +815,39 @@ def _portfolio_mode(
             decision_order_type=decision.order_type,
             limit_price=decision.limit_price,
             execution_price_hint=_float(snap["price"]),
+            decision_slices=decision.slices,
         )
         execution_id = str(uuid.uuid4())
-        lot = tracker.add_buy_lot(
-            asset=pair,
-            quantity=_float(executed["executed_quantity"]),
-            cost_basis_usd=_float(executed["executed_notional_usd"]),
-            execution_id=execution_id,
-        )
-        store.persist_cost_basis_lot(lot.__dict__)
+        executed_notional = _float(executed.get("executed_notional_usd", 0.0))
+        executed_price = _float(executed.get("executed_price", 0.0))
+        if executed_notional > 0:
+            lot = tracker.add_buy_lot(
+                asset=pair,
+                quantity=_float(executed["executed_quantity"]),
+                cost_basis_usd=executed_notional,
+                execution_id=execution_id,
+            )
+            store.persist_cost_basis_lot(lot.__dict__)
 
+        vwap = _float(snap["vwap"])
+        savings_bps = (
+            int(((vwap - executed_price) / max(vwap, 1e-9)) * 10000)
+            if executed_price > 0
+            else None
+        )
         row = {
             "execution_id": execution_id,
             "mode": "portfolio",
             "asset": pair,
             "target_amount_usd": round(notional, 2),
-            "executed_amount_usd": round(_float(executed["executed_notional_usd"]), 2),
-            "executed_price": round(_float(executed["executed_price"]), 8),
-            "vwap_at_execution": round(_float(snap["vwap"]), 8),
-            "savings_vs_naive_bps": int(((_float(snap["vwap"]) - _float(executed["executed_price"])) / max(_float(snap["vwap"]), 1e-9)) * 10000),
+            "executed_amount_usd": round(executed_notional, 2) if executed_notional > 0 else None,
+            "executed_price": round(executed_price, 8) if executed_price > 0 else None,
+            "vwap_at_execution": round(vwap, 8),
+            "savings_vs_naive_bps": savings_bps,
             "strategy": strategy,
             "window_start": window.start.isoformat(),
             "window_end": window.end.isoformat(),
-            "executed_at": _now().isoformat(),
+            "executed_at": _now().isoformat() if executed_notional > 0 else None,
             "status": executed["status"],
             "kraken_order_id": executed["order_id"],
             "metadata": {"decision": decision.__dict__, "session_id": session_id},
@@ -639,7 +858,7 @@ def _portfolio_mode(
         executions.append({"pair": pair, "executed": executed, "decision": decision.__dict__})
 
     total_value = sum(
-        _float(balances.get(pair[:3], 0.0)) * _float(prices.get(pair, 0.0))
+        PortfolioManager._lookup_balance(balances, pair) * _float(prices.get(pair, 0.0))
         for pair in targets
     )
     snapshot_row = {
@@ -706,7 +925,7 @@ def _single_asset_mode(
         notional_usd=amount,
         expected_slippage_bps=_estimated_slippage_bps(snapshot),
     )
-    executed = execute_order(
+    executed = execute_decision_order(
         client=client,
         dry_run=dry_run,
         pair=pair,
@@ -714,34 +933,41 @@ def _single_asset_mode(
         decision_order_type=decision.order_type,
         limit_price=decision.limit_price,
         execution_price_hint=_float(snapshot["price"]),
+        decision_slices=decision.slices,
     )
 
     execution_id = str(uuid.uuid4())
-    lot = tracker.add_buy_lot(
-        asset=pair,
-        quantity=_float(executed["executed_quantity"]),
-        cost_basis_usd=_float(executed["executed_notional_usd"]),
-        execution_id=execution_id,
-    )
-    store.persist_cost_basis_lot(lot.__dict__)
+    executed_notional = _float(executed.get("executed_notional_usd", 0.0))
+    executed_price = _float(executed.get("executed_price", 0.0))
+    if executed_notional > 0:
+        lot = tracker.add_buy_lot(
+            asset=pair,
+            quantity=_float(executed["executed_quantity"]),
+            cost_basis_usd=executed_notional,
+            execution_id=execution_id,
+        )
+        store.persist_cost_basis_lot(lot.__dict__)
 
     vwap = _float(snapshot["vwap"])
-    executed_price = _float(executed["executed_price"])
-    savings_bps = int(((vwap - executed_price) / max(vwap, 1e-9)) * 10000)
+    savings_bps = (
+        int(((vwap - executed_price) / max(vwap, 1e-9)) * 10000)
+        if executed_price > 0
+        else None
+    )
 
     row = {
         "execution_id": execution_id,
         "mode": "single_asset",
         "asset": pair,
         "target_amount_usd": round(amount, 2),
-        "executed_amount_usd": round(_float(executed["executed_notional_usd"]), 2),
-        "executed_price": round(executed_price, 8),
+        "executed_amount_usd": round(executed_notional, 2) if executed_notional > 0 else None,
+        "executed_price": round(executed_price, 8) if executed_price > 0 else None,
         "vwap_at_execution": round(vwap, 8),
         "savings_vs_naive_bps": savings_bps,
         "strategy": strategy,
         "window_start": window.start.isoformat(),
         "window_end": window.end.isoformat(),
-        "executed_at": _now().isoformat(),
+        "executed_at": _now().isoformat() if executed_notional > 0 else None,
         "status": executed["status"],
         "kraken_order_id": executed["order_id"],
         "metadata": {"decision": decision.__dict__, "session_id": session_id},
@@ -773,17 +999,31 @@ def _scanner_market_rows(
         closes = [float(v) for v in snap.get("candles", [])]
         rsi = compute_rsi(closes, period=14)
         price_change_24h = ((snap["price"] - snap["vwap"]) / max(snap["vwap"], 1e-9)) * 100.0
-        price_change_7d = price_change_24h * 2.8
-        volume_ratio = 1.0 + (sum(ord(ch) for ch in pair) % 5)
+        price_7d_ago = _float(snap.get("price_7d_ago"), fallback=_float(snap["price"]))
+        price_change_7d = (
+            ((_float(snap["price"]) - price_7d_ago) / max(price_7d_ago, 1e-9)) * 100.0
+        )
+        avg_volume_30d = _float(snap.get("avg_volume_30d_usd"), fallback=0.0)
+        volume_ratio = (
+            _float(snap.get("volume_24h_usd"), fallback=0.0) / max(avg_volume_30d, 1e-9)
+            if avg_volume_30d > 0
+            else 1.0
+        )
+        daily_closes = [float(v) for v in snap.get("daily_closes", [])]
+        if len(daily_closes) >= 20:
+            sma20 = sum(daily_closes[-20:]) / 20.0
+        else:
+            sma20 = _float(snap["price"])
         rows.append(
             {
                 "asset": pair,
+                "price": float(snap.get("price", 0.0)),
                 "volume_24h_usd": float(snap.get("volume_24h_usd", 0.0)),
                 "volume_ratio": float(volume_ratio),
                 "rsi_14": float(rsi),
                 "price_change_24h_pct": float(price_change_24h),
                 "price_change_7d_pct": float(price_change_7d),
-                "ma50_breakout": bool(price_change_24h > 2.0),
+                "sma20": float(sma20),
                 "new_listing_days": int(snap.get("new_listing_days", 999)),
                 "accumulation_score": float(min(max((50.0 - abs(rsi - 50.0)) / 50.0, 0.0), 1.0)),
             }
@@ -802,7 +1042,16 @@ def _scanner_mode(
     session_id: str,
 ) -> dict[str, Any]:
     scanner_cfg = config.get("scanner", {})
-    base_allocations = scanner_cfg.get("base_allocations", {"XBTUSD": 0.6, "ETHUSD": 0.25, "SOLUSD": 0.15})
+    portfolio_allocations = config.get("portfolio", {}).get("allocations", {})
+    if scanner_cfg.get("base_allocations"):
+        base_allocations = scanner_cfg["base_allocations"]
+        allocation_source = "scanner.base_allocations"
+    elif portfolio_allocations:
+        base_allocations = portfolio_allocations
+        allocation_source = "portfolio.allocations"
+    else:
+        base_allocations = {"XBTUSD": 0.6, "ETHUSD": 0.25, "SOLUSD": 0.15}
+        allocation_source = "scanner.defaults"
 
     scanner = OpportunityScanner(
         min_24h_volume_usd=_float(scanner_cfg.get("min_24h_volume_usd", 1_000_000)),
@@ -815,6 +1064,7 @@ def _scanner_mode(
     signal_payloads = [signal.to_dict() for signal in signals]
 
     require_approval = bool(scanner_cfg.get("require_approval", True))
+    approval_action = str(scanner_cfg.get("approval_action", "pending")).strip().lower()
     effective_allocations = PortfolioManager.normalize_allocations(base_allocations)
 
     if (not require_approval) and signal_payloads:
@@ -827,9 +1077,53 @@ def _scanner_mode(
             effective_allocations[target_asset] = effective_allocations.get(target_asset, 0.0) + reallocation
             effective_allocations = PortfolioManager.normalize_allocations(effective_allocations)
 
+    approval_state = "auto_applied"
+    if require_approval and signal_payloads:
+        if approval_action == "approve":
+            top = signal_payloads[0]
+            reallocation = _float(top["reallocation_pct"], 0.0) / 100.0
+            source_asset = max(effective_allocations.items(), key=lambda row: row[1])[0]
+            target_asset = str(top["asset"])
+            if source_asset != target_asset and reallocation > 0:
+                effective_allocations[source_asset] = max(effective_allocations[source_asset] - reallocation, 0.0)
+                effective_allocations[target_asset] = effective_allocations.get(target_asset, 0.0) + reallocation
+                effective_allocations = PortfolioManager.normalize_allocations(effective_allocations)
+            approval_state = "approved"
+        elif approval_action == "modify":
+            top = signal_payloads[0]
+            override_pct = _float(
+                scanner_cfg.get("approval_reallocation_pct"),
+                fallback=_float(top["reallocation_pct"], 0.0),
+            )
+            reallocation = min(max(override_pct, 0.0), _float(scanner_cfg.get("max_reallocation_pct", 20.0))) / 100.0
+            source_asset = max(effective_allocations.items(), key=lambda row: row[1])[0]
+            target_asset = str(top["asset"])
+            if source_asset != target_asset and reallocation > 0:
+                effective_allocations[source_asset] = max(effective_allocations[source_asset] - reallocation, 0.0)
+                effective_allocations[target_asset] = effective_allocations.get(target_asset, 0.0) + reallocation
+                effective_allocations = PortfolioManager.normalize_allocations(effective_allocations)
+            approval_state = "modified"
+        elif approval_action == "skip":
+            approval_state = "skipped"
+        else:
+            approval_state = "pending_approval"
+
     for payload in signal_payloads:
-        store.persist_scanner_signal(payload, user_action="pending_approval" if require_approval else "auto_applied")
+        store.persist_scanner_signal(payload, user_action=approval_state)
         logger.log_scanner(payload)
+
+    if require_approval and approval_state == "pending_approval":
+        return {
+            "mode": "scanner",
+            "status": "approval_required",
+            "signals": signal_payloads,
+            "require_approval": require_approval,
+            "approval_action": approval_action,
+            "effective_allocations": effective_allocations,
+            "allocation_source": allocation_source,
+            "executions": [],
+            "plan": {"mode": "pending_approval", "orders": [], "drift": [], "max_abs_drift_pct": 0.0},
+        }
 
     total_amount = _float(config["inputs"].get("dca_amount_usd", 0.0))
     pm = PortfolioManager()
@@ -849,6 +1143,7 @@ def _scanner_mode(
     )
     progress = window_progress(window, _now())
 
+    approved_orders: list[tuple[dict[str, Any], dict[str, Any], Any]] = []
     for order in plan["orders"]:
         pair = str(order["asset"])
         notional = _float(order["notional_usd"])
@@ -861,14 +1156,25 @@ def _scanner_mode(
         )
         if not decision.should_execute:
             continue
+        approved_orders.append((order, snap, decision))
 
+    if approved_orders:
+        enforce_plan_daily_budget(
+            config=config,
+            planned_notional_usd=sum(_float(order["notional_usd"]) for order, _, _ in approved_orders),
+        )
+
+    for order, snap, decision in approved_orders:
+        pair = str(order["asset"])
+        notional = _float(order["notional_usd"])
         apply_risk_policy(
             config=config,
             notional_usd=notional,
             expected_slippage_bps=_estimated_slippage_bps(snap),
+            check_daily_cap=False,
         )
 
-        executed = execute_order(
+        executed = execute_decision_order(
             client=client,
             dry_run=dry_run,
             pair=pair,
@@ -876,31 +1182,41 @@ def _scanner_mode(
             decision_order_type=decision.order_type,
             limit_price=decision.limit_price,
             execution_price_hint=_float(snap["price"]),
+            decision_slices=decision.slices,
         )
 
         execution_id = str(uuid.uuid4())
-        lot = tracker.add_buy_lot(
-            asset=pair,
-            quantity=_float(executed["executed_quantity"]),
-            cost_basis_usd=_float(executed["executed_notional_usd"]),
-            execution_id=execution_id,
-            source="scanner_dca",
-        )
-        store.persist_cost_basis_lot(lot.__dict__)
+        executed_notional = _float(executed.get("executed_notional_usd", 0.0))
+        executed_price = _float(executed.get("executed_price", 0.0))
+        if executed_notional > 0:
+            lot = tracker.add_buy_lot(
+                asset=pair,
+                quantity=_float(executed["executed_quantity"]),
+                cost_basis_usd=executed_notional,
+                execution_id=execution_id,
+                source="scanner_dca",
+            )
+            store.persist_cost_basis_lot(lot.__dict__)
 
+        vwap = _float(snap["vwap"])
+        savings_bps = (
+            int(((vwap - executed_price) / max(vwap, 1e-9)) * 10000)
+            if executed_price > 0
+            else None
+        )
         row = {
             "execution_id": execution_id,
             "mode": "scanner",
             "asset": pair,
             "target_amount_usd": round(notional, 2),
-            "executed_amount_usd": round(_float(executed["executed_notional_usd"]), 2),
-            "executed_price": round(_float(executed["executed_price"]), 8),
-            "vwap_at_execution": round(_float(snap["vwap"]), 8),
-            "savings_vs_naive_bps": int(((_float(snap["vwap"]) - _float(executed["executed_price"])) / max(_float(snap["vwap"]), 1e-9)) * 10000),
+            "executed_amount_usd": round(executed_notional, 2) if executed_notional > 0 else None,
+            "executed_price": round(executed_price, 8) if executed_price > 0 else None,
+            "vwap_at_execution": round(vwap, 8),
+            "savings_vs_naive_bps": savings_bps,
             "strategy": strategy,
             "window_start": window.start.isoformat(),
             "window_end": window.end.isoformat(),
-            "executed_at": _now().isoformat(),
+            "executed_at": _now().isoformat() if executed_notional > 0 else None,
             "status": executed["status"],
             "kraken_order_id": executed["order_id"],
             "metadata": {
@@ -918,7 +1234,9 @@ def _scanner_mode(
         "status": "ok",
         "signals": signal_payloads,
         "require_approval": require_approval,
+        "approval_action": approval_action,
         "effective_allocations": effective_allocations,
+        "allocation_source": allocation_source,
         "executions": execution_rows,
         "plan": plan,
     }
@@ -936,20 +1254,28 @@ def _enforce_live_guards(dry_run: bool, allow_live: bool, accept_risk_disclaimer
 
 
 def _collect_order_ids(payload: dict[str, Any]) -> list[str]:
+    def _extract_ids(block: dict[str, Any]) -> list[str]:
+        ids: list[str] = []
+        raw_id = str(block.get("order_id", "")).strip()
+        if raw_id and raw_id != "dry-run":
+            ids.extend([chunk for chunk in raw_id.split(",") if chunk and chunk != "dry-run"])
+        for child in block.get("child_orders", []):
+            if isinstance(child, dict):
+                child_id = str(child.get("order_id", "")).strip()
+                if child_id and child_id != "dry-run":
+                    ids.extend([chunk for chunk in child_id.split(",") if chunk and chunk != "dry-run"])
+        return ids
+
     order_ids: list[str] = []
     execution = payload.get("execution")
     if isinstance(execution, dict):
-        order_id = str(execution.get("order_id", "")).strip()
-        if order_id and order_id != "dry-run":
-            order_ids.append(order_id)
+        order_ids.extend(_extract_ids(execution))
     for row in payload.get("executions", []):
         if not isinstance(row, dict):
             continue
         block = row.get("execution") or row.get("executed") or {}
         if isinstance(block, dict):
-            order_id = str(block.get("order_id", "")).strip()
-            if order_id and order_id != "dry-run":
-                order_ids.append(order_id)
+            order_ids.extend(_extract_ids(block))
     return order_ids
 
 
@@ -960,7 +1286,16 @@ def run_once(
     accept_risk_disclaimer: bool,
 ) -> dict[str, Any]:
     load_dotenv()
-    show_disclaimer_if_first_run()
+    try:
+        show_disclaimer_if_first_run(accept_risk_disclaimer=accept_risk_disclaimer)
+    except PolicyError as exc:
+        return {
+            "status": "error",
+            "skill": SKILL_NAME,
+            "error_code": "policy_violation",
+            "message": str(exc),
+            "disclaimer": IMPORTANT_DISCLAIMER,
+        }
 
     config = load_config(config_path)
     errors = validate_config(config)

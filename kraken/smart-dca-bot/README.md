@@ -13,7 +13,7 @@ Trading is local-direct to Kraken REST API.
 2. `cp config.example.json config.json`
 3. `pip install -r requirements.txt`
 4. Dry run:
-   - `python scripts/agent.py --config config.json`
+   - `python scripts/agent.py --config config.json --accept-risk-disclaimer`
 5. Live run:
    - set `"dry_run": false` in `config.json`
    - `python scripts/agent.py --config config.json --allow-live --accept-risk-disclaimer`
@@ -23,10 +23,12 @@ Trading is local-direct to Kraken REST API.
 - Five execution strategies for Mode 1: `vwap_optimized`, `momentum_dip`, `spread_optimized`, `time_weighted`, `simple`
 - Portfolio DCA with allocation drift detection and thresholded re-weighting
 - Opportunity scanner with signals:
+  - `oversold_rsi`
   - `volume_spike`
   - `mean_reversion`
-  - `momentum_breakout`
   - `new_listing`
+  - scanner allocations default to `portfolio.allocations` unless `scanner.base_allocations` is provided
+  - scanner approval actions: `pending` (default), `approve`, `modify`, `skip`
 - Seren API key auto-registration (`SEREN_API_KEY`) on first run
 - Optional SerenDB persistence (`SERENDB_URL`)
 - JSONL audit logs in `logs/`
@@ -41,7 +43,7 @@ Trading is local-direct to Kraken REST API.
 Start local trigger server:
 
 ```bash
-python scripts/run_agent_server.py --config config.json --port 8787 --webhook-secret "$DCA_WEBHOOK_SECRET"
+python scripts/run_agent_server.py --config config.json --host 127.0.0.1 --port 8787 --webhook-secret "$DCA_WEBHOOK_SECRET"
 ```
 
 Create seren-cron jobs:

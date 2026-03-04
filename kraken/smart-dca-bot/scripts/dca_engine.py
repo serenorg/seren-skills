@@ -4,7 +4,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
+
+try:
+    from datetime import UTC
+except ImportError:  # pragma: no cover
+    from datetime import timezone
+
+    UTC = timezone.utc
 
 
 @dataclass

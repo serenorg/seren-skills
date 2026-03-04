@@ -26,17 +26,13 @@
     "min_24h_volume_usd": 1000000,
     "scan_interval_hours": 6,
     "signals": [
+      "oversold_rsi",
       "volume_spike",
       "mean_reversion",
-      "momentum_breakout",
       "new_listing"
     ],
     "require_approval": true,
-    "base_allocations": {
-      "XBTUSD": 0.6,
-      "ETHUSD": 0.25,
-      "SOLUSD": 0.15
-    }
+    "approval_action": "pending"
   },
   "risk": {
     "max_daily_spend_usd": 500.0,

@@ -29,10 +29,12 @@ All trades are executed locally and directly against Kraken REST APIs.
   - `simple`
 - Mode 2 (`portfolio`) with target allocations and drift detection
 - Mode 3 (`scanner`) with four signal families:
+  - `oversold_rsi`
   - `volume_spike`
   - `mean_reversion`
-  - `momentum_breakout`
   - `new_listing`
+  - scanner allocations default to `portfolio.allocations` unless `scanner.base_allocations` is provided
+  - scanner approval actions: `pending` (default), `approve`, `modify`, `skip`
 - Direct Kraken API integration (no Seren trading proxy)
 - First-run Seren API key auto-registration (`SEREN_API_KEY`)
 - Optional SerenDB schema + persistence (`SERENDB_URL`)
@@ -50,7 +52,7 @@ All trades are executed locally and directly against Kraken REST APIs.
 4. Initialize SerenDB schema (optional, requires `SERENDB_URL`):
    - `python scripts/setup_serendb.py`
 5. Run dry mode:
-   - `python scripts/agent.py --config config.json`
+   - `python scripts/agent.py --config config.json --accept-risk-disclaimer`
 6. Run live mode (explicit opt-in only):
    - set `"dry_run": false` in `config.json`
    - `python scripts/agent.py --config config.json --allow-live --accept-risk-disclaimer`

@@ -1,13 +1,5 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-
-SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
 from portfolio_manager import PortfolioManager
 
 
@@ -39,3 +31,13 @@ def test_build_plan_rebalances_underweight_assets() -> None:
     assert plan["orders"]
     xbt_order = [row for row in plan["orders"] if row["asset"] == "XBTUSD"]
     assert xbt_order
+
+
+def test_current_allocations_reads_kraken_prefixed_balances() -> None:
+    pm = PortfolioManager()
+    allocations = pm.current_allocations(
+        balances={"XXBT": 1.0, "XETH": 10.0},
+        prices={"XBTUSD": 10_000.0, "ETHUSD": 2_000.0},
+        targets={"XBTUSD": 0.5, "ETHUSD": 0.5},
+    )
+    assert allocations["ETHUSD"] > allocations["XBTUSD"]
