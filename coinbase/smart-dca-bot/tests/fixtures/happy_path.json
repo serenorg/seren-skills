@@ -1,0 +1,17 @@
+{
+  "status": "ok",
+  "skill": "smart-dca-bot",
+  "workflow_step_count": 7,
+  "dry_run": true,
+  "inputs": {
+    "amount_usd": 50,
+    "asset": "BTC",
+    "auto_execute": false,
+    "execution_window_hours": 24,
+    "frequency": "weekly",
+    "mode": "single_asset",
+    "opportunity_allocation_pct": 20,
+    "risk_level": "moderate"
+  },
+  "connectors": {}
+}
