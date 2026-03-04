@@ -1,1 +1,5 @@
-# Stdlib-only scaffold runtime.
+requests>=2.31.0
+python-dotenv>=1.0.0
+python-dateutil>=2.8.2
+numpy>=1.24.0
+psycopg[binary]>=3.2.0

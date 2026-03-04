@@ -1,13 +1,16 @@
 ---
 name: smart-dca-bot
-description: "AI-assisted dollar-cost averaging bot for Kraken with single-asset, portfolio, and opportunity-scanner modes plus strict local-execution safety controls."
+description: "AI-optimized Kraken DCA bot with single-asset, portfolio, and scanner modes using local direct execution and strict safety controls."
 ---
 
 # Kraken Smart DCA Bot
 
-AI-assisted dollar-cost averaging (DCA) bot for Kraken with three execution modes: single asset, portfolio rebalancing, and opportunity scanner.
+AI-assisted dollar-cost averaging (DCA) bot for Kraken with three modes:
+- `single_asset`
+- `portfolio`
+- `scanner`
 
-This skill is built for local execution. Trades are signed and submitted directly from your device to Kraken.
+All trades are executed locally and directly against Kraken REST APIs.
 
 ## When to Use
 
@@ -18,52 +21,88 @@ This skill is built for local execution. Trades are signed and submitted directl
 
 ## What This Skill Provides
 
-- Mode 1 (`single_asset`): recurring buys for one asset with timing score gates.
-- Mode 2 (`portfolio`): split each cycle across target allocations.
-- Mode 3 (`opportunity_scanner`): keep a base DCA leg and optionally shift capped allocation to opportunistic assets.
-- Dry-run-first execution with explicit live-trade guardrails.
-- Local run logging to `state/dca_runs.db`.
-
-## Local Execution Model
-
-- Kraken trading credentials remain local (`KRAKEN_API_KEY`, `KRAKEN_API_SECRET`).
-- Trade execution path is intended to be direct to Kraken APIs.
-- No custody of user funds by Seren.
-- `SEREN_API_KEY` is for skill-level integration and telemetry, not order custody.
-
-## Safety Controls
-
-- `dry_run` defaults to `true`.
-- Live trading requires both:
-  - config with `dry_run: false`
-  - CLI flags `--allow-live --accept-risk-disclaimer`
-- Policy caps included in the generated config model:
-  - max daily spend: `$500`
-  - max notional: `$5,000`
-  - max slippage: `150` bps
-- Opportunity mode caps shift allocation to 40% max per cycle.
+- Mode 1 (`single_asset`) with 5 strategies:
+  - `vwap_optimized`
+  - `momentum_dip`
+  - `spread_optimized`
+  - `time_weighted`
+  - `simple`
+- Mode 2 (`portfolio`) with target allocations and drift detection
+- Mode 3 (`scanner`) with four signal families:
+  - `volume_spike`
+  - `mean_reversion`
+  - `momentum_breakout`
+  - `new_listing`
+- Direct Kraken API integration (no Seren trading proxy)
+- First-run Seren API key auto-registration (`SEREN_API_KEY`)
+- Optional SerenDB schema + persistence (`SERENDB_URL`)
+- JSONL audit logging (`logs/*.jsonl`)
+- Cost-basis lot tracking (`state/cost_basis_lots.json`)
+- Dry-run mode by default
+- Cron/webhook support (`run_agent_server.py`, `setup_cron.py`)
 
 ## Setup
 
-1. Copy `.env.example` to `.env` and set Kraken + Seren keys.
+1. Copy `.env.example` to `.env` and fill credentials.
 2. Copy `config.example.json` to `config.json`.
-3. Install dependencies: `pip install -r requirements.txt`.
-4. Run dry mode:
+3. Install dependencies:
+   - `pip install -r requirements.txt`
+4. Initialize SerenDB schema (optional, requires `SERENDB_URL`):
+   - `python scripts/setup_serendb.py`
+5. Run dry mode:
    - `python scripts/agent.py --config config.json`
-5. Run live mode (explicit opt-in):
+6. Run live mode (explicit opt-in only):
    - set `"dry_run": false` in `config.json`
    - `python scripts/agent.py --config config.json --allow-live --accept-risk-disclaimer`
 
 ## Workflow Summary
 
-1. `validate_request` uses `transform.validate_request`
-2. `collect_market_snapshot` uses `transform.collect_market_snapshot`
-3. `score_entry_window` uses `transform.score_entry_window`
-4. `enforce_risk_controls` uses `transform.enforce_risk_controls`
-5. `create_execution_plan` uses `transform.create_dca_execution_plan`
-6. `execute_or_schedule` uses `transform.execute_or_schedule`
-7. `summarize_cycle` uses `transform.summarize_cycle`
+1. Validate config and policy caps.
+2. Ensure `SEREN_API_KEY` (validate existing or auto-register on first run).
+3. Build DCA window and market snapshot(s).
+4. Select strategy decision and risk-gate execution.
+5. Execute locally to Kraken (or simulate in dry-run).
+6. Persist runs, snapshots, scanner signals, and cost-basis lots.
+7. Emit JSONL audit events.
 
-## Disclaimer
+## Required Disclaimers
 
-Crypto trading involves substantial risk and can result in total loss. This skill is an automation tool and not financial, legal, or tax advice. Past performance does not guarantee future results. You are responsible for exchange compliance, configuration choices, and all executed trades.
+IMPORTANT DISCLAIMERS — READ BEFORE USING
+
+1. NOT FINANCIAL ADVICE: This skill is a software tool, not a financial advisor.
+   It does not provide investment, financial, tax, or legal advice. All trading
+   decisions are made by you. Consult a licensed financial advisor before investing.
+
+2. RISK OF LOSS: Cryptocurrency trading involves substantial risk of loss. Prices
+   can decline significantly. You may lose some or all of your invested capital.
+   Only invest money you can afford to lose entirely.
+
+3. NO GUARANTEES: Past performance does not guarantee future results. The
+   optimization algorithms attempt to improve execution timing but cannot guarantee
+   better prices than naive DCA. Market conditions may render optimizations
+   ineffective.
+
+4. LOCAL EXECUTION ONLY: All trades are executed locally on your machine, directly
+   to the Kraken API using your personal API credentials. No trades flow through
+   Seren Gateway or any third-party intermediary. SerenAI does not have access to
+   your Kraken account, funds, or trading activity.
+
+5. API KEY SECURITY: Your Kraken API keys are stored locally in your .env file and
+   are never transmitted to SerenAI servers. You are responsible for securing your
+   API credentials. Use IP whitelisting and withdrawal restrictions on Kraken.
+
+6. EXCHANGE RISK: This skill depends on Kraken's API availability. Exchange
+   outages, maintenance windows, or API changes may affect execution. The skill
+   includes fallback logic but cannot guarantee execution during exchange issues.
+
+7. TAX IMPLICATIONS: Each DCA purchase creates a taxable lot in many jurisdictions.
+   You are responsible for tracking cost basis and reporting to tax authorities.
+   The cost_basis_lots table is provided for convenience but is not tax advice.
+
+8. REGULATORY COMPLIANCE: Cryptocurrency regulations vary by jurisdiction. You are
+   responsible for ensuring compliance with all applicable laws and regulations in
+   your jurisdiction.
+
+9. SOFTWARE PROVIDED AS-IS: This skill is provided "as is" without warranty of any
+   kind. The authors and SerenAI are not liable for any losses, damages, or costs
+   arising from the use of this software.

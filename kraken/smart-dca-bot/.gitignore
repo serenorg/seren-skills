@@ -1,5 +1,8 @@
 .env
 config.json
-state/
 __pycache__/
 *.pyc
+state/*
+!state/.gitkeep
+logs/*
+!logs/.gitkeep

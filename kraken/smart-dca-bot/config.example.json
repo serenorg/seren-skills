@@ -1,15 +1,62 @@
 {
-  "connectors": [],
   "dry_run": true,
   "inputs": {
-    "amount_usd": 50,
-    "asset": "BTC",
-    "auto_execute": false,
-    "execution_window_hours": 24,
-    "frequency": "weekly",
     "mode": "single_asset",
-    "opportunity_allocation_pct": 20,
+    "asset": "XBTUSD",
+    "dca_amount_usd": 50.0,
+    "total_dca_amount_usd": 200.0,
+    "frequency": "weekly",
+    "dca_window_hours": 24,
+    "execution_strategy": "vwap_optimized",
     "risk_level": "moderate"
   },
-  "skill": "smart-dca-bot"
+  "portfolio": {
+    "allocations": {
+      "XBTUSD": 0.6,
+      "ETHUSD": 0.25,
+      "SOLUSD": 0.1,
+      "DOTUSD": 0.05
+    },
+    "rebalance_threshold_pct": 5.0,
+    "sell_to_rebalance": false
+  },
+  "scanner": {
+    "enabled": true,
+    "max_reallocation_pct": 20.0,
+    "min_24h_volume_usd": 1000000,
+    "scan_interval_hours": 6,
+    "signals": [
+      "volume_spike",
+      "mean_reversion",
+      "momentum_breakout",
+      "new_listing"
+    ],
+    "require_approval": true,
+    "base_allocations": {
+      "XBTUSD": 0.6,
+      "ETHUSD": 0.25,
+      "SOLUSD": 0.15
+    }
+  },
+  "risk": {
+    "max_daily_spend_usd": 500.0,
+    "max_notional_usd": 5000.0,
+    "max_slippage_bps": 150
+  },
+  "runtime": {
+    "mock_market_data": true,
+    "market_scan_assets": [
+      "XBTUSD",
+      "ETHUSD",
+      "SOLUSD",
+      "DOTUSD",
+      "AVAXUSD"
+    ],
+    "loop_interval_seconds": 60,
+    "cancel_pending_on_shutdown": true
+  },
+  "seren": {
+    "auto_register_key": true,
+    "api_base_url": "https://api.serendb.com"
+  }
 }
