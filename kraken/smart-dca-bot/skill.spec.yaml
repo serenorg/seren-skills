@@ -1,0 +1,133 @@
+skill: smart-dca-bot
+description: AI-assisted dollar-cost averaging bot for Kraken with single-asset, portfolio, and opportunity-scanner modes plus strict local-execution safety controls.
+triggers:
+  - run smart dca on kraken
+  - optimize recurring crypto buys
+  - rebalance dca portfolio allocations
+  - scan for dca opportunities on kraken
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  mode:
+    type: string
+    description: DCA mode selector.
+    default: single_asset
+    enum:
+      - single_asset
+      - portfolio
+      - opportunity_scanner
+  asset:
+    type: string
+    description: Primary asset symbol for single-asset mode.
+    default: BTC
+  amount_usd:
+    type: number
+    description: Notional spend per DCA cycle in USD.
+    min: 1
+    default: 50
+  frequency:
+    type: string
+    description: DCA cadence.
+    default: weekly
+    enum:
+      - daily
+      - weekly
+      - biweekly
+      - monthly
+  execution_window_hours:
+    type: integer
+    description: Max hours to optimize execution timing before forced execution.
+    min: 1
+    max: 72
+    default: 24
+  opportunity_allocation_pct:
+    type: number
+    description: Maximum percent of cycle notional that may shift into opportunities.
+    min: 0
+    max: 40
+    default: 20
+  risk_level:
+    type: string
+    description: Risk profile for opportunity scanner.
+    default: moderate
+    enum:
+      - conservative
+      - moderate
+      - aggressive
+  auto_execute:
+    type: boolean
+    description: If true, execute opportunity shifts without explicit confirmation.
+    default: false
+secrets:
+  - KRAKEN_API_KEY
+  - KRAKEN_API_SECRET
+  - SEREN_API_KEY
+state:
+  dca_runs:
+    kind: sqlite
+    file: state/dca_runs.db
+policies:
+  dry_run_default: true
+  idempotency_required: true
+  max_daily_spend_usd: 500
+  max_notional_usd: 5000
+  max_slippage_bps: 150
+workflow:
+  steps:
+    - id: validate_request
+      use: transform.validate_request
+      with:
+        mode: "{mode}"
+        amount_usd: "{amount_usd}"
+        frequency: "{frequency}"
+        execution_window_hours: "{execution_window_hours}"
+    - id: collect_market_snapshot
+      use: transform.collect_market_snapshot
+      with:
+        asset: "{asset}"
+        mode: "{mode}"
+    - id: score_entry_window
+      use: transform.score_entry_window
+      with:
+        from_step: collect_market_snapshot
+        risk_level: "{risk_level}"
+    - id: enforce_risk_controls
+      use: transform.enforce_risk_controls
+      with:
+        from_step: score_entry_window
+        opportunity_allocation_pct: "{opportunity_allocation_pct}"
+        auto_execute: "{auto_execute}"
+    - id: create_execution_plan
+      use: transform.create_dca_execution_plan
+      with:
+        from_step: enforce_risk_controls
+        asset: "{asset}"
+        amount_usd: "{amount_usd}"
+        mode: "{mode}"
+    - id: execute_or_schedule
+      use: transform.execute_or_schedule
+      with:
+        from_step: create_execution_plan
+        frequency: "{frequency}"
+        execution_window_hours: "{execution_window_hours}"
+    - id: summarize_cycle
+      use: transform.summarize_cycle
+      with:
+        from_step: execute_or_schedule
+tests:
+  quick:
+    - validates_mode_enum
+    - validates_risk_caps
+    - validates_positive_notional
+  smoke:
+    - single_asset_cycle_builds_plan
+    - portfolio_cycle_generates_rebalance_actions
+    - opportunity_scanner_respects_allocation_cap
+publish:
+  org: kraken
+  slug: smart-dca-bot
+metadata:
+  category: trading
+  execution_model: local_direct_kraken_api
+  safety_posture: dry_run_default_with_explicit_live_enable

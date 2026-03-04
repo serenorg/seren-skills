@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "skill": "smart-dca-bot",
+  "dry_run": true,
+  "blocked_action": "live_execution"
+}
