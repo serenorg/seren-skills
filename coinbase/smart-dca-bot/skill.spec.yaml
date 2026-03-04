@@ -1,0 +1,88 @@
+skill: smart-dca-bot
+description: AI-optimized Coinbase DCA bot with local direct trade execution and three operating modes.
+triggers:
+  - run smart dca on coinbase
+  - optimize recurring crypto buys
+  - rebalance dca portfolio allocations
+  - scan for dca opportunities on coinbase
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  mode:
+    type: string
+    default: single_asset
+    enum: [single_asset, portfolio, opportunity_scanner]
+  asset:
+    type: string
+    default: BTC-USD
+  dca_amount_usd:
+    type: number
+    default: 50
+  total_dca_amount_usd:
+    type: number
+    default: 200
+  frequency:
+    type: string
+    default: weekly
+    enum: [daily, weekly, biweekly, monthly]
+  dca_window_hours:
+    type: integer
+    default: 24
+  execution_strategy:
+    type: string
+    default: vwap_optimized
+    enum: [vwap_optimized, momentum_dip, spread_optimized, time_weighted, simple]
+  risk_level:
+    type: string
+    default: moderate
+    enum: [conservative, moderate, aggressive]
+secrets:
+  - COINBASE_API_KEY
+  - COINBASE_API_SECRET
+  - SEREN_API_KEY
+state:
+  local:
+    sqlite: state/dca_runs.db
+    lots: state/cost_basis_lots.json
+    logs: logs/*.jsonl
+policies:
+  dry_run_default: true
+  max_daily_spend_usd: 500
+  max_notional_usd: 5000
+  max_slippage_bps: 150
+  local_execution_only: true
+workflow:
+  steps:
+    - id: ensure_seren_api_key
+      use: script.seren_api_client.ensure_api_key
+    - id: collect_market_snapshot
+      use: script.coinbase_client.get_ticker|get_depth|get_ohlc
+    - id: optimize_entry
+      use: script.optimizer.decide_execution
+    - id: portfolio_drift
+      use: script.portfolio_manager.build_dca_buy_plan
+    - id: scanner_signals
+      use: script.scanner.scan
+    - id: execute_orders
+      use: script.coinbase_client.add_order
+    - id: track_cost_basis
+      use: script.position_tracker.add_buy_lot
+    - id: persist_audit
+      use: script.logger.AuditLogger
+    - id: persist_serendb
+      use: script.serendb_store.SerenDBStore
+tests:
+  unit:
+    - tests/test_optimizer.py
+    - tests/test_portfolio_manager.py
+    - tests/test_scanner.py
+  smoke:
+    - tests/test_smoke.py
+publish:
+  org: coinbase
+  slug: smart-dca-bot
+metadata:
+  category: trading
+  execution_model: local_direct_coinbase_api
+  safety_posture: dry_run_default_with_explicit_live_enable
