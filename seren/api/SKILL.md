@@ -302,6 +302,33 @@ curl -sS -X POST "https://api.serendb.com/publishers/<slug>/<path>" \
   -d '{}'
 ```
 
+### Discovery workflows
+
+**Find a publisher for a specific task:**
+
+```bash
+curl -sS "https://api.serendb.com/publishers/suggest?query=scrape+website" \
+  -H "Authorization: Bearer $SEREN_API_KEY"
+```
+
+Returns ranked suggestions with `match_reason` and `score`.
+
+**Search publishers by name or keyword:**
+
+```bash
+curl -sS "https://api.serendb.com/publishers?search=firecrawl" \
+  -H "Authorization: Bearer $SEREN_API_KEY"
+```
+
+**Filter by category:**
+
+```bash
+curl -sS "https://api.serendb.com/publishers?category=database" \
+  -H "Authorization: Bearer $SEREN_API_KEY"
+```
+
+Categories: `database`, `integration`, `compute`.
+
 ### MCP access via publisher proxy
 
 - List tools: `GET /publishers/{slug}/_tools`
