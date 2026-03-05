@@ -1,0 +1,7 @@
+# Local runtime artifacts
+output/
+
+# Python env/cache
+.venv/
+scripts/__pycache__/
+scripts/*.pyc

@@ -1,0 +1,3 @@
+asset,quantity,disposed_at,proceeds_usd,cost_basis_usd,gain_loss_usd,broker
+BTC,0.10,2025-03-20T15:30:00Z,6500.00,3985.00,2515.00,TaxSoftwareImport
+ETH,1.50,2025-05-10T09:00:00Z,4200.00,3300.00,900.00,TaxSoftwareImport

@@ -1,0 +1,3 @@
+# No external dependencies required.
+# SerenDB operations use the Seren MCP server (mcp__seren-mcp__run_sql).
+# Python standard library only.
