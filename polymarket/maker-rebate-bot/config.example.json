@@ -12,8 +12,8 @@
     "min_liquidity_usd": 100000,
     "markets_fetch_limit": 300,
     "min_history_points": 480,
-    "gamma_markets_url": "https://gamma-api.polymarket.com/markets",
-    "clob_history_url": "https://clob.polymarket.com/prices-history"
+    "gamma_markets_url": "https://api.serendb.com/publishers/polymarket-data/markets",
+    "clob_history_url": "https://api.serendb.com/publishers/polymarket-data/prices-history"
   },
   "strategy": {
     "bankroll_usd": 1000,

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +24,7 @@ DISCLAIMER = (
     "and liquidity can vanish. Backtests are hypothetical and do not guarantee future "
     "performance. Use dry-run first and only trade with risk capital."
 )
+SEREN_POLYMARKET_PUBLISHER_PREFIX = "https://api.serendb.com/publishers/polymarket-data/"
 
 
 @dataclass(frozen=True)
@@ -56,8 +58,8 @@ class BacktestParams:
     max_markets: int = 80
     history_interval: str = "max"
     history_fidelity_minutes: int = 60
-    gamma_markets_url: str = "https://gamma-api.polymarket.com/markets"
-    clob_history_url: str = "https://clob.polymarket.com/prices-history"
+    gamma_markets_url: str = "https://api.serendb.com/publishers/polymarket-data/markets"
+    clob_history_url: str = "https://api.serendb.com/publishers/polymarket-data/prices-history"
     history_fetch_workers: int = 4
 
 
@@ -172,8 +174,8 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         max_markets=max(0, _safe_int(raw.get("max_markets"), 80)),
         history_interval=_safe_str(raw.get("history_interval"), "max"),
         history_fidelity_minutes=max(1, _safe_int(raw.get("history_fidelity_minutes"), 60)),
-        gamma_markets_url=_safe_str(raw.get("gamma_markets_url"), "https://gamma-api.polymarket.com/markets"),
-        clob_history_url=_safe_str(raw.get("clob_history_url"), "https://clob.polymarket.com/prices-history"),
+        gamma_markets_url=_safe_str(raw.get("gamma_markets_url"), "https://api.serendb.com/publishers/polymarket-data/markets"),
+        clob_history_url=_safe_str(raw.get("clob_history_url"), "https://api.serendb.com/publishers/polymarket-data/prices-history"),
         history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 4)),
     )
 
@@ -236,11 +238,20 @@ def _parse_iso_ts(value: Any) -> int | None:
 
 
 def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
+    if not url.startswith(SEREN_POLYMARKET_PUBLISHER_PREFIX):
+        raise ValueError(
+            "policy_violation: backtest data source must use Seren Polymarket publisher "
+            f"({SEREN_POLYMARKET_PUBLISHER_PREFIX}); got {url}"
+        )
+    api_key = os.getenv("SEREN_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("missing_seren_api_key: set SEREN_API_KEY to query Seren publishers.")
     req = Request(
         url,
         headers={
             "User-Agent": "liquidity-paired-basis-maker/1.1",
             "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
         },
     )
     with urlopen(req, timeout=timeout) as resp:

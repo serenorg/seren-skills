@@ -1,9 +1,9 @@
 ---
-name: paired-market-basis-maker
+name: high-throughput-paired-basis-maker
 description: "Run a paired-market basis strategy on Polymarket with mandatory backtest-first gating before trade intents."
 ---
 
-# Paired Market Basis Maker
+# High-Throughput Paired Basis Maker
 
 ## When to Use
 
@@ -45,7 +45,7 @@ Live execution requires both:
 ## Quick Start
 
 ```bash
-cd polymarket/paired-market-basis-maker
+cd polymarket/high-throughput-paired-basis-maker
 cp .env.example .env
 cp config.example.json config.json
 python3 scripts/agent.py --config config.json

@@ -18,7 +18,7 @@ description: "Run a liquidity-filtered paired-market basis strategy on Polymarke
 
 ## Workflow Summary
 
-1. `load_backtest_pairs` pulls live market histories from Polymarket (Gamma + CLOB), applies a liquidity-filtered universe cap, builds pairs, and timestamp-aligns each pair.
+1. `load_backtest_pairs` pulls live market histories from the Seren Polymarket Publisher (Gamma + CLOB proxied), applies a liquidity-filtered universe cap, builds pairs, and timestamp-aligns each pair.
 2. `simulate_basis_reversion` evaluates entry/exit behavior on basis widening and convergence.
 3. `summarize_backtest` reports total return, annualized return, Sharpe-like score, max drawdown, hit rate, trade-rate, and pair-level contributions.
 4. `sample_gate` fails backtest if `events < backtest.min_events` (default `200`).

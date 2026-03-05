@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ from statistics import pstdev
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+SEREN_POLYMARKET_PUBLISHER_PREFIX = "https://api.serendb.com/publishers/polymarket-data/"
 
 
 @dataclass(frozen=True)
@@ -43,8 +46,8 @@ class BacktestParams:
     min_liquidity_usd: float = 100000.0
     markets_fetch_limit: int = 300
     min_history_points: int = 480
-    gamma_markets_url: str = "https://gamma-api.polymarket.com/markets"
-    clob_history_url: str = "https://clob.polymarket.com/prices-history"
+    gamma_markets_url: str = "https://api.serendb.com/publishers/polymarket-data/markets"
+    clob_history_url: str = "https://api.serendb.com/publishers/polymarket-data/prices-history"
 
 
 def parse_args() -> argparse.Namespace:
@@ -165,11 +168,11 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         min_history_points=max(10, _safe_int(backtest.get("min_history_points"), 480)),
         gamma_markets_url=_safe_str(
             backtest.get("gamma_markets_url"),
-            "https://gamma-api.polymarket.com/markets",
+            "https://api.serendb.com/publishers/polymarket-data/markets",
         ),
         clob_history_url=_safe_str(
             backtest.get("clob_history_url"),
-            "https://clob.polymarket.com/prices-history",
+            "https://api.serendb.com/publishers/polymarket-data/prices-history",
         ),
     )
 
@@ -225,11 +228,20 @@ def _json_to_list(value: Any) -> list[Any]:
 
 
 def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
+    if not url.startswith(SEREN_POLYMARKET_PUBLISHER_PREFIX):
+        raise ValueError(
+            "policy_violation: backtest data source must use Seren Polymarket publisher "
+            f"({SEREN_POLYMARKET_PUBLISHER_PREFIX}); got {url}"
+        )
+    api_key = os.getenv("SEREN_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("missing_seren_api_key: set SEREN_API_KEY to query Seren publishers.")
     request = Request(
         url,
         headers={
             "User-Agent": "seren-maker-rebate-bot/1.0",
             "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
         },
     )
     with urlopen(request, timeout=timeout) as response:
