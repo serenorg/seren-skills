@@ -1,0 +1,8 @@
+{
+  "status": "ok",
+  "skill": "paired-market-basis-maker",
+  "workflow_step_count": 2,
+  "dry_run": true,
+  "inputs": {},
+  "connectors": {}
+}

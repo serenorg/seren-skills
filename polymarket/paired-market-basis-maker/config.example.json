@@ -1,0 +1,137 @@
+{
+  "skill": "paired-market-basis-maker",
+  "execution": {
+    "dry_run": true,
+    "live_mode": false,
+    "require_positive_backtest": true
+  },
+  "backtest": {
+    "days": 270,
+    "days_range": {
+      "min": 90,
+      "max": 540
+    },
+    "participation_rate": 0.26,
+    "min_history_points": 10
+  },
+  "strategy": {
+    "bankroll_usd": 1300,
+    "pairs_max": 6,
+    "min_seconds_to_resolution": 7200,
+    "min_edge_bps": 2.0,
+    "maker_rebate_bps": 2.3,
+    "expected_unwind_cost_bps": 1.5,
+    "adverse_selection_bps": 1.1,
+    "basis_entry_bps": 35,
+    "basis_exit_bps": 10,
+    "expected_convergence_ratio": 0.35,
+    "base_pair_notional_usd": 28,
+    "max_notional_per_pair_usd": 140,
+    "max_total_notional_usd": 560,
+    "max_leg_notional_usd": 220
+  },
+  "state": {
+    "leg_exposure": {
+      "US-RECESSION-2026": 40,
+      "US-GDP-CONTRACTION-2026": -34
+    }
+  },
+  "markets": [
+    {
+      "market_id": "US-RECESSION-2026",
+      "pair_market_id": "US-GDP-CONTRACTION-2026",
+      "mid_price": 0.44,
+      "pair_mid_price": 0.39,
+      "seconds_to_resolution": 345600,
+      "basis_volatility_bps": 88
+    },
+    {
+      "market_id": "US-CPI-HOTTER-THAN-4",
+      "pair_market_id": "US-INFLATION-STICKY-4",
+      "mid_price": 0.36,
+      "pair_mid_price": 0.355,
+      "seconds_to_resolution": 259200,
+      "basis_volatility_bps": 41
+    },
+    {
+      "market_id": "FED-CUT-BEFORE-JULY",
+      "pair_market_id": "FED-HOLD-THROUGH-JULY",
+      "mid_price": 0.52,
+      "pair_mid_price": 0.47,
+      "seconds_to_resolution": 432000,
+      "basis_volatility_bps": 77
+    }
+  ],
+  "backtest_markets": [
+    {
+      "market_id": "US-RECESSION-2026",
+      "pair_market_id": "US-GDP-CONTRACTION-2026",
+      "question": "Paired macro recession probability basis",
+      "end_ts": 1799000000,
+      "rebate_bps": 2.3,
+      "history": [
+        { "t": 1760500000, "p": 0.4300 },
+        { "t": 1760536000, "p": 0.4295 },
+        { "t": 1760572000, "p": 0.4289 },
+        { "t": 1760608000, "p": 0.4280 },
+        { "t": 1760644000, "p": 0.4272 },
+        { "t": 1760680000, "p": 0.4265 },
+        { "t": 1760716000, "p": 0.4258 },
+        { "t": 1760752000, "p": 0.4250 },
+        { "t": 1760788000, "p": 0.4245 },
+        { "t": 1760824000, "p": 0.4239 },
+        { "t": 1760860000, "p": 0.4234 },
+        { "t": 1760896000, "p": 0.4230 }
+      ],
+      "pair_history": [
+        { "t": 1760500000, "p": 0.4230 },
+        { "t": 1760536000, "p": 0.4230 },
+        { "t": 1760572000, "p": 0.4228 },
+        { "t": 1760608000, "p": 0.4226 },
+        { "t": 1760644000, "p": 0.4224 },
+        { "t": 1760680000, "p": 0.4222 },
+        { "t": 1760716000, "p": 0.4220 },
+        { "t": 1760752000, "p": 0.4219 },
+        { "t": 1760788000, "p": 0.4218 },
+        { "t": 1760824000, "p": 0.4217 },
+        { "t": 1760860000, "p": 0.4216 },
+        { "t": 1760896000, "p": 0.4215 }
+      ]
+    },
+    {
+      "market_id": "FED-CUT-BEFORE-JULY",
+      "pair_market_id": "FED-HOLD-THROUGH-JULY",
+      "question": "Paired Fed policy basis",
+      "end_ts": 1799500000,
+      "rebate_bps": 2.5,
+      "history": [
+        { "t": 1760500000, "p": 0.5400 },
+        { "t": 1760536000, "p": 0.5388 },
+        { "t": 1760572000, "p": 0.5376 },
+        { "t": 1760608000, "p": 0.5364 },
+        { "t": 1760644000, "p": 0.5353 },
+        { "t": 1760680000, "p": 0.5342 },
+        { "t": 1760716000, "p": 0.5332 },
+        { "t": 1760752000, "p": 0.5324 },
+        { "t": 1760788000, "p": 0.5317 },
+        { "t": 1760824000, "p": 0.5310 },
+        { "t": 1760860000, "p": 0.5304 },
+        { "t": 1760896000, "p": 0.5299 }
+      ],
+      "pair_history": [
+        { "t": 1760500000, "p": 0.5310 },
+        { "t": 1760536000, "p": 0.5309 },
+        { "t": 1760572000, "p": 0.5307 },
+        { "t": 1760608000, "p": 0.5306 },
+        { "t": 1760644000, "p": 0.5305 },
+        { "t": 1760680000, "p": 0.5304 },
+        { "t": 1760716000, "p": 0.5304 },
+        { "t": 1760752000, "p": 0.5303 },
+        { "t": 1760788000, "p": 0.5302 },
+        { "t": 1760824000, "p": 0.5301 },
+        { "t": 1760860000, "p": 0.5300 },
+        { "t": 1760896000, "p": 0.5299 }
+      ]
+    }
+  ]
+}

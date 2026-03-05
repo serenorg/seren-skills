@@ -1,0 +1,7 @@
+{
+  "status": "error",
+  "skill": "paired-market-basis-maker",
+  "error_code": "policy_violation",
+  "policy": "max_notional_usd",
+  "message": "Requested notional exceeds configured cap."
+}
