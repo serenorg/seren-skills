@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolution-decay maker scaffold for Polymarket binary markets."""
+"""Liquidity-filtered paired-market basis maker for Polymarket binary markets."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,54 +19,50 @@ from urllib.request import Request, urlopen
 
 
 DISCLAIMER = (
-    "This strategy can lose money. Backtests are hypothetical, include model "
-    "assumptions, and do not guarantee future performance. Use dry-run first, "
-    "size conservatively, and only trade with risk capital."
+    "This strategy can lose money. Pair relationships can break, basis can widen, "
+    "and liquidity can vanish. Backtests are hypothetical and do not guarantee future "
+    "performance. Use dry-run first and only trade with risk capital."
 )
 
 
 @dataclass(frozen=True)
 class StrategyParams:
     bankroll_usd: float = 500.0
-    markets_max: int = 8
-    min_seconds_to_resolution: int = 45 * 60
+    pairs_max: int = 6
+    min_seconds_to_resolution: int = 2 * 60 * 60
     min_edge_bps: float = 2.0
-    maker_rebate_bps: float = 2.5
-    expected_unwind_cost_bps: float = 1.2
+    maker_rebate_bps: float = 2.3
+    expected_unwind_cost_bps: float = 1.5
     adverse_selection_bps: float = 1.1
-    min_spread_bps: float = 18.0
-    max_spread_bps: float = 140.0
-    volatility_spread_multiplier: float = 0.35
-    decay_alpha_bps: float = 8.0
-    decay_horizon_seconds: int = 7 * 24 * 60 * 60
-    base_order_notional_usd: float = 54.0
-    max_notional_per_market_usd: float = 250.0
+    basis_entry_bps: float = 35.0
+    basis_exit_bps: float = 10.0
+    expected_convergence_ratio: float = 0.35
+    base_pair_notional_usd: float = 65.0
+    max_notional_per_pair_usd: float = 240.0
     max_total_notional_usd: float = 500.0
-    max_position_notional_usd: float = 220.0
-    inventory_skew_strength_bps: float = 20.0
+    max_leg_notional_usd: float = 250.0
 
 
 @dataclass(frozen=True)
 class BacktestParams:
-    days: int = 180
-    days_min: int = 60
+    days: int = 90
+    days_min: int = 90
     days_max: int = 365
-    participation_rate: float = 0.62
-    volatility_window_points: int = 16
+    participation_rate: float = 0.64
     min_history_points: int = 72
-    min_events: int = 200
+    min_events: int = 120
     min_liquidity_usd: float = 5000.0
-    markets_fetch_page_size: int = 500
-    max_markets: int = 0
+    markets_fetch_page_size: int = 120
+    max_markets: int = 80
     history_interval: str = "max"
     history_fidelity_minutes: int = 60
     gamma_markets_url: str = "https://gamma-api.polymarket.com/markets"
     clob_history_url: str = "https://clob.polymarket.com/prices-history"
-    history_fetch_workers: int = 12
+    history_fetch_workers: int = 4
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run resolution-decay maker strategy.")
+    parser = argparse.ArgumentParser(description="Run liquidity-filtered paired-market basis maker strategy.")
     parser.add_argument("--config", default="config.json", help="Config file path.")
     parser.add_argument(
         "--run-type",
@@ -73,27 +70,14 @@ def parse_args() -> argparse.Namespace:
         choices=("backtest", "trade"),
         help="Run backtest only, or run trade mode after backtest gating.",
     )
-    parser.add_argument(
-        "--markets-file",
-        default=None,
-        help="Optional path to market snapshot JSON for trade mode.",
-    )
-    parser.add_argument(
-        "--backtest-days",
-        type=int,
-        default=None,
-        help="Override backtest lookback window in days.",
-    )
+    parser.add_argument("--markets-file", default=None, help="Optional trade market JSON file.")
+    parser.add_argument("--backtest-days", type=int, default=None, help="Override backtest days.")
     parser.add_argument(
         "--allow-negative-backtest",
         action="store_true",
         help="Allow trade mode even if backtest return is <= 0.",
     )
-    parser.add_argument(
-        "--yes-live",
-        action="store_true",
-        help="Explicit live execution confirmation flag.",
-    )
+    parser.add_argument("--yes-live", action="store_true", help="Explicit live execution confirmation.")
     return parser.parse_args()
 
 
@@ -150,76 +134,56 @@ def to_strategy_params(config: dict[str, Any]) -> StrategyParams:
     raw = config.get("strategy", {})
     return StrategyParams(
         bankroll_usd=max(1.0, _safe_float(raw.get("bankroll_usd"), 500.0)),
-        markets_max=max(1, _safe_int(raw.get("markets_max"), 8)),
-        min_seconds_to_resolution=max(
-            60,
-            _safe_int(raw.get("min_seconds_to_resolution"), 45 * 60),
-        ),
+        pairs_max=max(1, _safe_int(raw.get("pairs_max"), 6)),
+        min_seconds_to_resolution=max(60, _safe_int(raw.get("min_seconds_to_resolution"), 7200)),
         min_edge_bps=_safe_float(raw.get("min_edge_bps"), 2.0),
-        maker_rebate_bps=_safe_float(raw.get("maker_rebate_bps"), 2.5),
-        expected_unwind_cost_bps=_safe_float(raw.get("expected_unwind_cost_bps"), 1.2),
+        maker_rebate_bps=_safe_float(raw.get("maker_rebate_bps"), 2.3),
+        expected_unwind_cost_bps=_safe_float(raw.get("expected_unwind_cost_bps"), 1.5),
         adverse_selection_bps=_safe_float(raw.get("adverse_selection_bps"), 1.1),
-        min_spread_bps=_safe_float(raw.get("min_spread_bps"), 18.0),
-        max_spread_bps=_safe_float(raw.get("max_spread_bps"), 140.0),
-        volatility_spread_multiplier=_safe_float(
-            raw.get("volatility_spread_multiplier"),
-            0.35,
-        ),
-        decay_alpha_bps=_safe_float(raw.get("decay_alpha_bps"), 8.0),
-        decay_horizon_seconds=max(
-            3600,
-            _safe_int(raw.get("decay_horizon_seconds"), 7 * 24 * 60 * 60),
-        ),
-        base_order_notional_usd=max(1.0, _safe_float(raw.get("base_order_notional_usd"), 54.0)),
-        max_notional_per_market_usd=max(
-            1.0,
-            _safe_float(raw.get("max_notional_per_market_usd"), 250.0),
-        ),
-        max_total_notional_usd=max(
-            1.0,
-            _safe_float(raw.get("max_total_notional_usd"), 500.0),
-        ),
-        max_position_notional_usd=max(
-            1.0,
-            _safe_float(raw.get("max_position_notional_usd"), 220.0),
-        ),
-        inventory_skew_strength_bps=max(
+        basis_entry_bps=max(1.0, _safe_float(raw.get("basis_entry_bps"), 35.0)),
+        basis_exit_bps=max(0.0, _safe_float(raw.get("basis_exit_bps"), 10.0)),
+        expected_convergence_ratio=clamp(
+            _safe_float(raw.get("expected_convergence_ratio"), 0.35),
             0.0,
-            _safe_float(raw.get("inventory_skew_strength_bps"), 20.0),
+            1.0,
         ),
+        base_pair_notional_usd=max(1.0, _safe_float(raw.get("base_pair_notional_usd"), 65.0)),
+        max_notional_per_pair_usd=max(1.0, _safe_float(raw.get("max_notional_per_pair_usd"), 240.0)),
+        max_total_notional_usd=max(1.0, _safe_float(raw.get("max_total_notional_usd"), 500.0)),
+        max_leg_notional_usd=max(1.0, _safe_float(raw.get("max_leg_notional_usd"), 250.0)),
     )
 
 
 def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
     raw = config.get("backtest", {})
     range_raw = raw.get("days_range", {}) if isinstance(raw.get("days_range"), dict) else {}
-    days_min = max(7, _safe_int(range_raw.get("min"), 60))
+    days_min = max(7, _safe_int(range_raw.get("min"), 90))
     days_max = max(days_min, _safe_int(range_raw.get("max"), 365))
-    days = clamp(_safe_int(raw.get("days"), 180), days_min, days_max)
+    days = int(clamp(_safe_int(raw.get("days"), 90), days_min, days_max))
     return BacktestParams(
-        days=int(days),
+        days=days,
         days_min=days_min,
         days_max=days_max,
-        participation_rate=clamp(_safe_float(raw.get("participation_rate"), 0.62), 0.0, 1.0),
-        volatility_window_points=max(4, _safe_int(raw.get("volatility_window_points"), 16)),
+        participation_rate=clamp(_safe_float(raw.get("participation_rate"), 0.64), 0.0, 1.0),
         min_history_points=max(8, _safe_int(raw.get("min_history_points"), 72)),
-        min_events=max(1, _safe_int(raw.get("min_events"), 200)),
+        min_events=max(1, _safe_int(raw.get("min_events"), 120)),
         min_liquidity_usd=max(0.0, _safe_float(raw.get("min_liquidity_usd"), 5000.0)),
-        markets_fetch_page_size=max(25, _safe_int(raw.get("markets_fetch_page_size"), 500)),
-        max_markets=max(0, _safe_int(raw.get("max_markets"), 0)),
+        markets_fetch_page_size=max(25, _safe_int(raw.get("markets_fetch_page_size"), 120)),
+        max_markets=max(0, _safe_int(raw.get("max_markets"), 80)),
         history_interval=_safe_str(raw.get("history_interval"), "max"),
         history_fidelity_minutes=max(1, _safe_int(raw.get("history_fidelity_minutes"), 60)),
         gamma_markets_url=_safe_str(raw.get("gamma_markets_url"), "https://gamma-api.polymarket.com/markets"),
         clob_history_url=_safe_str(raw.get("clob_history_url"), "https://clob.polymarket.com/prices-history"),
-        history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 12)),
+        history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 4)),
     )
 
 
 def _normalize_history(raw_history: Any, start_ts: int, end_ts: int) -> list[tuple[int, float]]:
     points: list[tuple[int, float]] = []
-    seen: set[int] = set()
     fallback_points: list[tuple[int, float]] = []
+    seen: set[int] = set()
     fallback_seen: set[int] = set()
+
     if not isinstance(raw_history, list):
         return points
 
@@ -232,9 +196,7 @@ def _normalize_history(raw_history: Any, start_ts: int, end_ts: int) -> list[tup
         elif isinstance(item, list | tuple) and len(item) >= 2:
             t = _safe_int(item[0], -1)
             p = _safe_float(item[1], -1.0)
-        if t in fallback_seen:
-            continue
-        if not (0.0 <= p <= 1.0):
+        if t in fallback_seen or not (0.0 <= p <= 1.0):
             continue
         fallback_seen.add(t)
         fallback_points.append((t, p))
@@ -277,7 +239,7 @@ def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
     req = Request(
         url,
         headers={
-            "User-Agent": "resolution-decay-maker/1.1",
+            "User-Agent": "liquidity-paired-basis-maker/1.1",
             "Accept": "application/json",
         },
     )
@@ -285,9 +247,22 @@ def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _fetch_live_backtest_markets(p: StrategyParams, bt: BacktestParams, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
+def _align_histories(primary: list[tuple[int, float]], secondary: list[tuple[int, float]]) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
+    index_secondary = {t: p for t, p in secondary}
+    aligned_primary: list[tuple[int, float]] = []
+    aligned_secondary: list[tuple[int, float]] = []
+    for t, p1 in primary:
+        p2 = index_secondary.get(t)
+        if p2 is None:
+            continue
+        aligned_primary.append((t, p1))
+        aligned_secondary.append((t, p2))
+    return aligned_primary, aligned_secondary
+
+
+def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
     offset = 0
-    all_candidates: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     seen_token_ids: set[str] = set()
 
     pages = 0
@@ -313,7 +288,6 @@ def _fetch_live_backtest_markets(p: StrategyParams, bt: BacktestParams, start_ts
         for market in raw:
             if not isinstance(market, dict):
                 continue
-
             liquidity = _safe_float(market.get("liquidity"), 0.0)
             if liquidity < bt.min_liquidity_usd:
                 continue
@@ -330,12 +304,22 @@ def _fetch_live_backtest_markets(p: StrategyParams, bt: BacktestParams, start_ts
                 continue
             seen_token_ids.add(token_id)
 
+            events = _json_to_list(market.get("events"))
+            event_id = ""
+            if events and isinstance(events[0], dict):
+                event_id = _safe_str(events[0].get("id"), "")
+            if not event_id:
+                event_id = _safe_str(market.get("seriesSlug"), "")
+            if not event_id:
+                event_id = _safe_str(market.get("category"), "misc")
+
             market_id = _safe_str(market.get("id"), token_id)
-            all_candidates.append(
+            candidates.append(
                 {
                     "market_id": market_id,
                     "question": _safe_str(market.get("question"), market_id),
                     "token_id": token_id,
+                    "event_id": event_id,
                     "end_ts": end_market,
                     "rebate_bps": _safe_float(market.get("rebate_bps"), p.maker_rebate_bps),
                     "volume24hr": _safe_float(market.get("volume24hr"), 0.0),
@@ -349,7 +333,7 @@ def _fetch_live_backtest_markets(p: StrategyParams, bt: BacktestParams, start_ts
         if len(raw) < bt.markets_fetch_page_size:
             break
 
-    candidates = all_candidates[: bt.max_markets] if bt.max_markets > 0 else all_candidates
+    candidates_with_cap = candidates[: bt.max_markets] if bt.max_markets > 0 else candidates
 
     def _fetch_candidate_history(candidate: dict[str, Any]) -> dict[str, Any] | None:
         history_query = urlencode(
@@ -372,29 +356,77 @@ def _fetch_live_backtest_markets(p: StrategyParams, bt: BacktestParams, start_ts
         )
         if len(history) < bt.min_history_points:
             return None
-        return {
-            "market_id": candidate["market_id"],
-            "question": candidate["question"],
-            "end_ts": candidate["end_ts"],
-            "rebate_bps": candidate["rebate_bps"],
-            "history": history,
-            "volume24hr": candidate["volume24hr"],
-            "source": "live-api",
-        }
+        return {**candidate, "history": history}
 
-    selected: list[dict[str, Any]] = []
+    with_history: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max(1, bt.history_fetch_workers)) as executor:
-        futures = [executor.submit(_fetch_candidate_history, candidate) for candidate in candidates]
+        futures = [executor.submit(_fetch_candidate_history, candidate) for candidate in candidates_with_cap]
         for future in as_completed(futures):
             row = future.result()
             if row:
-                selected.append(row)
+                with_history.append(row)
 
-    selected.sort(key=lambda row: _safe_float(row.get("volume24hr"), 0.0), reverse=True)
-    for row in selected:
-        row.pop("volume24hr", None)
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in with_history:
+        grouped[_safe_str(row.get("event_id"), "misc")].append(row)
 
-    return selected
+    pairs: list[dict[str, Any]] = []
+    for event_id, group in grouped.items():
+        if len(group) < 2:
+            continue
+        group_sorted = sorted(group, key=lambda row: _safe_float(row.get("volume24hr"), 0.0), reverse=True)
+        for i in range(len(group_sorted) - 1):
+            primary = group_sorted[i]
+            secondary = group_sorted[i + 1]
+            h1, h2 = _align_histories(primary["history"], secondary["history"])
+            if len(h1) < bt.min_history_points:
+                continue
+            pair_id = _safe_str(secondary.get("market_id"), "unknown")
+            market_id = _safe_str(primary.get("market_id"), "unknown")
+            pairs.append(
+                {
+                    "market_id": market_id,
+                    "pair_market_id": pair_id,
+                    "question": _safe_str(primary.get("question"), market_id),
+                    "pair_question": _safe_str(secondary.get("question"), pair_id),
+                    "event_id": event_id,
+                    "end_ts": min(_safe_int(primary.get("end_ts"), end_ts + 86400), _safe_int(secondary.get("end_ts"), end_ts + 86400)),
+                    "rebate_bps": (_safe_float(primary.get("rebate_bps"), p.maker_rebate_bps) + _safe_float(secondary.get("rebate_bps"), p.maker_rebate_bps)) / 2.0,
+                    "history": h1,
+                    "pair_history": h2,
+                    "source": "live-api",
+                }
+            )
+
+    if pairs:
+        return pairs
+
+    # Fallback when event-level metadata is sparse: pair adjacent markets by liquidity.
+    fallback_sorted = sorted(with_history, key=lambda row: _safe_float(row.get("volume24hr"), 0.0), reverse=True)
+    for i in range(0, len(fallback_sorted) - 1, 2):
+        primary = fallback_sorted[i]
+        secondary = fallback_sorted[i + 1]
+        h1, h2 = _align_histories(primary["history"], secondary["history"])
+        if len(h1) < bt.min_history_points:
+            continue
+        pair_id = _safe_str(secondary.get("market_id"), "unknown")
+        market_id = _safe_str(primary.get("market_id"), "unknown")
+        pairs.append(
+            {
+                "market_id": market_id,
+                "pair_market_id": pair_id,
+                "question": _safe_str(primary.get("question"), market_id),
+                "pair_question": _safe_str(secondary.get("question"), pair_id),
+                "event_id": "fallback",
+                "end_ts": min(_safe_int(primary.get("end_ts"), end_ts + 86400), _safe_int(secondary.get("end_ts"), end_ts + 86400)),
+                "rebate_bps": (_safe_float(primary.get("rebate_bps"), p.maker_rebate_bps) + _safe_float(secondary.get("rebate_bps"), p.maker_rebate_bps)) / 2.0,
+                "history": h1,
+                "pair_history": h2,
+                "source": "live-api-fallback",
+            }
+        )
+
+    return pairs
 
 
 def _load_backtest_markets(
@@ -403,8 +435,7 @@ def _load_backtest_markets(
     start_ts: int,
     end_ts: int,
 ) -> tuple[list[dict[str, Any]], str]:
-    markets = _fetch_live_backtest_markets(p=p, bt=bt, start_ts=start_ts, end_ts=end_ts)
-    return markets, "live-api"
+    return _fetch_live_backtest_pairs(p=p, bt=bt, start_ts=start_ts, end_ts=end_ts), "live-api"
 
 
 def _max_drawdown_stats(equity_curve: list[float]) -> tuple[float, float]:
@@ -439,84 +470,66 @@ def _sharpe_like_score(event_pnls: list[float], bankroll_usd: float, days: int) 
     return (mean / stdev) * math.sqrt(events_per_year)
 
 
-def _spread_bps(volatility_bps: float, ttl_ratio: float, p: StrategyParams) -> float:
-    decay_tightening = (1.0 - ttl_ratio) * 8.0
-    spread = p.min_spread_bps + (volatility_bps * p.volatility_spread_multiplier) - decay_tightening
-    return clamp(spread, p.min_spread_bps, p.max_spread_bps)
-
-
-def _expected_edge_bps(spread_bps: float, ttl_ratio: float, rebate_bps: float, p: StrategyParams) -> float:
-    decay_bonus = p.decay_alpha_bps * (1.0 - ttl_ratio)
-    return (
-        (spread_bps / 2.0)
-        + rebate_bps
-        + decay_bonus
-        - p.expected_unwind_cost_bps
-        - p.adverse_selection_bps
-    )
-
-
-def _simulate_market(market: dict[str, Any], p: StrategyParams, bt: BacktestParams) -> dict[str, Any]:
-    history = market["history"]
-    window = bt.volatility_window_points
-    if len(history) < max(bt.min_history_points, window + 2):
+def _simulate_pair(market: dict[str, Any], p: StrategyParams, bt: BacktestParams) -> dict[str, Any]:
+    primary = market["history"]
+    pair = market["pair_history"]
+    n = min(len(primary), len(pair))
+    if n < bt.min_history_points:
         return {
             "market_id": market["market_id"],
-            "question": market["question"],
-            "quoted_points": 0,
+            "pair_market_id": market["pair_market_id"],
             "considered_points": 0,
+            "traded_points": 0,
             "filled_notional_usd": 0.0,
             "pnl_usd": 0.0,
             "event_pnls": [],
         }
 
-    moves_bps = [abs((history[i][1] - history[i - 1][1]) * 10000.0) for i in range(1, len(history))]
     rebate_bps = _safe_float(market.get("rebate_bps"), p.maker_rebate_bps)
     if rebate_bps <= 0:
         rebate_bps = p.maker_rebate_bps
 
+    basis_series_bps = [(primary[i][1] - pair[i][1]) * 10000.0 for i in range(n)]
     considered = 0
-    quoted = 0
+    traded = 0
     filled_notional = 0.0
     pnl = 0.0
     event_pnls: list[float] = []
 
-    for idx in range(window, len(history) - 1):
-        t, mid = history[idx]
-        _, nxt = history[idx + 1]
-        end_ts = _safe_int(market.get("end_ts"), t + p.decay_horizon_seconds)
-        ttl = max(0, end_ts - t)
-        ttl_ratio = clamp(ttl / p.decay_horizon_seconds, 0.0, 1.0)
+    for i in range(0, n - 1):
+        t = primary[i][0]
+        ttl = max(0, _safe_int(market.get("end_ts"), t + 86400) - t)
         if ttl < p.min_seconds_to_resolution:
             continue
-        if mid <= 0.01 or mid >= 0.99:
+
+        basis_now = basis_series_bps[i]
+        basis_next = basis_series_bps[i + 1]
+        abs_basis_now = abs(basis_now)
+        if abs_basis_now < p.basis_entry_bps:
             continue
 
         considered += 1
-        vol_bps = pstdev(moves_bps[idx - window : idx]) if window > 1 else p.min_spread_bps
-        spread_bps = _spread_bps(vol_bps, ttl_ratio, p)
-        expected_edge = _expected_edge_bps(spread_bps, ttl_ratio, rebate_bps, p)
+        basis_change = abs_basis_now - abs(basis_next)
+        expected_convergence = abs_basis_now * p.expected_convergence_ratio
+        expected_edge = expected_convergence + rebate_bps - p.expected_unwind_cost_bps - p.adverse_selection_bps
         if expected_edge < p.min_edge_bps:
             continue
 
-        quoted += 1
-        half_spread_bps = spread_bps / 2.0
-        next_move_bps = abs((nxt - mid) * 10000.0)
-        touch_ratio = min(1.0, next_move_bps / max(half_spread_bps, 1e-9))
-        participation = bt.participation_rate * (1.0 + ((1.0 - ttl_ratio) * 0.25))
-        event_notional = p.base_order_notional_usd * participation * touch_ratio
-        pickoff_penalty = max(0.0, next_move_bps - half_spread_bps)
-        realized_edge = expected_edge - pickoff_penalty
+        traded += 1
+        fill_intensity = min(1.0, abs_basis_now / max(p.basis_entry_bps * 2.0, 1e-9))
+        event_notional = p.base_pair_notional_usd * bt.participation_rate * fill_intensity
+        realized_edge = basis_change + rebate_bps - p.expected_unwind_cost_bps - p.adverse_selection_bps
         event_pnl = event_notional * realized_edge / 10000.0
+
         filled_notional += event_notional
         pnl += event_pnl
         event_pnls.append(event_pnl)
 
     return {
         "market_id": market["market_id"],
-        "question": market["question"],
-        "quoted_points": quoted,
+        "pair_market_id": market["pair_market_id"],
         "considered_points": considered,
+        "traded_points": traded,
         "filled_notional_usd": round(filled_notional, 4),
         "pnl_usd": round(pnl, 6),
         "event_pnls": event_pnls,
@@ -526,8 +539,8 @@ def _simulate_market(market: dict[str, Any], p: StrategyParams, bt: BacktestPara
 def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str, Any]:
     p = to_strategy_params(config)
     bt = to_backtest_params(config)
-    requested_days = backtest_days if backtest_days is not None else bt.days
-    days = int(clamp(requested_days, bt.days_min, bt.days_max))
+    days = int(clamp(backtest_days if backtest_days is not None else bt.days, bt.days_min, bt.days_max))
+
     end_ts = int(time.time())
     start_ts = end_ts - (days * 24 * 60 * 60)
 
@@ -551,7 +564,7 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
         return {
             "status": "error",
             "error_code": "no_backtest_markets",
-            "message": "No historical backtest markets were available.",
+            "message": "No paired historical markets were available for backtest.",
             "disclaimer": DISCLAIMER,
             "dry_run": True,
         }
@@ -559,23 +572,23 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
     summaries: list[dict[str, Any]] = []
     event_pnls: list[float] = []
     considered = 0
-    quoted = 0
+    traded = 0
     total_notional = 0.0
 
     for market in markets:
-        result = _simulate_market(market, p, bt)
+        result = _simulate_pair(market, p, bt)
         summaries.append(
             {
                 "market_id": result["market_id"],
-                "question": result["question"],
+                "pair_market_id": result["pair_market_id"],
                 "considered_points": result["considered_points"],
-                "quoted_points": result["quoted_points"],
+                "traded_points": result["traded_points"],
                 "filled_notional_usd": result["filled_notional_usd"],
                 "pnl_usd": result["pnl_usd"],
             }
         )
         considered += int(result["considered_points"])
-        quoted += int(result["quoted_points"])
+        traded += int(result["traded_points"])
         total_notional += float(result["filled_notional_usd"])
         event_pnls.extend(result["event_pnls"])
 
@@ -609,7 +622,7 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
             "backtest_summary": {
                 "days": days,
                 "source": source,
-                "markets_loaded": len(markets),
+                "pairs_loaded": len(markets),
                 "events_observed": events,
                 "min_events_required": bt.min_events,
             },
@@ -618,7 +631,7 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
 
     return {
         "status": "ok",
-        "skill": "resolution-decay-maker",
+        "skill": "liquidity-paired-basis-maker",
         "mode": "backtest",
         "dry_run": True,
         "backtest_summary": {
@@ -627,10 +640,10 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
             "start_utc": datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat(),
             "end_utc": datetime.fromtimestamp(end_ts, tz=timezone.utc).isoformat(),
             "source": source,
-            "markets_selected": len(summaries),
+            "pairs_selected": len(summaries),
             "considered_points": considered,
-            "quoted_points": quoted,
-            "quote_rate_pct": round((quoted / considered) * 100.0 if considered else 0.0, 4),
+            "traded_points": traded,
+            "trade_rate_pct": round((traded / considered) * 100.0 if considered else 0.0, 4),
         },
         "results": {
             "starting_bankroll_usd": round(p.bankroll_usd, 2),
@@ -649,7 +662,7 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
             "max_drawdown_pct": round(display_max_drawdown_pct, 4),
             "decision_hint": "consider_trade_mode" if total_pnl > 0 else "paper_only_or_tune",
         },
-        "markets": sorted(summaries, key=lambda row: row["pnl_usd"], reverse=True),
+        "pairs": sorted(summaries, key=lambda row: row["pnl_usd"], reverse=True),
         "disclaimer": DISCLAIMER,
     }
 
@@ -659,71 +672,78 @@ def _load_trade_markets(config: dict[str, Any], markets_file: str | None) -> lis
         payload = load_json(Path(markets_file))
     else:
         payload = config.get("markets", [])
+
     if isinstance(payload, dict):
         rows = payload.get("markets", [])
     elif isinstance(payload, list):
         rows = payload
     else:
         rows = []
+
     return [row for row in rows if isinstance(row, dict)]
 
 
-def _quote_market(
-    market: dict[str, Any],
-    inventory_notional: float,
-    outstanding_notional: float,
-    p: StrategyParams,
-) -> dict[str, Any]:
+def _build_pair_trade(market: dict[str, Any], leg_exposure: dict[str, float], total_notional: float, p: StrategyParams) -> dict[str, Any]:
     market_id = _safe_str(market.get("market_id"), "unknown")
-    mid = _safe_float(market.get("mid_price"), 0.5)
-    if not (0.01 < mid < 0.99):
-        return {"market_id": market_id, "status": "skipped", "reason": "extreme_probability"}
-
+    pair_market_id = _safe_str(market.get("pair_market_id"), f"{market_id}-pair")
+    mid = _safe_float(market.get("mid_price"), -1.0)
+    pair_mid = _safe_float(market.get("pair_mid_price"), -1.0)
     ttl = max(0, _safe_int(market.get("seconds_to_resolution"), 0))
+
     if ttl < p.min_seconds_to_resolution:
         return {"market_id": market_id, "status": "skipped", "reason": "near_resolution"}
+    if not (0.01 < mid < 0.99 and 0.01 < pair_mid < 0.99):
+        return {"market_id": market_id, "status": "skipped", "reason": "invalid_mid_prices"}
 
-    vol_bps = max(0.0, _safe_float(market.get("volatility_bps"), p.min_spread_bps))
-    ttl_ratio = clamp(ttl / p.decay_horizon_seconds, 0.0, 1.0)
-    rebate_bps = _safe_float(market.get("rebate_bps"), p.maker_rebate_bps)
-    spread_bps = _spread_bps(vol_bps, ttl_ratio, p)
-    edge_bps = _expected_edge_bps(spread_bps, ttl_ratio, rebate_bps, p)
+    basis_bps = (mid - pair_mid) * 10000.0
+    abs_basis = abs(basis_bps)
+    if abs_basis < p.basis_entry_bps:
+        return {
+            "market_id": market_id,
+            "status": "skipped",
+            "reason": "basis_below_entry_threshold",
+            "basis_bps": round(basis_bps, 3),
+        }
+
+    expected_convergence_bps = abs_basis * p.expected_convergence_ratio
+    edge_bps = expected_convergence_bps + p.maker_rebate_bps - p.expected_unwind_cost_bps - p.adverse_selection_bps
     if edge_bps < p.min_edge_bps:
         return {
             "market_id": market_id,
             "status": "skipped",
             "reason": "negative_or_thin_edge",
+            "basis_bps": round(basis_bps, 3),
             "edge_bps": round(edge_bps, 3),
         }
 
-    inventory_ratio = clamp(inventory_notional / p.max_position_notional_usd, -1.0, 1.0)
-    skew_bps = -inventory_ratio * p.inventory_skew_strength_bps
-    half_spread_prob = (spread_bps / 2.0) / 10000.0
-    skew_prob = skew_bps / 10000.0
-
-    bid_price = clamp(mid - half_spread_prob + skew_prob, 0.001, 0.999)
-    ask_price = clamp(mid + half_spread_prob + skew_prob, 0.001, 0.999)
-    if bid_price >= ask_price:
-        return {"market_id": market_id, "status": "skipped", "reason": "crossed_quote_after_skew"}
-
-    decay_size_bonus = 1.0 + ((1.0 - ttl_ratio) * 0.25)
-    target_notional = p.base_order_notional_usd * decay_size_bonus
-    remaining_market = max(0.0, p.max_notional_per_market_usd - abs(inventory_notional))
-    remaining_total = max(0.0, p.max_total_notional_usd - max(outstanding_notional, 0.0))
-    quote_notional = min(target_notional, remaining_market, remaining_total)
-
+    target_notional = p.base_pair_notional_usd * min(1.8, abs_basis / p.basis_entry_bps)
+    remaining_total = max(0.0, p.max_total_notional_usd - max(total_notional, 0.0))
+    remaining_pair = max(
+        0.0,
+        p.max_notional_per_pair_usd
+        - max(abs(leg_exposure.get(market_id, 0.0)), abs(leg_exposure.get(pair_market_id, 0.0))),
+    )
+    quote_notional = min(target_notional, remaining_total, remaining_pair)
     if quote_notional <= 0:
         return {"market_id": market_id, "status": "skipped", "reason": "risk_capacity_exhausted"}
 
+    primary_bias = "sell_primary_buy_pair" if basis_bps > 0 else "buy_primary_sell_pair"
+    primary_side = "SELL" if basis_bps > 0 else "BUY"
+    pair_side = "BUY" if basis_bps > 0 else "SELL"
+
     return {
         "market_id": market_id,
+        "pair_market_id": pair_market_id,
         "status": "quoted",
+        "basis_bps": round(basis_bps, 3),
+        "expected_convergence_bps": round(expected_convergence_bps, 3),
         "edge_bps": round(edge_bps, 3),
-        "spread_bps": round(spread_bps, 3),
-        "quote_notional_usd": round(quote_notional, 2),
-        "bid_price": round(bid_price, 4),
-        "ask_price": round(ask_price, 4),
-        "inventory_notional_usd": round(inventory_notional, 2),
+        "trade_bias": primary_bias,
+        "pair_notional_usd": round(quote_notional, 2),
+        "legs": [
+            {"market_id": market_id, "side": primary_side, "notional_usd": round(quote_notional, 2)},
+            {"market_id": pair_market_id, "side": pair_side, "notional_usd": round(quote_notional, 2)},
+        ],
     }
 
 
@@ -750,32 +770,33 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
         }
 
     p = to_strategy_params(config)
+    exposure = config.get("state", {}).get("leg_exposure", {})
+    leg_exposure = {str(k): _safe_float(v, 0.0) for k, v in exposure.items()}
     markets = _load_trade_markets(config, markets_file)
-    inventory_map = config.get("state", {}).get("inventory", {})
-    inventory = {str(k): _safe_float(v, 0.0) for k, v in inventory_map.items()}
 
-    quotes: list[dict[str, Any]] = []
+    trades: list[dict[str, Any]] = []
     skips: list[dict[str, Any]] = []
-    outstanding_notional = 0.0
+    total_notional = 0.0
 
     for market in markets:
-        if len(quotes) >= p.markets_max:
+        if len(trades) >= p.pairs_max:
             break
         market_id = _safe_str(market.get("market_id"), "unknown")
-        proposal = _quote_market(
+        proposal = _build_pair_trade(
             market=market,
-            inventory_notional=inventory.get(market_id, 0.0),
-            outstanding_notional=outstanding_notional,
+            leg_exposure=leg_exposure,
+            total_notional=total_notional,
             p=p,
         )
         if proposal.get("status") == "quoted":
-            outstanding_notional += float(proposal["quote_notional_usd"])
-            quotes.append(proposal)
+            trades.append(proposal)
+            total_notional += float(proposal["pair_notional_usd"])
         else:
             skips.append(
                 {
                     "market_id": market_id,
                     "reason": _safe_str(proposal.get("reason"), "unknown"),
+                    "basis_bps": proposal.get("basis_bps"),
                     "edge_bps": proposal.get("edge_bps"),
                 }
             )
@@ -783,16 +804,18 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
     mode = "live" if live_mode and yes_live and not dry_run else "dry-run"
     return {
         "status": "ok",
-        "skill": "resolution-decay-maker",
+        "skill": "liquidity-paired-basis-maker",
         "mode": mode,
         "dry_run": mode != "live",
         "strategy_summary": {
-            "markets_considered": len(markets),
-            "markets_quoted": len(quotes),
-            "markets_skipped": len(skips),
-            "outstanding_notional_usd": round(outstanding_notional, 2),
+            "pairs_considered": len(markets),
+            "pairs_quoted": len(trades),
+            "pairs_skipped": len(skips),
+            "total_pair_notional_usd": round(total_notional, 2),
+            "basis_entry_bps": p.basis_entry_bps,
+            "basis_exit_bps": p.basis_exit_bps,
         },
-        "quotes": quotes,
+        "pair_trades": trades,
         "skips": skips,
         "disclaimer": DISCLAIMER,
     }
@@ -836,7 +859,7 @@ def main() -> int:
     ok = trade.get("status") == "ok"
     payload = {
         "status": "ok" if ok else "error",
-        "skill": "resolution-decay-maker",
+        "skill": "liquidity-paired-basis-maker",
         "run_type": "trade",
         "backtest": backtest,
         "trade": trade,

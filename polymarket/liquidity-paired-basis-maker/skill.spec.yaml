@@ -1,0 +1,23 @@
+skill: liquidity-paired-basis-maker
+description: Trading-style skill with paper-first defaults and explicit risk caps.
+triggers:
+- evaluate trading opportunities
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+policies:
+  dry_run_default: true
+  idempotency_required: true
+  max_daily_spend_usd: 25
+  max_notional_usd: 500
+workflow:
+  steps:
+  - id: fetch_markets
+    use: transform.fetch
+  - id: rank
+    use: transform.rank
+publish:
+  org: polymarket
+  slug: liquidity-paired-basis-maker
+metadata:
+  category: trading

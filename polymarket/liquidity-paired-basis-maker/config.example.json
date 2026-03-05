@@ -1,0 +1,74 @@
+{
+  "skill": "liquidity-paired-basis-maker",
+  "execution": {
+    "dry_run": true,
+    "live_mode": false,
+    "require_positive_backtest": true
+  },
+  "backtest": {
+    "days": 90,
+    "days_range": {
+      "min": 90,
+      "max": 365
+    },
+    "participation_rate": 0.64,
+    "min_history_points": 72,
+    "min_events": 120,
+    "min_liquidity_usd": 5000,
+    "markets_fetch_page_size": 120,
+    "max_markets": 80,
+    "history_interval": "max",
+    "history_fidelity_minutes": 60,
+    "history_fetch_workers": 4,
+    "gamma_markets_url": "https://gamma-api.polymarket.com/markets",
+    "clob_history_url": "https://clob.polymarket.com/prices-history"
+  },
+  "strategy": {
+    "bankroll_usd": 500,
+    "pairs_max": 6,
+    "min_seconds_to_resolution": 7200,
+    "min_edge_bps": 2.0,
+    "maker_rebate_bps": 2.3,
+    "expected_unwind_cost_bps": 1.5,
+    "adverse_selection_bps": 1.1,
+    "basis_entry_bps": 35,
+    "basis_exit_bps": 10,
+    "expected_convergence_ratio": 0.35,
+    "base_pair_notional_usd": 65,
+    "max_notional_per_pair_usd": 240,
+    "max_total_notional_usd": 500,
+    "max_leg_notional_usd": 250
+  },
+  "state": {
+    "leg_exposure": {
+      "US-RECESSION-2026": 40,
+      "US-GDP-CONTRACTION-2026": -34
+    }
+  },
+  "markets": [
+    {
+      "market_id": "US-RECESSION-2026",
+      "pair_market_id": "US-GDP-CONTRACTION-2026",
+      "mid_price": 0.44,
+      "pair_mid_price": 0.39,
+      "seconds_to_resolution": 345600,
+      "basis_volatility_bps": 88
+    },
+    {
+      "market_id": "US-CPI-HOTTER-THAN-4",
+      "pair_market_id": "US-INFLATION-STICKY-4",
+      "mid_price": 0.36,
+      "pair_mid_price": 0.355,
+      "seconds_to_resolution": 259200,
+      "basis_volatility_bps": 41
+    },
+    {
+      "market_id": "FED-CUT-BEFORE-JULY",
+      "pair_market_id": "FED-HOLD-THROUGH-JULY",
+      "mid_price": 0.52,
+      "pair_mid_price": 0.47,
+      "seconds_to_resolution": 432000,
+      "basis_volatility_bps": 77
+    }
+  ]
+}

@@ -14,7 +14,7 @@ def _read_fixture(name: str) -> dict:
 def test_happy_path_fixture_is_successful() -> None:
     payload = _read_fixture("happy_path.json")
     assert payload["status"] == "ok"
-    assert payload["skill"] == "resolution-decay-maker"
+    assert payload["skill"] == "liquidity-paired-basis-maker"
 
 
 def test_connector_failure_fixture_has_error_code() -> None:
