@@ -1,0 +1,22 @@
+{
+  "status": "ok",
+  "skill": "polymarket-maker-rebate-bot",
+  "mode": "dry-run",
+  "dry_run": true,
+  "strategy_summary": {
+    "bankroll_usd": 1000.0,
+    "markets_considered": 1,
+    "markets_quoted": 0,
+    "markets_skipped": 1,
+    "outstanding_notional_usd": 0.0,
+    "min_edge_bps": 5.0
+  },
+  "quotes": [],
+  "skips": [
+    {
+      "market_id": "MKT-LOW-EDGE",
+      "reason": "negative_or_thin_edge",
+      "edge_bps": 1.5
+    }
+  ]
+}

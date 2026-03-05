@@ -1,0 +1,6 @@
+{
+  "status": "error",
+  "error_code": "live_confirmation_required",
+  "message": "Set --yes-live to enable live execution.",
+  "dry_run": true
+}

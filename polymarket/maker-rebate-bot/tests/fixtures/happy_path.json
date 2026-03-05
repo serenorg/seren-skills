@@ -1,0 +1,39 @@
+{
+  "status": "ok",
+  "skill": "polymarket-maker-rebate-bot",
+  "mode": "dry-run",
+  "dry_run": true,
+  "strategy_summary": {
+    "bankroll_usd": 1000.0,
+    "markets_considered": 2,
+    "markets_quoted": 2,
+    "markets_skipped": 0,
+    "outstanding_notional_usd": 50.0,
+    "min_edge_bps": 2.0
+  },
+  "quotes": [
+    {
+      "market_id": "MKT-001",
+      "status": "quoted",
+      "edge_bps": 11.0,
+      "spread_bps": 48.0,
+      "rebate_bps": 3.0,
+      "quote_notional_usd": 25.0,
+      "bid_price": 0.4788,
+      "ask_price": 0.4836,
+      "inventory_notional_usd": 15.0
+    },
+    {
+      "market_id": "MKT-002",
+      "status": "quoted",
+      "edge_bps": 8.625,
+      "spread_bps": 39.25,
+      "rebate_bps": 2.0,
+      "quote_notional_usd": 25.0,
+      "bid_price": 0.624,
+      "ask_price": 0.6279,
+      "inventory_notional_usd": -8.0
+    }
+  ],
+  "skips": []
+}
