@@ -1,0 +1,8 @@
+{
+  "status": "ok",
+  "skill": "resolution-decay-maker",
+  "workflow_step_count": 2,
+  "dry_run": true,
+  "inputs": {},
+  "connectors": {}
+}

@@ -1,0 +1,8 @@
+{
+  "status": "error",
+  "skill": "resolution-decay-maker",
+  "error_code": "connector_failure",
+  "connector": "unknown_connector",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {}
+}
