@@ -20,7 +20,6 @@ description: "Run a paired-market basis strategy on Polymarket with mandatory ba
 ## Workflow Summary
 
 1. `load_backtest_pairs` pulls live market histories from Polymarket (Gamma + CLOB), builds pairs from the active market universe, and timestamp-aligns each pair.
-2. Optional override: use `--backtest-file` for local paired fixture replay.
 2. `simulate_basis_reversion` evaluates entry/exit behavior on basis widening and convergence.
 3. `summarize_backtest` reports total return, annualized return, Sharpe-like score, max drawdown, hit rate, trade-rate, and pair-level contributions.
 4. `sample_gate` fails backtest if `events < backtest.min_events` (default `200`).

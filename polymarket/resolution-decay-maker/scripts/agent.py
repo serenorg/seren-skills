@@ -61,7 +61,6 @@ class BacktestParams:
     history_fidelity_minutes: int = 60
     gamma_markets_url: str = "https://gamma-api.polymarket.com/markets"
     clob_history_url: str = "https://clob.polymarket.com/prices-history"
-    allow_config_backtest_markets: bool = False
     history_fetch_workers: int = 12
 
 
@@ -78,11 +77,6 @@ def parse_args() -> argparse.Namespace:
         "--markets-file",
         default=None,
         help="Optional path to market snapshot JSON for trade mode.",
-    )
-    parser.add_argument(
-        "--backtest-file",
-        default=None,
-        help="Optional path to historical market JSON for backtest mode.",
     )
     parser.add_argument(
         "--backtest-days",
@@ -217,7 +211,6 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         history_fidelity_minutes=max(1, _safe_int(raw.get("history_fidelity_minutes"), 60)),
         gamma_markets_url=_safe_str(raw.get("gamma_markets_url"), "https://gamma-api.polymarket.com/markets"),
         clob_history_url=_safe_str(raw.get("clob_history_url"), "https://clob.polymarket.com/prices-history"),
-        allow_config_backtest_markets=_safe_bool(raw.get("allow_config_backtest_markets"), False),
         history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 12)),
     )
 
@@ -290,35 +283,6 @@ def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
     )
     with urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
-
-
-def _load_backtest_markets_from_fixture(payload: dict[str, Any] | list[Any], start_ts: int, end_ts: int) -> list[dict[str, Any]]:
-    if isinstance(payload, dict):
-        raw_markets = payload.get("markets", [])
-    elif isinstance(payload, list):
-        raw_markets = payload
-    else:
-        raw_markets = []
-
-    out: list[dict[str, Any]] = []
-    for row in raw_markets:
-        if not isinstance(row, dict):
-            continue
-        history = _normalize_history(row.get("history"), start_ts=start_ts, end_ts=end_ts)
-        if len(history) < 2:
-            continue
-        market_id = _safe_str(row.get("market_id"), "unknown")
-        out.append(
-            {
-                "market_id": market_id,
-                "question": _safe_str(row.get("question"), market_id),
-                "end_ts": _safe_int(row.get("end_ts"), end_ts + 86400),
-                "rebate_bps": _safe_float(row.get("rebate_bps"), 0.0),
-                "history": history,
-                "source": "fixture",
-            }
-        )
-    return out
 
 
 def _fetch_live_backtest_markets(p: StrategyParams, bt: BacktestParams, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
@@ -434,21 +398,11 @@ def _fetch_live_backtest_markets(p: StrategyParams, bt: BacktestParams, start_ts
 
 
 def _load_backtest_markets(
-    config: dict[str, Any],
-    backtest_file: str | None,
     p: StrategyParams,
     bt: BacktestParams,
     start_ts: int,
     end_ts: int,
 ) -> tuple[list[dict[str, Any]], str]:
-    if backtest_file:
-        payload = load_json(Path(backtest_file))
-        return _load_backtest_markets_from_fixture(payload=payload, start_ts=start_ts, end_ts=end_ts), "file"
-
-    if bt.allow_config_backtest_markets:
-        payload = config.get("backtest_markets", [])
-        return _load_backtest_markets_from_fixture(payload=payload, start_ts=start_ts, end_ts=end_ts), "config"
-
     markets = _fetch_live_backtest_markets(p=p, bt=bt, start_ts=start_ts, end_ts=end_ts)
     return markets, "live-api"
 
@@ -569,7 +523,7 @@ def _simulate_market(market: dict[str, Any], p: StrategyParams, bt: BacktestPara
     }
 
 
-def run_backtest(config: dict[str, Any], backtest_file: str | None, backtest_days: int | None) -> dict[str, Any]:
+def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str, Any]:
     p = to_strategy_params(config)
     bt = to_backtest_params(config)
     requested_days = backtest_days if backtest_days is not None else bt.days
@@ -579,8 +533,6 @@ def run_backtest(config: dict[str, Any], backtest_file: str | None, backtest_day
 
     try:
         markets, source = _load_backtest_markets(
-            config=config,
-            backtest_file=backtest_file,
             p=p,
             bt=bt,
             start_ts=start_ts,
@@ -849,7 +801,6 @@ def main() -> int:
 
     backtest = run_backtest(
         config=config,
-        backtest_file=args.backtest_file,
         backtest_days=args.backtest_days,
     )
     if backtest.get("status") != "ok":

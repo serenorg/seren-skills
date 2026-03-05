@@ -19,8 +19,7 @@ description: "Run a Polymarket maker strategy that backtests first and suppresse
 
 ## Workflow Summary
 
-1. `load_backtest_markets` ingests live historical price paths from Polymarket (Gamma + CLOB) across the active market universe by default.
-2. Optional override: use `--backtest-file` for local fixture replay.
+1. `load_backtest_markets` ingests live historical price paths from Polymarket (Gamma + CLOB) across the active market universe.
 2. `simulate_with_shock_guard` applies volatility-based quote logic with shock/cooldown suppression.
 3. `summarize_backtest` reports total return, annualized return, Sharpe-like score, max drawdown, hit rate, quote-rate, and shock-skip counts.
 4. `sample_gate` fails backtest if `events < backtest.min_events` (default `200`).

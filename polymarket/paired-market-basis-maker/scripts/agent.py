@@ -58,7 +58,6 @@ class BacktestParams:
     history_fidelity_minutes: int = 60
     gamma_markets_url: str = "https://gamma-api.polymarket.com/markets"
     clob_history_url: str = "https://clob.polymarket.com/prices-history"
-    allow_config_backtest_markets: bool = False
     history_fetch_workers: int = 12
 
 
@@ -72,7 +71,6 @@ def parse_args() -> argparse.Namespace:
         help="Run backtest only, or run trade mode after backtest gating.",
     )
     parser.add_argument("--markets-file", default=None, help="Optional trade market JSON file.")
-    parser.add_argument("--backtest-file", default=None, help="Optional backtest market JSON file.")
     parser.add_argument("--backtest-days", type=int, default=None, help="Override backtest days.")
     parser.add_argument(
         "--allow-negative-backtest",
@@ -176,7 +174,6 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         history_fidelity_minutes=max(1, _safe_int(raw.get("history_fidelity_minutes"), 60)),
         gamma_markets_url=_safe_str(raw.get("gamma_markets_url"), "https://gamma-api.polymarket.com/markets"),
         clob_history_url=_safe_str(raw.get("clob_history_url"), "https://clob.polymarket.com/prices-history"),
-        allow_config_backtest_markets=_safe_bool(raw.get("allow_config_backtest_markets"), False),
         history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 12)),
     )
 
@@ -261,43 +258,6 @@ def _align_histories(primary: list[tuple[int, float]], secondary: list[tuple[int
         aligned_primary.append((t, p1))
         aligned_secondary.append((t, p2))
     return aligned_primary, aligned_secondary
-
-
-def _load_backtest_pairs_from_fixture(payload: dict[str, Any] | list[Any], start_ts: int, end_ts: int) -> list[dict[str, Any]]:
-
-    if isinstance(payload, dict):
-        rows = payload.get("markets", [])
-    elif isinstance(payload, list):
-        rows = payload
-    else:
-        rows = []
-
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        primary = _normalize_history(row.get("history"), start_ts=start_ts, end_ts=end_ts)
-        pair = _normalize_history(row.get("pair_history"), start_ts=start_ts, end_ts=end_ts)
-        aligned_len = min(len(primary), len(pair))
-        if aligned_len < 2:
-            continue
-        market_id = _safe_str(row.get("market_id"), "unknown")
-        pair_market_id = _safe_str(row.get("pair_market_id"), f"{market_id}-pair")
-        end_market = _safe_int(row.get("end_ts"), end_ts + 86400)
-        out.append(
-            {
-                "market_id": market_id,
-                "pair_market_id": pair_market_id,
-                "question": _safe_str(row.get("question"), market_id),
-                "pair_question": _safe_str(row.get("pair_question"), pair_market_id),
-                "end_ts": end_market,
-                "rebate_bps": _safe_float(row.get("rebate_bps"), 0.0),
-                "history": primary[:aligned_len],
-                "pair_history": pair[:aligned_len],
-                "source": "fixture",
-            }
-        )
-    return out
 
 
 def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
@@ -470,19 +430,11 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
 
 
 def _load_backtest_markets(
-    config: dict[str, Any],
-    backtest_file: str | None,
     p: StrategyParams,
     bt: BacktestParams,
     start_ts: int,
     end_ts: int,
 ) -> tuple[list[dict[str, Any]], str]:
-    if backtest_file:
-        payload = load_json(Path(backtest_file))
-        return _load_backtest_pairs_from_fixture(payload, start_ts=start_ts, end_ts=end_ts), "file"
-    if bt.allow_config_backtest_markets:
-        payload = config.get("backtest_markets", [])
-        return _load_backtest_pairs_from_fixture(payload, start_ts=start_ts, end_ts=end_ts), "config"
     return _fetch_live_backtest_pairs(p=p, bt=bt, start_ts=start_ts, end_ts=end_ts), "live-api"
 
 
@@ -584,7 +536,7 @@ def _simulate_pair(market: dict[str, Any], p: StrategyParams, bt: BacktestParams
     }
 
 
-def run_backtest(config: dict[str, Any], backtest_file: str | None, backtest_days: int | None) -> dict[str, Any]:
+def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str, Any]:
     p = to_strategy_params(config)
     bt = to_backtest_params(config)
     days = int(clamp(backtest_days if backtest_days is not None else bt.days, bt.days_min, bt.days_max))
@@ -594,8 +546,6 @@ def run_backtest(config: dict[str, Any], backtest_file: str | None, backtest_day
 
     try:
         markets, source = _load_backtest_markets(
-            config=config,
-            backtest_file=backtest_file,
             p=p,
             bt=bt,
             start_ts=start_ts,
@@ -874,7 +824,6 @@ def main() -> int:
 
     backtest = run_backtest(
         config=config,
-        backtest_file=args.backtest_file,
         backtest_days=args.backtest_days,
     )
     if backtest.get("status") != "ok":

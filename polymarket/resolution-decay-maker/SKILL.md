@@ -19,8 +19,7 @@ description: "Run a resolution-decay Polymarket maker strategy with mandatory ba
 
 ## Workflow Summary
 
-1. `load_backtest_markets` pulls live historical paths from Polymarket (Gamma + CLOB) across the active market universe by default.
-2. Optional override: use `--backtest-file` for local fixture replay.
+1. `load_backtest_markets` pulls live historical paths from Polymarket (Gamma + CLOB) across the active market universe.
 2. `simulate_resolution_decay` replays fills with decay-aware edge assumptions.
 3. `summarize_backtest` outputs total return, annualized return, Sharpe-like score, max drawdown, hit rate, turnover, and market-level contributions.
 4. `sample_gate` fails backtest if `events < backtest.min_events` (default `200`).
