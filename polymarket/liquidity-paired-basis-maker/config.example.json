@@ -1,25 +1,25 @@
 {
-  "skill": "paired-market-basis-maker",
+  "skill": "liquidity-paired-basis-maker",
   "execution": {
     "dry_run": true,
     "live_mode": false,
     "require_positive_backtest": true
   },
   "backtest": {
-    "days": 270,
+    "days": 90,
     "days_range": {
       "min": 90,
-      "max": 540
+      "max": 365
     },
     "participation_rate": 0.64,
     "min_history_points": 72,
-    "min_events": 200,
+    "min_events": 120,
     "min_liquidity_usd": 5000,
-    "markets_fetch_page_size": 500,
-    "max_markets": 0,
+    "markets_fetch_page_size": 120,
+    "max_markets": 80,
     "history_interval": "max",
     "history_fidelity_minutes": 60,
-    "history_fetch_workers": 12,
+    "history_fetch_workers": 4,
     "gamma_markets_url": "https://api.serendb.com/publishers/polymarket-data/markets",
     "clob_history_url": "https://api.serendb.com/publishers/polymarket-data/prices-history"
   },

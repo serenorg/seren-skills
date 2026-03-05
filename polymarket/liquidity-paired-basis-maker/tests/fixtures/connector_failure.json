@@ -1,6 +1,6 @@
 {
   "status": "error",
-  "skill": "news-shock-guard-maker",
+  "skill": "liquidity-paired-basis-maker",
   "error_code": "connector_failure",
   "connector": "unknown_connector",
   "message": "Connector call failed during smoke test.",

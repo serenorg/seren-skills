@@ -1,0 +1,77 @@
+name: Enforce Seren Polymarket Publisher
+
+on:
+  pull_request:
+    paths:
+      - "polymarket/**"
+      - ".github/workflows/enforce-seren-polymarket-publisher.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "polymarket/**"
+      - ".github/workflows/enforce-seren-polymarket-publisher.yml"
+
+jobs:
+  enforce-publisher:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Block direct Polymarket API endpoints in maker runtimes/configs
+        run: |
+          set -euo pipefail
+          TARGETS=(
+            polymarket/maker-rebate-bot
+            polymarket/paired-market-basis-maker
+            polymarket/liquidity-paired-basis-maker
+            polymarket/high-throughput-paired-basis-maker
+          )
+          if grep -R -nE "https://(gamma-api|clob)\.polymarket\.com" "${TARGETS[@]}"; then
+            echo "::error::Direct Polymarket API endpoints are forbidden. Use api.serendb.com publisher routes only."
+            exit 1
+          fi
+
+      - name: Require Seren Polymarket Publisher endpoints in maker configs
+        run: |
+          set -euo pipefail
+          CONFIGS=(
+            polymarket/maker-rebate-bot/config.example.json
+            polymarket/paired-market-basis-maker/config.example.json
+            polymarket/liquidity-paired-basis-maker/config.example.json
+            polymarket/high-throughput-paired-basis-maker/config.example.json
+          )
+          for cfg in "${CONFIGS[@]}"; do
+            if ! grep -qE "https://api\.serendb\.com/publishers/polymarket-data/" "$cfg"; then
+              echo "::error file=$cfg::Missing Seren Polymarket publisher endpoint."
+              exit 1
+            fi
+          done
+
+      - name: Require runtime source-policy guard in maker scripts
+        run: |
+          set -euo pipefail
+          SCRIPTS=(
+            polymarket/maker-rebate-bot/scripts/agent.py
+            polymarket/paired-market-basis-maker/scripts/agent.py
+            polymarket/liquidity-paired-basis-maker/scripts/agent.py
+            polymarket/high-throughput-paired-basis-maker/scripts/agent.py
+          )
+          for script in "${SCRIPTS[@]}"; do
+            if ! grep -q "SEREN_POLYMARKET_PUBLISHER_PREFIX" "$script"; then
+              echo "::error file=$script::Missing SEREN_POLYMARKET_PUBLISHER_PREFIX runtime guard."
+              exit 1
+            fi
+            if ! grep -q "policy_violation: backtest data source must use Seren Polymarket publisher" "$script"; then
+              echo "::error file=$script::Missing explicit policy_violation guard for non-Seren backtest URLs."
+              exit 1
+            fi
+            if ! grep -q "missing_seren_api_key: set SEREN_API_KEY" "$script"; then
+              echo "::error file=$script::Missing SEREN_API_KEY hard requirement for publisher calls."
+              exit 1
+            fi
+            if ! grep -q '"Authorization": f"Bearer {api_key}"' "$script"; then
+              echo "::error file=$script::Missing Authorization Bearer header for publisher calls."
+              exit 1
+            fi
+          done

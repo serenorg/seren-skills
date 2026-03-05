@@ -249,7 +249,7 @@ def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
     req = Request(
         url,
         headers={
-            "User-Agent": "paired-market-basis-maker/1.1",
+            "User-Agent": "high-throughput-paired-basis-maker/1.1",
             "Accept": "application/json",
             "Authorization": f"Bearer {api_key}",
         },
@@ -642,7 +642,7 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
 
     return {
         "status": "ok",
-        "skill": "paired-market-basis-maker",
+        "skill": "high-throughput-paired-basis-maker",
         "mode": "backtest",
         "dry_run": True,
         "backtest_summary": {
@@ -815,7 +815,7 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
     mode = "live" if live_mode and yes_live and not dry_run else "dry-run"
     return {
         "status": "ok",
-        "skill": "paired-market-basis-maker",
+        "skill": "high-throughput-paired-basis-maker",
         "mode": mode,
         "dry_run": mode != "live",
         "strategy_summary": {
@@ -870,7 +870,7 @@ def main() -> int:
     ok = trade.get("status") == "ok"
     payload = {
         "status": "ok" if ok else "error",
-        "skill": "paired-market-basis-maker",
+        "skill": "high-throughput-paired-basis-maker",
         "run_type": "trade",
         "backtest": backtest,
         "trade": trade,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paired-market basis maker scaffold for Polymarket binary markets."""
+"""Liquidity-filtered paired-market basis maker for Polymarket binary markets."""
 
 from __future__ import annotations
 
@@ -47,24 +47,24 @@ class StrategyParams:
 
 @dataclass(frozen=True)
 class BacktestParams:
-    days: int = 270
+    days: int = 90
     days_min: int = 90
-    days_max: int = 540
+    days_max: int = 365
     participation_rate: float = 0.64
     min_history_points: int = 72
-    min_events: int = 200
+    min_events: int = 120
     min_liquidity_usd: float = 5000.0
-    markets_fetch_page_size: int = 500
-    max_markets: int = 0
+    markets_fetch_page_size: int = 120
+    max_markets: int = 80
     history_interval: str = "max"
     history_fidelity_minutes: int = 60
     gamma_markets_url: str = "https://api.serendb.com/publishers/polymarket-data/markets"
     clob_history_url: str = "https://api.serendb.com/publishers/polymarket-data/prices-history"
-    history_fetch_workers: int = 12
+    history_fetch_workers: int = 4
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run paired-market basis maker strategy.")
+    parser = argparse.ArgumentParser(description="Run liquidity-filtered paired-market basis maker strategy.")
     parser.add_argument("--config", default="config.json", help="Config file path.")
     parser.add_argument(
         "--run-type",
@@ -160,23 +160,23 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
     raw = config.get("backtest", {})
     range_raw = raw.get("days_range", {}) if isinstance(raw.get("days_range"), dict) else {}
     days_min = max(7, _safe_int(range_raw.get("min"), 90))
-    days_max = max(days_min, _safe_int(range_raw.get("max"), 540))
-    days = int(clamp(_safe_int(raw.get("days"), 270), days_min, days_max))
+    days_max = max(days_min, _safe_int(range_raw.get("max"), 365))
+    days = int(clamp(_safe_int(raw.get("days"), 90), days_min, days_max))
     return BacktestParams(
         days=days,
         days_min=days_min,
         days_max=days_max,
         participation_rate=clamp(_safe_float(raw.get("participation_rate"), 0.64), 0.0, 1.0),
         min_history_points=max(8, _safe_int(raw.get("min_history_points"), 72)),
-        min_events=max(1, _safe_int(raw.get("min_events"), 200)),
+        min_events=max(1, _safe_int(raw.get("min_events"), 120)),
         min_liquidity_usd=max(0.0, _safe_float(raw.get("min_liquidity_usd"), 5000.0)),
-        markets_fetch_page_size=max(25, _safe_int(raw.get("markets_fetch_page_size"), 500)),
-        max_markets=max(0, _safe_int(raw.get("max_markets"), 0)),
+        markets_fetch_page_size=max(25, _safe_int(raw.get("markets_fetch_page_size"), 120)),
+        max_markets=max(0, _safe_int(raw.get("max_markets"), 80)),
         history_interval=_safe_str(raw.get("history_interval"), "max"),
         history_fidelity_minutes=max(1, _safe_int(raw.get("history_fidelity_minutes"), 60)),
         gamma_markets_url=_safe_str(raw.get("gamma_markets_url"), "https://api.serendb.com/publishers/polymarket-data/markets"),
         clob_history_url=_safe_str(raw.get("clob_history_url"), "https://api.serendb.com/publishers/polymarket-data/prices-history"),
-        history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 12)),
+        history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 4)),
     )
 
 
@@ -249,7 +249,7 @@ def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
     req = Request(
         url,
         headers={
-            "User-Agent": "paired-market-basis-maker/1.1",
+            "User-Agent": "liquidity-paired-basis-maker/1.1",
             "Accept": "application/json",
             "Authorization": f"Bearer {api_key}",
         },
@@ -642,7 +642,7 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
 
     return {
         "status": "ok",
-        "skill": "paired-market-basis-maker",
+        "skill": "liquidity-paired-basis-maker",
         "mode": "backtest",
         "dry_run": True,
         "backtest_summary": {
@@ -815,7 +815,7 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
     mode = "live" if live_mode and yes_live and not dry_run else "dry-run"
     return {
         "status": "ok",
-        "skill": "paired-market-basis-maker",
+        "skill": "liquidity-paired-basis-maker",
         "mode": mode,
         "dry_run": mode != "live",
         "strategy_summary": {
@@ -870,7 +870,7 @@ def main() -> int:
     ok = trade.get("status") == "ok"
     payload = {
         "status": "ok" if ok else "error",
-        "skill": "paired-market-basis-maker",
+        "skill": "liquidity-paired-basis-maker",
         "run_type": "trade",
         "backtest": backtest,
         "trade": trade,

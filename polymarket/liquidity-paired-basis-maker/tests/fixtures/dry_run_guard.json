@@ -1,6 +1,6 @@
 {
   "status": "ok",
-  "skill": "news-shock-guard-maker",
+  "skill": "liquidity-paired-basis-maker",
   "dry_run": true,
   "blocked_action": "live_execution"
 }

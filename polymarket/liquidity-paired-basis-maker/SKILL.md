@@ -1,9 +1,8 @@
----
-name: paired-market-basis-maker
-description: "Run a paired-market basis strategy on Polymarket with mandatory backtest-first gating before trade intents."
+name: liquidity-paired-basis-maker
+description: "Run a liquidity-filtered paired-market basis strategy on Polymarket with mandatory backtest-first gating before trade intents."
 ---
 
-# Paired Market Basis Maker
+# Liquidity Paired Basis Maker
 
 ## When to Use
 
@@ -13,13 +12,13 @@ description: "Run a paired-market basis strategy on Polymarket with mandatory ba
 
 ## Backtest Period
 
-- Default: `270` days
-- Allowed range: `90` to `540` days
-- Why this range: basis relationships need enough time to observe repeated widening/convergence cycles, but should still emphasize current structural behavior.
+- Default: `90` days
+- Allowed range: `90` to `365` days
+- Why this range: keeps the replay current while requiring enough data for repeated widening/convergence behavior.
 
 ## Workflow Summary
 
-1. `load_backtest_pairs` pulls live market histories from the Seren Polymarket Publisher (Gamma + CLOB proxied), builds pairs from the active market universe, and timestamp-aligns each pair.
+1. `load_backtest_pairs` pulls live market histories from the Seren Polymarket Publisher (Gamma + CLOB proxied), applies a liquidity-filtered universe cap, builds pairs, and timestamp-aligns each pair.
 2. `simulate_basis_reversion` evaluates entry/exit behavior on basis widening and convergence.
 3. `summarize_backtest` reports total return, annualized return, Sharpe-like score, max drawdown, hit rate, trade-rate, and pair-level contributions.
 4. `sample_gate` fails backtest if `events < backtest.min_events` (default `200`).
@@ -45,7 +44,7 @@ Live execution requires both:
 ## Quick Start
 
 ```bash
-cd polymarket/paired-market-basis-maker
+cd polymarket/liquidity-paired-basis-maker
 cp .env.example .env
 cp config.example.json config.json
 python3 scripts/agent.py --config config.json
