@@ -30,7 +30,10 @@ SEREN_ALLOWED_POLYMARKET_PUBLISHERS = frozenset(
     {SEREN_POLYMARKET_DATA_PUBLISHER, SEREN_POLYMARKET_TRADING_PUBLISHER}
 )
 POLICY_VIOLATION_BACKTEST_SOURCE = "policy_violation: backtest data source must use Seren Polymarket publisher"
-MISSING_RUNTIME_AUTH_ERROR = "missing_runtime_auth: set API_KEY (Seren Desktop runtime) or SEREN_API_KEY"
+MISSING_RUNTIME_AUTH_ERROR = (
+    "missing_runtime_auth: set API_KEY (Seren Desktop runtime) or SEREN_API_KEY; "
+    "missing_seren_api_key: set SEREN_API_KEY"
+)
 
 
 @dataclass(frozen=True)

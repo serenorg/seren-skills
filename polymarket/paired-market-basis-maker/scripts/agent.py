@@ -24,13 +24,17 @@ DISCLAIMER = (
     "and liquidity can vanish. Backtests are hypothetical and do not guarantee future "
     "performance. Use dry-run first and only trade with risk capital."
 )
-SEREN_POLYMARKET_DATA_PUBLISHER_PREFIX = "https://api.serendb.com/publishers/polymarket-data/"
-SEREN_POLYMARKET_TRADING_PUBLISHER_PREFIX = "https://api.serendb.com/publishers/polymarket-trading-serenai/"
+SEREN_POLYMARKET_PUBLISHER_PREFIX = "https://api.serendb.com/publishers/"
+SEREN_POLYMARKET_DATA_PUBLISHER_PREFIX = f"{SEREN_POLYMARKET_PUBLISHER_PREFIX}polymarket-data/"
+SEREN_POLYMARKET_TRADING_PUBLISHER_PREFIX = f"{SEREN_POLYMARKET_PUBLISHER_PREFIX}polymarket-trading-serenai/"
 SEREN_ALLOWED_POLYMARKET_PUBLISHER_PREFIXES = (
     SEREN_POLYMARKET_DATA_PUBLISHER_PREFIX,
     SEREN_POLYMARKET_TRADING_PUBLISHER_PREFIX,
 )
-MISSING_RUNTIME_AUTH_ERROR = "missing_runtime_auth: set API_KEY (Seren Desktop runtime) or SEREN_API_KEY"
+MISSING_RUNTIME_AUTH_ERROR = (
+    "missing_runtime_auth: set API_KEY (Seren Desktop runtime) or SEREN_API_KEY; "
+    "missing_seren_api_key: set SEREN_API_KEY"
+)
 
 
 @dataclass(frozen=True)
