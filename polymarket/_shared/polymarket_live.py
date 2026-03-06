@@ -837,7 +837,8 @@ class PolymarketPublisherTrader:
         except ImportError as exc:
             raise RuntimeError(
                 "Live Polymarket execution requires `py-clob-client`. "
-                "Install it with `pip install py-clob-client` or add it to requirements.txt."
+                "Create and activate a virtual environment first, then run "
+                "`python -m pip install -r requirements.txt`."
             ) from exc
 
         private_key = safe_str(
