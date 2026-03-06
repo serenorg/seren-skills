@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -15,6 +16,15 @@ def _read_fixture(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
 
 
+def _load_agent_module():
+    spec = importlib.util.spec_from_file_location("maker_rebate_bot_agent", SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_happy_path_fixture_is_successful() -> None:
     payload = _read_fixture("happy_path.json")
     assert payload["status"] == "ok"
@@ -27,6 +37,60 @@ def test_negative_edge_fixture_skips_all_quotes() -> None:
     assert payload["status"] == "ok"
     assert payload["strategy_summary"]["markets_quoted"] == 0
     assert payload["strategy_summary"]["markets_skipped"] >= 1
+
+
+def test_quote_mode_fetches_live_markets_when_config_markets_is_empty(monkeypatch) -> None:
+    agent = _load_agent_module()
+    now_ts = int(time.time())
+    fetched_urls: list[str] = []
+
+    def fake_http_get_json(url: str, timeout: int = 30):
+        fetched_urls.append(url)
+        return [
+            {
+                "id": "LIVE-MKT-1",
+                "question": "Will event A happen?",
+                "clobTokenIds": ["TOKEN-1"],
+                "outcomePrices": ["0.48", "0.52"],
+                "bestBid": 0.47,
+                "bestAsk": 0.49,
+                "liquidity": 500000,
+                "volume24hr": 100000,
+                "rebate_bps": 2.5,
+                "endDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ts + 86400)),
+            },
+            {
+                "id": "LIVE-MKT-2",
+                "question": "Will event B happen?",
+                "clobTokenIds": ["TOKEN-2"],
+                "outcomePrices": ["0.61", "0.39"],
+                "bestBid": 0.6,
+                "bestAsk": 0.62,
+                "liquidity": 450000,
+                "volume24hr": 90000,
+                "rebate_bps": 3.0,
+                "endDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ts + 172800)),
+            },
+        ]
+
+    monkeypatch.setattr(agent, "_http_get_json", fake_http_get_json)
+    config = {
+        "execution": {"dry_run": True, "live_mode": False},
+        "backtest": {"min_liquidity_usd": 0, "markets_fetch_limit": 5},
+        "strategy": {
+            "markets_max": 2,
+            "min_seconds_to_resolution": 60,
+            "min_spread_bps": 20,
+        },
+        "markets": [],
+    }
+
+    result = agent.run_quote(config=config, markets_file=None, yes_live=False)
+
+    assert result["status"] == "ok"
+    assert result["strategy_summary"]["markets_considered"] == 2
+    assert result["strategy_summary"]["markets_quoted"] == 2
+    assert any("/publishers/polymarket-data/markets?" in url for url in fetched_urls)
 
 
 def test_live_guard_fixture_blocks_execution() -> None:
