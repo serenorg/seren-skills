@@ -65,7 +65,7 @@ class BacktestParams:
     markets_fetch_limit: int = 300
     min_history_points: int = 480
     gamma_markets_url: str = f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/markets"
-    clob_history_url: str = f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/trades"
+    clob_history_url: str = f"{SEREN_POLYMARKET_TRADING_URL_PREFIX}/trades"
 
 
 def parse_args() -> argparse.Namespace:
@@ -199,7 +199,7 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         clob_history_url=_canonicalize_history_url(
             _safe_str(
                 backtest.get("clob_history_url"),
-                f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/trades",
+                f"{SEREN_POLYMARKET_TRADING_URL_PREFIX}/trades",
             )
         ),
     )

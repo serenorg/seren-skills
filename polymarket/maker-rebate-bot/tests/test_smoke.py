@@ -119,7 +119,7 @@ def test_config_example_uses_seren_polymarket_publisher_urls() -> None:
         "https://api.serendb.com/publishers/polymarket-data/"
     )
     assert backtest.get("clob_history_url", "").startswith(
-        "https://api.serendb.com/publishers/polymarket-data/"
+        "https://api.serendb.com/publishers/polymarket-trading-serenai/"
     )
     assert backtest.get("clob_history_url", "").endswith("/trades")
 

@@ -78,7 +78,7 @@ class BacktestParams:
     history_interval: str = "max"
     history_fidelity_minutes: int = 60
     gamma_markets_url: str = f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/markets"
-    clob_history_url: str = f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/trades"
+    clob_history_url: str = f"{SEREN_POLYMARKET_TRADING_URL_PREFIX}/trades"
     history_fetch_workers: int = 4
 
 
@@ -203,7 +203,7 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         history_fidelity_minutes=max(1, _safe_int(raw.get("history_fidelity_minutes"), 60)),
         gamma_markets_url=_safe_str(raw.get("gamma_markets_url"), f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/markets"),
         clob_history_url=_canonicalize_history_url(
-            _safe_str(raw.get("clob_history_url"), f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/trades")
+            _safe_str(raw.get("clob_history_url"), f"{SEREN_POLYMARKET_TRADING_URL_PREFIX}/trades")
         ),
         history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 4)),
     )

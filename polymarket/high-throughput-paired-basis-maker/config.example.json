@@ -21,7 +21,7 @@
     "history_fidelity_minutes": 60,
     "history_fetch_workers": 12,
     "gamma_markets_url": "https://api.serendb.com/publishers/polymarket-data/markets",
-    "clob_history_url": "https://api.serendb.com/publishers/polymarket-data/trades"
+    "clob_history_url": "https://api.serendb.com/publishers/polymarket-trading-serenai/trades"
   },
   "strategy": {
     "bankroll_usd": 500,
