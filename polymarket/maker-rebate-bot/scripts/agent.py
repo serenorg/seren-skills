@@ -111,15 +111,23 @@ def load_config(config_path: str) -> dict[str, Any]:
     return load_json_file(Path(config_path))
 
 
+def _coerce_market_rows(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        rows = payload.get("markets", [])
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        rows = []
+    return [row for row in rows if isinstance(row, dict)]
+
+
 def load_markets(config: dict[str, Any], markets_file: str | None) -> list[dict[str, Any]]:
     if markets_file:
-        payload = load_json_file(Path(markets_file))
-        if isinstance(payload, dict) and isinstance(payload.get("markets"), list):
-            return payload["markets"]
-        if isinstance(payload, list):
-            return payload
-        return []
-    return list(config.get("markets", []))
+        return _coerce_market_rows(load_json_file(Path(markets_file)))
+    configured_markets = _coerce_market_rows(config.get("markets", []))
+    if configured_markets:
+        return configured_markets
+    return _fetch_live_quote_markets(config)
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -144,6 +152,45 @@ def _safe_str(value: Any, default: str = "") -> str:
     if value is None:
         return default
     return str(value)
+
+
+def _extract_live_mid_price(payload: dict[str, Any]) -> float:
+    for key in (
+        "mid_price",
+        "midPrice",
+        "midpoint",
+        "price",
+        "lastTradePrice",
+        "last_trade_price",
+    ):
+        candidate = _normalize_probability(payload.get(key))
+        if 0.0 <= candidate <= 1.0:
+            return candidate
+    outcome_prices = _json_to_list(payload.get("outcomePrices"))
+    if outcome_prices:
+        candidate = _normalize_probability(outcome_prices[0])
+        if 0.0 <= candidate <= 1.0:
+            return candidate
+    return -1.0
+
+
+def _extract_live_book(payload: dict[str, Any], mid_price: float) -> tuple[float, float]:
+    bid = _normalize_probability(payload.get("best_bid"))
+    if not (0.0 <= bid <= 1.0):
+        bid = _normalize_probability(payload.get("bestBid"))
+
+    ask = _normalize_probability(payload.get("best_ask"))
+    if not (0.0 <= ask <= 1.0):
+        ask = _normalize_probability(payload.get("bestAsk"))
+
+    if not (0.0 <= bid <= 1.0):
+        bid = mid_price
+    if not (0.0 <= ask <= 1.0):
+        ask = mid_price
+    if bid > ask:
+        bid = mid_price
+        ask = mid_price
+    return bid, ask
 
 
 def _canonicalize_history_url(url: str) -> str:
@@ -618,6 +665,74 @@ def _fetch_live_markets(
     return selected
 
 
+def _fetch_live_quote_markets(config: dict[str, Any]) -> list[dict[str, Any]]:
+    strategy_params = to_params(config)
+    backtest_params = to_backtest_params(config)
+    now_ts = int(time.time())
+    query = urlencode(
+        {
+            "active": "true",
+            "closed": "false",
+            "limit": backtest_params.markets_fetch_limit,
+            "order": "volume24hr",
+            "ascending": "false",
+        }
+    )
+    raw = _http_get_json(f"{backtest_params.gamma_markets_url}?{query}")
+    if not isinstance(raw, list):
+        return []
+
+    markets: list[dict[str, Any]] = []
+    for market in raw:
+        if not isinstance(market, dict):
+            continue
+        liquidity = _safe_float(market.get("liquidity"), 0.0)
+        if liquidity < backtest_params.min_liquidity_usd:
+            continue
+
+        end_ts = (
+            _parse_iso_ts(market.get("endDate"))
+            or _parse_iso_ts(market.get("endDateIso"))
+            or _safe_int(market.get("end_ts"), 0)
+        )
+        seconds_to_resolution = max(0, end_ts - now_ts) if end_ts else 0
+        if seconds_to_resolution < strategy_params.min_seconds_to_resolution:
+            continue
+
+        token_ids = _json_to_list(market.get("clobTokenIds"))
+        if not token_ids:
+            continue
+        token_id = _safe_str(token_ids[0], "")
+        if not token_id:
+            continue
+
+        mid_price = _extract_live_mid_price(market)
+        if not (0.01 < mid_price < 0.99):
+            continue
+
+        best_bid, best_ask = _extract_live_book(market, mid_price)
+        volatility_bps = max(abs(best_ask - best_bid) * 10000.0, strategy_params.min_spread_bps)
+        market_id = _safe_str(market.get("id"), _safe_str(market.get("conditionId"), token_id))
+        markets.append(
+            {
+                "market_id": market_id,
+                "question": _safe_str(market.get("question"), market_id),
+                "token_id": token_id,
+                "mid_price": round(mid_price, 6),
+                "best_bid": round(best_bid, 6),
+                "best_ask": round(best_ask, 6),
+                "seconds_to_resolution": seconds_to_resolution,
+                "volatility_bps": round(volatility_bps, 3),
+                "rebate_bps": _safe_float(market.get("rebate_bps"), strategy_params.default_rebate_bps),
+                "source": "live-seren-publisher",
+            }
+        )
+        if len(markets) >= strategy_params.markets_max:
+            break
+
+    return markets
+
+
 def _max_drawdown(equity_curve: list[float]) -> float:
     peak = float("-inf")
     max_dd = 0.0
@@ -1004,6 +1119,24 @@ def run_once(
     }
 
 
+def run_quote(config: dict[str, Any], markets_file: str | None, yes_live: bool) -> dict[str, Any]:
+    try:
+        markets = load_markets(config=config, markets_file=markets_file)
+    except Exception as exc:  # pragma: no cover - defensive runtime path
+        return {
+            "status": "error",
+            "skill": "polymarket-maker-rebate-bot",
+            "error_code": "quote_market_load_failed",
+            "message": str(exc),
+            "hint": (
+                "Provide --markets-file with a saved market snapshot if "
+                "live market discovery is unavailable."
+            ),
+            "dry_run": True,
+        }
+    return run_once(config=config, markets=markets, yes_live=yes_live)
+
+
 def main() -> int:
     args = parse_args()
     config = load_config(args.config)
@@ -1014,8 +1147,7 @@ def main() -> int:
             backtest_days_override=args.backtest_days,
         )
     else:
-        markets = load_markets(config=config, markets_file=args.markets_file)
-        result = run_once(config=config, markets=markets, yes_live=args.yes_live)
+        result = run_quote(config=config, markets_file=args.markets_file, yes_live=args.yes_live)
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("status") == "ok" else 1
 

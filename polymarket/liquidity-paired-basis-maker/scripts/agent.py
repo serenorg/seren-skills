@@ -859,20 +859,213 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
     }
 
 
-def _load_trade_markets(config: dict[str, Any], markets_file: str | None) -> list[dict[str, Any]]:
-    if markets_file:
-        payload = load_json(Path(markets_file))
-    else:
-        payload = config.get("markets", [])
+def _extract_live_mid_price(payload: dict[str, Any]) -> float:
+    for key in (
+        "mid_price",
+        "midPrice",
+        "midpoint",
+        "price",
+        "lastTradePrice",
+        "last_trade_price",
+    ):
+        candidate = _normalize_probability(payload.get(key))
+        if 0.0 <= candidate <= 1.0:
+            return candidate
+    outcome_prices = _json_to_list(payload.get("outcomePrices"))
+    if outcome_prices:
+        candidate = _normalize_probability(outcome_prices[0])
+        if 0.0 <= candidate <= 1.0:
+            return candidate
+    return -1.0
 
+
+def _coerce_trade_rows(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
         rows = payload.get("markets", [])
     elif isinstance(payload, list):
         rows = payload
     else:
         rows = []
-
     return [row for row in rows if isinstance(row, dict)]
+
+
+def _build_live_trade_pair(
+    primary: dict[str, Any],
+    secondary: dict[str, Any],
+    *,
+    event_id: str,
+    now_ts: int,
+    p: StrategyParams,
+) -> dict[str, Any]:
+    end_ts = min(
+        _safe_int(primary.get("end_ts"), now_ts + 86400),
+        _safe_int(secondary.get("end_ts"), now_ts + 86400),
+    )
+    basis_volatility_bps = abs(
+        (_safe_float(primary.get("mid_price"), 0.0) - _safe_float(secondary.get("mid_price"), 0.0))
+        * 10000.0
+    )
+    return {
+        "market_id": _safe_str(primary.get("market_id"), "unknown"),
+        "pair_market_id": _safe_str(secondary.get("market_id"), "unknown"),
+        "question": _safe_str(primary.get("question"), _safe_str(primary.get("market_id"), "unknown")),
+        "pair_question": _safe_str(secondary.get("question"), _safe_str(secondary.get("market_id"), "unknown")),
+        "event_id": event_id,
+        "end_ts": end_ts,
+        "seconds_to_resolution": max(0, end_ts - now_ts),
+        "rebate_bps": (
+            _safe_float(primary.get("rebate_bps"), p.maker_rebate_bps)
+            + _safe_float(secondary.get("rebate_bps"), p.maker_rebate_bps)
+        )
+        / 2.0,
+        "mid_price": round(_safe_float(primary.get("mid_price"), 0.0), 6),
+        "pair_mid_price": round(_safe_float(secondary.get("mid_price"), 0.0), 6),
+        "basis_volatility_bps": round(basis_volatility_bps, 3),
+        "source": "live-seren-publisher",
+    }
+
+
+def _pair_live_trade_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    now_ts: int,
+    p: StrategyParams,
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in candidates:
+        grouped[_safe_str(row.get("event_id"), "misc")].append(row)
+
+    pairs: list[dict[str, Any]] = []
+    for event_id, group in grouped.items():
+        if len(group) < 2:
+            continue
+        group_sorted = sorted(group, key=lambda row: _safe_float(row.get("volume24hr"), 0.0), reverse=True)
+        for i in range(len(group_sorted) - 1):
+            pairs.append(
+                _build_live_trade_pair(
+                    primary=group_sorted[i],
+                    secondary=group_sorted[i + 1],
+                    event_id=event_id,
+                    now_ts=now_ts,
+                    p=p,
+                )
+            )
+
+    if pairs:
+        return pairs
+
+    fallback_sorted = sorted(candidates, key=lambda row: _safe_float(row.get("volume24hr"), 0.0), reverse=True)
+    for i in range(0, len(fallback_sorted) - 1, 2):
+        pairs.append(
+            _build_live_trade_pair(
+                primary=fallback_sorted[i],
+                secondary=fallback_sorted[i + 1],
+                event_id="fallback",
+                now_ts=now_ts,
+                p=p,
+            )
+        )
+    return pairs
+
+
+def _fetch_live_trade_pairs(config: dict[str, Any]) -> list[dict[str, Any]]:
+    p = to_strategy_params(config)
+    bt = to_backtest_params(config)
+    now_ts = int(time.time())
+    offset = 0
+    candidates: list[dict[str, Any]] = []
+    seen_token_ids: set[str] = set()
+    pages = 0
+
+    while True:
+        pages += 1
+        if pages > 200:
+            break
+        query = urlencode(
+            {
+                "active": "true",
+                "closed": "false",
+                "limit": bt.markets_fetch_page_size,
+                "offset": offset,
+                "order": "volume24hr",
+                "ascending": "false",
+            }
+        )
+        raw = _http_get_json(f"{bt.gamma_markets_url}?{query}")
+        if not isinstance(raw, list) or not raw:
+            break
+
+        added_on_page = 0
+        for market in raw:
+            if not isinstance(market, dict):
+                continue
+            liquidity = _safe_float(market.get("liquidity"), 0.0)
+            if liquidity < bt.min_liquidity_usd:
+                continue
+
+            end_ts = (
+                _parse_iso_ts(market.get("endDate"))
+                or _parse_iso_ts(market.get("endDateIso"))
+                or _safe_int(market.get("end_ts"), now_ts + 86400)
+            )
+            seconds_to_resolution = max(0, end_ts - now_ts)
+            if seconds_to_resolution < p.min_seconds_to_resolution:
+                continue
+
+            token_ids = _json_to_list(market.get("clobTokenIds"))
+            if not token_ids:
+                continue
+            token_id = _safe_str(token_ids[0], "")
+            if not token_id or token_id in seen_token_ids:
+                continue
+            seen_token_ids.add(token_id)
+
+            mid_price = _extract_live_mid_price(market)
+            if not (0.01 < mid_price < 0.99):
+                continue
+
+            events = _json_to_list(market.get("events"))
+            event_id = ""
+            if events and isinstance(events[0], dict):
+                event_id = _safe_str(events[0].get("id"), "")
+            if not event_id:
+                event_id = _safe_str(market.get("seriesSlug"), "")
+            if not event_id:
+                event_id = _safe_str(market.get("category"), "misc")
+
+            market_id = _safe_str(market.get("id"), _safe_str(market.get("conditionId"), token_id))
+            candidates.append(
+                {
+                    "market_id": market_id,
+                    "question": _safe_str(market.get("question"), market_id),
+                    "token_id": token_id,
+                    "event_id": event_id,
+                    "end_ts": end_ts,
+                    "seconds_to_resolution": seconds_to_resolution,
+                    "rebate_bps": _safe_float(market.get("rebate_bps"), p.maker_rebate_bps),
+                    "volume24hr": _safe_float(market.get("volume24hr"), 0.0),
+                    "mid_price": mid_price,
+                }
+            )
+            added_on_page += 1
+
+        if added_on_page == 0:
+            break
+        offset += len(raw)
+        if len(raw) < bt.markets_fetch_page_size:
+            break
+
+    candidates_with_cap = candidates[: bt.max_markets] if bt.max_markets > 0 else candidates
+    return _pair_live_trade_candidates(candidates_with_cap, now_ts=now_ts, p=p)
+
+
+def _load_trade_markets(config: dict[str, Any], markets_file: str | None) -> list[dict[str, Any]]:
+    if markets_file:
+        return _coerce_trade_rows(load_json(Path(markets_file)))
+    configured_markets = _coerce_trade_rows(config.get("markets", []))
+    if configured_markets:
+        return configured_markets
+    return _fetch_live_trade_pairs(config)
 
 
 def _build_pair_trade(market: dict[str, Any], leg_exposure: dict[str, float], total_notional: float, p: StrategyParams) -> dict[str, Any]:
@@ -964,7 +1157,21 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
     p = to_strategy_params(config)
     exposure = config.get("state", {}).get("leg_exposure", {})
     leg_exposure = {str(k): _safe_float(v, 0.0) for k, v in exposure.items()}
-    markets = _load_trade_markets(config, markets_file)
+    try:
+        markets = _load_trade_markets(config, markets_file)
+    except Exception as exc:  # pragma: no cover - defensive runtime path
+        return {
+            "status": "error",
+            "skill": "liquidity-paired-basis-maker",
+            "error_code": "trade_market_load_failed",
+            "message": str(exc),
+            "hint": (
+                "Provide --markets-file with a saved trade market snapshot if "
+                "live market discovery is unavailable."
+            ),
+            "dry_run": True,
+            "disclaimer": DISCLAIMER,
+        }
 
     trades: list[dict[str, Any]] = []
     skips: list[dict[str, Any]] = []

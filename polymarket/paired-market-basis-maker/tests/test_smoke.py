@@ -101,3 +101,53 @@ def test_config_example_targets_promotional_backtest_return(monkeypatch) -> None
     assert output["status"] == "ok"
     assert output["results"]["starting_bankroll_usd"] == 1000
     assert output["results"]["return_pct"] >= 20.0
+
+
+def test_trade_mode_fetches_live_pairs_when_config_markets_is_empty(monkeypatch) -> None:
+    module = _load_agent_module()
+    now_ts = int(time.time())
+    fetched_urls: list[str] = []
+
+    def fake_http_get_json(url: str, timeout: int = 30):
+        fetched_urls.append(url)
+        return [
+            {
+                "id": "LIVE-PAIR-1A",
+                "question": "Will event A resolve YES?",
+                "events": [{"id": "EVENT-1"}],
+                "clobTokenIds": ["TOKEN-1A"],
+                "outcomePrices": ["0.62", "0.38"],
+                "liquidity": 25000,
+                "volume24hr": 15000,
+                "rebate_bps": 2.3,
+                "endDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ts + 86400)),
+            },
+            {
+                "id": "LIVE-PAIR-1B",
+                "question": "Will event A resolve NO?",
+                "events": [{"id": "EVENT-1"}],
+                "clobTokenIds": ["TOKEN-1B"],
+                "outcomePrices": ["0.41", "0.59"],
+                "liquidity": 23000,
+                "volume24hr": 12000,
+                "rebate_bps": 2.3,
+                "endDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ts + 86400)),
+            },
+        ]
+
+    monkeypatch.setattr(module, "_http_get_json", fake_http_get_json)
+    config = {
+        "execution": {"dry_run": True, "live_mode": False},
+        "backtest": {"min_liquidity_usd": 0, "markets_fetch_page_size": 10, "max_markets": 2},
+        "strategy": {"pairs_max": 1, "min_seconds_to_resolution": 60},
+        "markets": [],
+    }
+
+    result = module.run_trade(config=config, markets_file=None, yes_live=False)
+
+    assert result["status"] == "ok"
+    assert result["strategy_summary"]["pairs_considered"] == 1
+    assert result["strategy_summary"]["pairs_quoted"] == 1
+    assert result["pair_trades"][0]["market_id"] == "LIVE-PAIR-1A"
+    assert result["pair_trades"][0]["pair_market_id"] == "LIVE-PAIR-1B"
+    assert any("/publishers/polymarket-data/markets?" in url for url in fetched_urls)
