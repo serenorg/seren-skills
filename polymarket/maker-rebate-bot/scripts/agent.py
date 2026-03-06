@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import pstdev
 from typing import Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 SEREN_POLYMARKET_PUBLISHER_HOST = "api.serendb.com"
@@ -65,7 +65,7 @@ class BacktestParams:
     markets_fetch_limit: int = 300
     min_history_points: int = 480
     gamma_markets_url: str = f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/markets"
-    clob_history_url: str = f"{SEREN_POLYMARKET_TRADING_URL_PREFIX}/prices-history"
+    clob_history_url: str = f"{SEREN_POLYMARKET_TRADING_URL_PREFIX}/trades"
 
 
 def parse_args() -> argparse.Namespace:
@@ -146,6 +146,14 @@ def _safe_str(value: Any, default: str = "") -> str:
     return str(value)
 
 
+def _canonicalize_history_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.path.endswith("/prices-history"):
+        path = parsed.path[: -len("/prices-history")] + "/trades"
+        return urlunparse(parsed._replace(path=path))
+    return url
+
+
 def to_params(config: dict[str, Any]) -> StrategyParams:
     strategy = config.get("strategy", {})
     return StrategyParams(
@@ -188,9 +196,11 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
             backtest.get("gamma_markets_url"),
             f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/markets",
         ),
-        clob_history_url=_safe_str(
-            backtest.get("clob_history_url"),
-            f"{SEREN_POLYMARKET_TRADING_URL_PREFIX}/prices-history",
+        clob_history_url=_canonicalize_history_url(
+            _safe_str(
+                backtest.get("clob_history_url"),
+                f"{SEREN_POLYMARKET_TRADING_URL_PREFIX}/trades",
+            )
         ),
     )
 
@@ -232,6 +242,24 @@ def _parse_iso_ts(value: Any) -> int | None:
         return None
 
 
+def _coerce_unix_ts(value: Any) -> int:
+    if isinstance(value, int | float):
+        ts = int(value)
+        if ts > 10_000_000_000:
+            ts //= 1000
+        return ts
+    raw = _safe_str(value, "").strip()
+    if not raw:
+        return -1
+    if raw.isdigit():
+        ts = int(raw)
+        if ts > 10_000_000_000:
+            ts //= 1000
+        return ts
+    parsed = _parse_iso_ts(raw)
+    return parsed if parsed is not None else -1
+
+
 def _json_to_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
@@ -243,6 +271,110 @@ def _json_to_list(value: Any) -> list[Any]:
         except json.JSONDecodeError:
             return []
     return []
+
+
+def _extract_history_rows(payload: Any) -> list[Any]:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in ("history", "trades", "data", "items", "results"):
+        rows = payload.get(key)
+        if isinstance(rows, list):
+            return rows
+    body = payload.get("body")
+    if isinstance(body, list):
+        return body
+    if isinstance(body, dict):
+        for key in ("history", "trades", "data", "items", "results"):
+            rows = body.get(key)
+            if isinstance(rows, list):
+                return rows
+    return []
+
+
+def _normalize_probability(value: Any) -> float:
+    p = _safe_float(value, -1.0)
+    if 1.0 < p <= 100.0:
+        p /= 100.0
+    return p
+
+
+def _row_matches_token(row: dict[str, Any], token_id: str) -> bool:
+    token = token_id.strip()
+    if not token:
+        return True
+    observed: list[str] = []
+    for key in (
+        "token_id",
+        "tokenId",
+        "tokenID",
+        "asset_id",
+        "assetId",
+        "assetID",
+    ):
+        raw = _safe_str(row.get(key), "").strip()
+        if raw:
+            observed.append(raw)
+    asset = row.get("asset")
+    if isinstance(asset, dict):
+        for key in ("id", "token_id", "asset_id"):
+            raw = _safe_str(asset.get(key), "").strip()
+            if raw:
+                observed.append(raw)
+    if not observed:
+        return True
+    return token in observed
+
+
+def _history_point_from_row(row: Any, token_id: str) -> tuple[int, float] | None:
+    if isinstance(row, list | tuple) and len(row) >= 2:
+        ts = _coerce_unix_ts(row[0])
+        p = _normalize_probability(row[1])
+        if ts < 0 or not (0.0 <= p <= 1.0):
+            return None
+        return ts, p
+
+    if not isinstance(row, dict):
+        return None
+    if not _row_matches_token(row, token_id):
+        return None
+
+    ts = -1
+    for key in (
+        "t",
+        "timestamp",
+        "ts",
+        "time",
+        "createdAt",
+        "created_at",
+        "updatedAt",
+        "updated_at",
+        "matchTime",
+    ):
+        ts = _coerce_unix_ts(row.get(key))
+        if ts >= 0:
+            break
+    if ts < 0:
+        return None
+
+    p = -1.0
+    for key in (
+        "p",
+        "price",
+        "outcomePrice",
+        "outcome_price",
+        "probability",
+        "mid_price",
+        "midpoint",
+    ):
+        candidate = _normalize_probability(row.get(key))
+        if 0.0 <= candidate <= 1.0:
+            p = candidate
+            break
+    if p < 0.0:
+        return None
+    return ts, p
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -491,32 +623,79 @@ def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
 
 
 def _normalize_history(
-    history_payload: list[Any],
+    history_payload: Any,
     start_ts: int,
     end_ts: int,
+    *,
+    token_id: str = "",
+    fidelity_minutes: int = 1,
 ) -> list[tuple[int, float]]:
-    cleaned: list[tuple[int, float]] = []
+    points: list[tuple[int, float]] = []
+    fallback_points: list[tuple[int, float]] = []
     seen: set[int] = set()
-    for point in history_payload:
-        t: int | None = None
-        p: float | None = None
-        if isinstance(point, dict):
-            t = _safe_int(point.get("t"), -1)
-            p = _safe_float(point.get("p"), -1.0)
-        elif isinstance(point, list | tuple) and len(point) >= 2:
-            t = _safe_int(point[0], -1)
-            p = _safe_float(point[1], -1.0)
+    fallback_seen: set[int] = set()
 
-        if t is None or p is None:
+    for row in _extract_history_rows(history_payload):
+        parsed = _history_point_from_row(row, token_id=token_id)
+        if parsed is None:
             continue
-        if t < 0 or not (0.0 <= p <= 1.0):
+        t, p = parsed
+        if t in fallback_seen:
             continue
+        fallback_seen.add(t)
+        fallback_points.append((t, p))
         if t < start_ts or t > end_ts or t in seen:
             continue
         seen.add(t)
-        cleaned.append((t, p))
-    cleaned.sort(key=lambda x: x[0])
-    return cleaned
+        points.append((t, p))
+
+    points.sort(key=lambda pair: pair[0])
+    if not points:
+        fallback_points.sort(key=lambda pair: pair[0])
+        points = fallback_points
+
+    if not points:
+        return []
+    if fidelity_minutes <= 1:
+        return points
+
+    bucket_seconds = max(60, fidelity_minutes * 60)
+    bucketed: dict[int, tuple[int, float]] = {}
+    for t, p in points:
+        bucketed[t // bucket_seconds] = (t, p)
+    return sorted(bucketed.values(), key=lambda pair: pair[0])
+
+
+def _fetch_market_history(
+    backtest_params: BacktestParams,
+    token_id: str,
+    start_ts: int,
+    end_ts: int,
+) -> list[tuple[int, float]]:
+    history_limit = max(backtest_params.min_history_points * 12, 1000)
+    queries = (
+        {"market": token_id, "limit": history_limit},
+        {"asset_id": token_id, "limit": history_limit},
+        {"token_id": token_id, "limit": history_limit},
+    )
+    best: list[tuple[int, float]] = []
+    for params in queries:
+        try:
+            payload = _http_get_json(f"{backtest_params.clob_history_url}?{urlencode(params)}")
+        except Exception:
+            continue
+        history = _normalize_history(
+            history_payload=payload,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            token_id=token_id,
+            fidelity_minutes=backtest_params.fidelity_minutes,
+        )
+        if len(history) > len(best):
+            best = history
+        if len(best) >= backtest_params.min_history_points:
+            return best
+    return best
 
 
 def _load_markets_from_fixture(
@@ -537,7 +716,7 @@ def _load_markets_from_fixture(
         if not isinstance(raw, dict):
             continue
         history = _normalize_history(
-            history_payload=_json_to_list(raw.get("history")),
+            history_payload=raw.get("history"),
             start_ts=start_ts,
             end_ts=end_ts,
         )
@@ -608,18 +787,9 @@ def _fetch_live_markets(
     for candidate in candidates:
         if len(selected) >= strategy_params.markets_max:
             break
-        history_query = urlencode(
-            {
-                "market": candidate["token_id"],
-                "interval": "max",
-                "fidelity": backtest_params.fidelity_minutes,
-            }
-        )
-        payload = _http_get_json(f"{backtest_params.clob_history_url}?{history_query}")
-        if not isinstance(payload, dict):
-            continue
-        history = _normalize_history(
-            history_payload=_json_to_list(payload.get("history")),
+        history = _fetch_market_history(
+            backtest_params=backtest_params,
+            token_id=candidate["token_id"],
             start_ts=start_ts,
             end_ts=end_ts,
         )
