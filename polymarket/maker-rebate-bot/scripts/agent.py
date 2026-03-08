@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -21,7 +22,7 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
 from polymarket_live import (
-    PolymarketPublisherTrader,
+    DirectClobTrader,
     execute_single_market_quotes,
     live_settings_from_execution,
     load_live_single_markets,
@@ -77,8 +78,39 @@ class BacktestParams:
     min_liquidity_usd: float = 25000.0
     markets_fetch_limit: int = 500
     min_history_points: int = 480
+    require_orderbook_history: bool = False
+    spread_decay_bps: float = 45.0
+    join_best_queue_factor: float = 0.85
+    off_best_queue_factor: float = 0.35
+    synthetic_orderbook_half_spread_bps: float = 18.0
+    synthetic_orderbook_depth_usd: float = 125.0
+    telemetry_path: str = "logs/polymarket-maker-rebate-backtest-telemetry.jsonl"
     gamma_markets_url: str = f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/markets"
     clob_history_url: str = f"{SEREN_POLYMARKET_TRADING_URL_PREFIX}/trades"
+
+
+@dataclass(frozen=True)
+class OrderBookSnapshot:
+    t: int
+    best_bid: float
+    best_ask: float
+    bid_size_usd: float
+    ask_size_usd: float
+
+
+@dataclass(frozen=True)
+class QuotePlan:
+    status: str
+    market_id: str
+    edge_bps: float
+    spread_bps: float
+    rebate_bps: float
+    bid_price: float = 0.0
+    ask_price: float = 0.0
+    bid_notional_usd: float = 0.0
+    ask_notional_usd: float = 0.0
+    inventory_notional_usd: float = 0.0
+    reason: str = ""
 
 
 def parse_args() -> argparse.Namespace:
@@ -263,6 +295,30 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         min_liquidity_usd=max(0.0, _safe_float(backtest.get("min_liquidity_usd"), 25000.0)),
         markets_fetch_limit=max(1, _safe_int(backtest.get("markets_fetch_limit"), 500)),
         min_history_points=max(10, _safe_int(backtest.get("min_history_points"), 480)),
+        require_orderbook_history=bool(backtest.get("require_orderbook_history", False)),
+        spread_decay_bps=max(1.0, _safe_float(backtest.get("spread_decay_bps"), 45.0)),
+        join_best_queue_factor=clamp(
+            _safe_float(backtest.get("join_best_queue_factor"), 0.85),
+            0.0,
+            1.0,
+        ),
+        off_best_queue_factor=clamp(
+            _safe_float(backtest.get("off_best_queue_factor"), 0.35),
+            0.0,
+            1.0,
+        ),
+        synthetic_orderbook_half_spread_bps=max(
+            1.0,
+            _safe_float(backtest.get("synthetic_orderbook_half_spread_bps"), 18.0),
+        ),
+        synthetic_orderbook_depth_usd=max(
+            1.0,
+            _safe_float(backtest.get("synthetic_orderbook_depth_usd"), 125.0),
+        ),
+        telemetry_path=_safe_str(
+            backtest.get("telemetry_path"),
+            "logs/polymarket-maker-rebate-backtest-telemetry.jsonl",
+        ),
         gamma_markets_url=_safe_str(
             backtest.get("gamma_markets_url"),
             f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/markets",
@@ -314,7 +370,7 @@ def _parse_iso_ts(value: Any) -> int | None:
 
 
 def _coerce_unix_ts(value: Any) -> int:
-    if isinstance(value, int | float):
+    if isinstance(value, (int, float)):
         ts = int(value)
         if ts > 10_000_000_000:
             ts //= 1000
@@ -342,6 +398,95 @@ def _json_to_list(value: Any) -> list[Any]:
         except json.JSONDecodeError:
             return []
     return []
+
+
+def _extract_size_usd(raw: dict[str, Any], price: float) -> float:
+    direct = _safe_float(raw.get("size_usd"), -1.0)
+    if direct >= 0.0:
+        return direct
+    size = _safe_float(
+        raw.get("size", raw.get("quantity", raw.get("amount", raw.get("shares", 0.0)))),
+        0.0,
+    )
+    if size <= 0.0:
+        return 0.0
+    return size if price <= 0.0 else size * price
+
+
+def _top_level_price(levels: Any) -> tuple[float, float]:
+    if isinstance(levels, list) and levels:
+        first = levels[0]
+        if isinstance(first, dict):
+            price = _safe_float(first.get("price"), -1.0)
+            return price, _extract_size_usd(first, price=max(price, 0.0))
+    return -1.0, 0.0
+
+
+def _normalize_orderbook_snapshots(
+    raw_snapshots: Any,
+    history: list[tuple[int, float]],
+    backtest_params: BacktestParams,
+) -> tuple[dict[int, OrderBookSnapshot], str]:
+    snapshots: dict[int, OrderBookSnapshot] = {}
+    if isinstance(raw_snapshots, list):
+        for item in raw_snapshots:
+            if not isinstance(item, dict):
+                continue
+            ts = _safe_int(item.get("t"), -1)
+            if ts < 0:
+                continue
+            best_bid = _safe_float(item.get("best_bid"), -1.0)
+            best_ask = _safe_float(item.get("best_ask"), -1.0)
+            bid_size_usd = _safe_float(item.get("bid_size_usd"), -1.0)
+            ask_size_usd = _safe_float(item.get("ask_size_usd"), -1.0)
+            if best_bid < 0.0:
+                best_bid, inferred_bid_size = _top_level_price(item.get("bids"))
+                if bid_size_usd < 0.0:
+                    bid_size_usd = inferred_bid_size
+            if best_ask < 0.0:
+                best_ask, inferred_ask_size = _top_level_price(item.get("asks"))
+                if ask_size_usd < 0.0:
+                    ask_size_usd = inferred_ask_size
+            if best_bid < 0.0 or best_ask < 0.0 or best_bid > best_ask:
+                continue
+            snapshots[ts] = OrderBookSnapshot(
+                t=ts,
+                best_bid=best_bid,
+                best_ask=best_ask,
+                bid_size_usd=max(0.0, bid_size_usd),
+                ask_size_usd=max(0.0, ask_size_usd),
+            )
+    if snapshots:
+        return snapshots, "historical"
+
+    if backtest_params.require_orderbook_history:
+        raise RuntimeError(
+            "Stateful backtest requires historical order-book snapshots. "
+            "Provide orderbooks in --backtest-file / backtest_markets or disable require_orderbook_history."
+        )
+
+    synthetic: dict[int, OrderBookSnapshot] = {}
+    half_spread = backtest_params.synthetic_orderbook_half_spread_bps / 10000.0
+    for ts, mid in history:
+        synthetic[ts] = OrderBookSnapshot(
+            t=ts,
+            best_bid=clamp(mid - half_spread, 0.001, 0.999),
+            best_ask=clamp(mid + half_spread, 0.001, 0.999),
+            bid_size_usd=backtest_params.synthetic_orderbook_depth_usd,
+            ask_size_usd=backtest_params.synthetic_orderbook_depth_usd,
+        )
+    return synthetic, "synthetic"
+
+
+def _write_telemetry_records(path: str, records: list[dict[str, Any]]) -> None:
+    if not path or not records:
+        return
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, sort_keys=True))
+            handle.write("\n")
 
 
 def _extract_history_rows(payload: Any) -> list[Any]:
@@ -399,7 +544,7 @@ def _row_matches_token(row: dict[str, Any], token_id: str) -> bool:
 
 
 def _history_point_from_row(row: Any, token_id: str) -> tuple[int, float] | None:
-    if isinstance(row, list | tuple) and len(row) >= 2:
+    if isinstance(row, (list, tuple)) and len(row) >= 2:
         ts = _coerce_unix_ts(row[0])
         p = _normalize_probability(row[1])
         if ts < 0 or not (0.0 <= p <= 1.0):
@@ -586,6 +731,7 @@ def _load_markets_from_fixture(
     payload: dict[str, Any] | list[Any],
     start_ts: int,
     end_ts: int,
+    backtest_params: BacktestParams,
 ) -> list[dict[str, Any]]:
     raw_markets: list[Any]
     if isinstance(payload, dict):
@@ -606,6 +752,11 @@ def _load_markets_from_fixture(
         )
         if len(history) < 2:
             continue
+        orderbooks, orderbook_mode = _normalize_orderbook_snapshots(
+            raw_snapshots=raw.get("orderbooks", raw.get("book_history")),
+            history=history,
+            backtest_params=backtest_params,
+        )
         market_id = _safe_str(raw.get("market_id"), _safe_str(raw.get("token_id"), "unknown"))
         markets.append(
             {
@@ -615,10 +766,58 @@ def _load_markets_from_fixture(
                 "end_ts": _safe_int(raw.get("end_ts"), _parse_iso_ts(raw.get("endDate")) or 0),
                 "rebate_bps": _safe_float(raw.get("rebate_bps"), 0.0),
                 "history": history,
+                "orderbooks": orderbooks,
+                "orderbook_mode": orderbook_mode,
                 "source": "fixture",
             }
         )
     return markets
+
+
+def _snapshot_from_live_book(
+    payload: dict[str, Any] | list[Any] | None,
+    history: list[tuple[int, float]],
+    backtest_params: BacktestParams,
+) -> dict[int, OrderBookSnapshot]:
+    if not history:
+        return {}
+    best_bid = -1.0
+    best_ask = -1.0
+    bid_size = 0.0
+    ask_size = 0.0
+    if isinstance(payload, dict):
+        best_bid = _safe_float(payload.get("best_bid", payload.get("bid")), -1.0)
+        best_ask = _safe_float(payload.get("best_ask", payload.get("ask")), -1.0)
+        bid_size = _safe_float(payload.get("bid_size_usd"), -1.0)
+        ask_size = _safe_float(payload.get("ask_size_usd"), -1.0)
+        if best_bid < 0.0:
+            best_bid, inferred_bid_size = _top_level_price(payload.get("bids"))
+            if bid_size < 0.0:
+                bid_size = inferred_bid_size
+        if best_ask < 0.0:
+            best_ask, inferred_ask_size = _top_level_price(payload.get("asks"))
+            if ask_size < 0.0:
+                ask_size = inferred_ask_size
+    if best_bid < 0.0 or best_ask < 0.0 or best_bid >= best_ask:
+        synthetic, _ = _normalize_orderbook_snapshots([], history, backtest_params)
+        return synthetic
+
+    half_spread = max(
+        (best_ask - best_bid) / 2.0,
+        backtest_params.synthetic_orderbook_half_spread_bps / 10000.0,
+    )
+    reference_bid_size = max(0.0, bid_size) or backtest_params.synthetic_orderbook_depth_usd
+    reference_ask_size = max(0.0, ask_size) or backtest_params.synthetic_orderbook_depth_usd
+    snapshots: dict[int, OrderBookSnapshot] = {}
+    for ts, mid in history:
+        snapshots[ts] = OrderBookSnapshot(
+            t=ts,
+            best_bid=clamp(mid - half_spread, 0.001, 0.999),
+            best_ask=clamp(mid + half_spread, 0.001, 0.999),
+            bid_size_usd=reference_bid_size,
+            ask_size_usd=reference_ask_size,
+        )
+    return snapshots
 
 
 def _fetch_live_markets(
@@ -627,6 +826,11 @@ def _fetch_live_markets(
     start_ts: int,
     end_ts: int,
 ) -> list[dict[str, Any]]:
+    if backtest_params.require_orderbook_history:
+        raise RuntimeError(
+            "Historical order-book replay is required. Provide --backtest-file or backtest_markets "
+            "with orderbooks because live publisher fetch does not supply historical book snapshots."
+        )
     query = urlencode(
         {
             "active": "true",
@@ -679,10 +883,23 @@ def _fetch_live_markets(
         )
         if len(history) < backtest_params.min_history_points:
             continue
+        try:
+            book_payload = _http_get_json(
+                f"{SEREN_POLYMARKET_TRADING_URL_PREFIX}/book?{urlencode({'token_id': candidate['token_id']})}"
+            )
+        except Exception:
+            book_payload = None
+        orderbooks = _snapshot_from_live_book(
+            payload=book_payload,
+            history=history,
+            backtest_params=backtest_params,
+        )
         selected.append(
             {
                 **candidate,
                 "history": history,
+                "orderbooks": orderbooks,
+                "orderbook_mode": "synthetic-from-live-book",
                 "source": "live-seren-publisher",
             }
         )
@@ -767,12 +984,181 @@ def _max_drawdown(equity_curve: list[float]) -> float:
     return max_dd
 
 
+def _build_quote_plan(
+    *,
+    market_id: str,
+    mid_price: float,
+    volatility_bps: float,
+    rebate_bps: float,
+    inventory_notional: float,
+    outstanding_notional: float,
+    strategy_params: StrategyParams,
+) -> QuotePlan:
+    spread_bps = compute_spread_bps(volatility_bps, strategy_params)
+    edge_bps = expected_edge_bps(spread_bps, rebate_bps, strategy_params)
+    if edge_bps < strategy_params.min_edge_bps:
+        return QuotePlan(
+            status="skipped",
+            market_id=market_id,
+            reason="negative_or_thin_edge",
+            edge_bps=round(edge_bps, 3),
+            spread_bps=round(spread_bps, 3),
+            rebate_bps=round(rebate_bps, 3),
+            inventory_notional_usd=round(inventory_notional, 2),
+        )
+
+    inventory_ratio = 0.0
+    if strategy_params.max_position_notional_usd > 0:
+        inventory_ratio = clamp(
+            inventory_notional / strategy_params.max_position_notional_usd,
+            -1.0,
+            1.0,
+        )
+    skew_bps = -inventory_ratio * strategy_params.inventory_skew_strength_bps
+    half_spread_prob = (spread_bps / 2.0) / 10000.0
+    skew_prob = skew_bps / 10000.0
+    bid_price = clamp(mid_price - half_spread_prob + skew_prob, 0.001, 0.999)
+    ask_price = clamp(mid_price + half_spread_prob + skew_prob, 0.001, 0.999)
+    if bid_price >= ask_price:
+        return QuotePlan(
+            status="skipped",
+            market_id=market_id,
+            reason="crossed_quote_after_skew",
+            edge_bps=round(edge_bps, 3),
+            spread_bps=round(spread_bps, 3),
+            rebate_bps=round(rebate_bps, 3),
+            inventory_notional_usd=round(inventory_notional, 2),
+        )
+
+    remaining_market = max(0.0, strategy_params.max_notional_per_market_usd - abs(inventory_notional))
+    remaining_total = max(0.0, strategy_params.max_total_notional_usd - max(0.0, outstanding_notional))
+    bid_position_capacity = max(0.0, strategy_params.max_position_notional_usd - inventory_notional)
+    ask_position_capacity = max(0.0, strategy_params.max_position_notional_usd + inventory_notional)
+    per_side_market_budget = remaining_market / 2.0
+    per_side_total_budget = remaining_total / 2.0
+    bid_notional = min(
+        strategy_params.base_order_notional_usd,
+        per_side_market_budget,
+        per_side_total_budget,
+        bid_position_capacity,
+    )
+    ask_notional = min(
+        strategy_params.base_order_notional_usd,
+        per_side_market_budget,
+        per_side_total_budget,
+        ask_position_capacity,
+    )
+    if bid_notional <= 0.0 and ask_notional <= 0.0:
+        return QuotePlan(
+            status="skipped",
+            market_id=market_id,
+            reason="risk_capacity_exhausted",
+            edge_bps=round(edge_bps, 3),
+            spread_bps=round(spread_bps, 3),
+            rebate_bps=round(rebate_bps, 3),
+            inventory_notional_usd=round(inventory_notional, 2),
+        )
+
+    return QuotePlan(
+        status="quoted",
+        market_id=market_id,
+        edge_bps=round(edge_bps, 3),
+        spread_bps=round(spread_bps, 3),
+        rebate_bps=round(rebate_bps, 3),
+        bid_price=round(bid_price, 4),
+        ask_price=round(ask_price, 4),
+        bid_notional_usd=round(max(0.0, bid_notional), 2),
+        ask_notional_usd=round(max(0.0, ask_notional), 2),
+        inventory_notional_usd=round(inventory_notional, 2),
+    )
+
+
+def _liquidation_equity(
+    *,
+    cash_usd: float,
+    position_shares: float,
+    mark_price: float,
+    unwind_cost_bps: float,
+) -> float:
+    inventory_value = position_shares * mark_price
+    liquidation_cost = abs(inventory_value) * unwind_cost_bps / 10000.0
+    return cash_usd + inventory_value - liquidation_cost
+
+
+def _fill_fraction(
+    *,
+    side: str,
+    quote_price: float,
+    quote_notional: float,
+    current_book: OrderBookSnapshot,
+    next_book: OrderBookSnapshot,
+    next_mid: float,
+    spread_bps: float,
+    backtest_params: BacktestParams,
+    strategy_params: StrategyParams,
+) -> float:
+    if quote_notional <= 0.0:
+        return 0.0
+    if side == "buy":
+        touched_price = min(next_mid, next_book.best_bid)
+        touched_distance_bps = max(0.0, (quote_price - touched_price) * 10000.0)
+        displayed_size = next_book.ask_size_usd
+        queue_factor = (
+            backtest_params.join_best_queue_factor
+            if quote_price >= current_book.best_bid
+            else backtest_params.off_best_queue_factor
+        )
+    else:
+        touched_price = max(next_mid, next_book.best_ask)
+        touched_distance_bps = max(0.0, (touched_price - quote_price) * 10000.0)
+        displayed_size = next_book.bid_size_usd
+        queue_factor = (
+            backtest_params.join_best_queue_factor
+            if quote_price <= current_book.best_ask
+            else backtest_params.off_best_queue_factor
+        )
+    if touched_distance_bps <= 0.0:
+        return 0.0
+    half_spread_bps = max(spread_bps / 2.0, 1.0)
+    touch_ratio = clamp(touched_distance_bps / half_spread_bps, 0.0, 1.0)
+    spread_decay = math.exp(
+        -max(0.0, spread_bps - strategy_params.min_spread_bps) / backtest_params.spread_decay_bps
+    )
+    depth_factor = clamp(displayed_size / max(quote_notional, 1e-9), 0.0, 1.0)
+    return clamp(
+        backtest_params.participation_rate * touch_ratio * spread_decay * queue_factor * depth_factor,
+        0.0,
+        1.0,
+    )
+
+
+def _apply_fill(
+    *,
+    side: str,
+    fill_notional: float,
+    fill_price: float,
+    rebate_bps: float,
+    cash_usd: float,
+    position_shares: float,
+) -> tuple[float, float]:
+    shares = fill_notional / max(fill_price, 0.01)
+    if side == "buy":
+        cash_usd -= shares * fill_price
+        position_shares += shares
+    else:
+        cash_usd += shares * fill_price
+        position_shares -= shares
+    cash_usd += fill_notional * rebate_bps / 10000.0
+    return cash_usd, position_shares
+
+
 def _simulate_market_backtest(
     market: dict[str, Any],
     strategy_params: StrategyParams,
     backtest_params: BacktestParams,
 ) -> dict[str, Any]:
     history: list[tuple[int, float]] = market["history"]
+    orderbooks: dict[int, OrderBookSnapshot] = market.get("orderbooks", {})
     window = backtest_params.volatility_window_points
     if len(history) < window + 2:
         return {
@@ -781,76 +1167,196 @@ def _simulate_market_backtest(
             "considered_points": 0,
             "quoted_points": 0,
             "skipped_points": 0,
+            "fill_events": 0,
             "filled_notional_usd": 0.0,
             "pnl_usd": 0.0,
-            "event_pnls": [],
+            "equity_curve": [strategy_params.bankroll_usd],
+            "telemetry": [],
+            "orderbook_mode": market.get("orderbook_mode", "unknown"),
         }
 
-    moves_bps = [
-        abs((history[i][1] - history[i - 1][1]) * 10000.0)
-        for i in range(1, len(history))
-    ]
     rebate_bps = _safe_float(market.get("rebate_bps"), strategy_params.default_rebate_bps)
     if rebate_bps <= 0:
         rebate_bps = strategy_params.default_rebate_bps
     end_ts = _safe_int(market.get("end_ts"), 0)
+    moves_bps = [abs((history[i][1] - history[i - 1][1]) * 10000.0) for i in range(1, len(history))]
 
+    cash_usd = strategy_params.bankroll_usd
+    position_shares = 0.0
     considered = 0
     quoted = 0
     skipped = 0
+    fill_events = 0
     filled_notional = 0.0
-    pnl = 0.0
-    event_pnls: list[float] = []
+    telemetry: list[dict[str, Any]] = []
+    equity_curve = [strategy_params.bankroll_usd]
 
     for i in range(window, len(history) - 1):
         t, mid_price = history[i]
-        _, next_price = history[i + 1]
-        considered += 1
+        next_t, next_price = history[i + 1]
+        current_book = orderbooks.get(t)
+        next_book = orderbooks.get(next_t, current_book)
+        if current_book is None or next_book is None:
+            skipped += 1
+            continue
 
+        considered += 1
+        record: dict[str, Any] = {
+            "t": t,
+            "market_id": market["market_id"],
+            "mid_price": round(mid_price, 6),
+            "next_mid_price": round(next_price, 6),
+            "best_bid": round(current_book.best_bid, 6),
+            "best_ask": round(current_book.best_ask, 6),
+            "inventory_notional_before_usd": round(position_shares * mid_price, 6),
+            "orderbook_mode": market.get("orderbook_mode", "unknown"),
+        }
         if end_ts and end_ts - t < strategy_params.min_seconds_to_resolution:
             skipped += 1
+            record["status"] = "skipped"
+            record["reason"] = "near_resolution"
+            telemetry.append(record)
             continue
         if mid_price <= 0.01 or mid_price >= 0.99:
             skipped += 1
+            record["status"] = "skipped"
+            record["reason"] = "extreme_probability"
+            telemetry.append(record)
             continue
 
         vol_slice = moves_bps[i - window : i]
         vol_bps = pstdev(vol_slice) if len(vol_slice) > 1 else strategy_params.min_spread_bps
-        spread_bps = compute_spread_bps(vol_bps, strategy_params)
-        expected_edge = expected_edge_bps(spread_bps, rebate_bps, strategy_params)
-        if expected_edge < strategy_params.min_edge_bps:
+        quote_plan = _build_quote_plan(
+            market_id=_safe_str(market.get("market_id"), "unknown"),
+            mid_price=mid_price,
+            volatility_bps=vol_bps,
+            rebate_bps=rebate_bps,
+            inventory_notional=position_shares * mid_price,
+            outstanding_notional=abs(position_shares * mid_price),
+            strategy_params=strategy_params,
+        )
+        record.update(
+            {
+                "status": quote_plan.status,
+                "reason": quote_plan.reason,
+                "spread_bps": quote_plan.spread_bps,
+                "edge_bps": quote_plan.edge_bps,
+                "bid_price": quote_plan.bid_price,
+                "ask_price": quote_plan.ask_price,
+                "bid_notional_usd": quote_plan.bid_notional_usd,
+                "ask_notional_usd": quote_plan.ask_notional_usd,
+            }
+        )
+        if quote_plan.status != "quoted":
             skipped += 1
+            telemetry.append(record)
+            equity_curve.append(
+                _liquidation_equity(
+                    cash_usd=cash_usd,
+                    position_shares=position_shares,
+                    mark_price=next_price,
+                    unwind_cost_bps=strategy_params.expected_unwind_cost_bps,
+                )
+            )
             continue
 
         quoted += 1
-        half_spread_bps = spread_bps / 2.0
-        next_move_bps = abs((next_price - mid_price) * 10000.0)
-        touch_ratio = min(1.0, next_move_bps / max(half_spread_bps, 1e-9))
-        fill_fraction = backtest_params.participation_rate * touch_ratio
-        event_notional = strategy_params.base_order_notional_usd * fill_fraction
+        side: str | None = None
+        if next_price < mid_price and quote_plan.bid_notional_usd > 0.0:
+            side = "buy"
+        elif next_price > mid_price and quote_plan.ask_notional_usd > 0.0:
+            side = "sell"
 
-        extra_pickoff_bps = max(0.0, next_move_bps - half_spread_bps)
-        realized_edge_bps = (
-            half_spread_bps
-            + rebate_bps
-            - strategy_params.expected_unwind_cost_bps
-            - strategy_params.adverse_selection_bps
-            - extra_pickoff_bps
+        previous_equity = _liquidation_equity(
+            cash_usd=cash_usd,
+            position_shares=position_shares,
+            mark_price=mid_price,
+            unwind_cost_bps=strategy_params.expected_unwind_cost_bps,
         )
-        event_pnl = event_notional * realized_edge_bps / 10000.0
-        filled_notional += event_notional
-        pnl += event_pnl
-        event_pnls.append(event_pnl)
+        fill_fraction = 0.0
+        fill_notional = 0.0
+        fill_price = 0.0
+        if side == "buy":
+            fill_fraction = _fill_fraction(
+                side="buy",
+                quote_price=quote_plan.bid_price,
+                quote_notional=quote_plan.bid_notional_usd,
+                current_book=current_book,
+                next_book=next_book,
+                next_mid=next_price,
+                spread_bps=quote_plan.spread_bps,
+                backtest_params=backtest_params,
+                strategy_params=strategy_params,
+            )
+            fill_notional = quote_plan.bid_notional_usd * fill_fraction
+            fill_price = quote_plan.bid_price
+        elif side == "sell":
+            fill_fraction = _fill_fraction(
+                side="sell",
+                quote_price=quote_plan.ask_price,
+                quote_notional=quote_plan.ask_notional_usd,
+                current_book=current_book,
+                next_book=next_book,
+                next_mid=next_price,
+                spread_bps=quote_plan.spread_bps,
+                backtest_params=backtest_params,
+                strategy_params=strategy_params,
+            )
+            fill_notional = quote_plan.ask_notional_usd * fill_fraction
+            fill_price = quote_plan.ask_price
 
+        if fill_notional > 0.0 and side is not None:
+            cash_usd, position_shares = _apply_fill(
+                side=side,
+                fill_notional=fill_notional,
+                fill_price=fill_price,
+                rebate_bps=rebate_bps,
+                cash_usd=cash_usd,
+                position_shares=position_shares,
+            )
+            filled_notional += fill_notional
+            fill_events += 1
+
+        equity_after = _liquidation_equity(
+            cash_usd=cash_usd,
+            position_shares=position_shares,
+            mark_price=next_price,
+            unwind_cost_bps=strategy_params.expected_unwind_cost_bps,
+        )
+        equity_curve.append(equity_after)
+        record.update(
+            {
+                "fill_side": side or "",
+                "fill_fraction": round(fill_fraction, 6),
+                "fill_notional_usd": round(fill_notional, 6),
+                "inventory_notional_after_usd": round(position_shares * next_price, 6),
+                "equity_before_usd": round(previous_equity, 6),
+                "equity_after_usd": round(equity_after, 6),
+                "event_pnl_usd": round(equity_after - previous_equity, 6),
+            }
+        )
+        telemetry.append(record)
+
+    ending_equity = _liquidation_equity(
+        cash_usd=cash_usd,
+        position_shares=position_shares,
+        mark_price=history[-1][1],
+        unwind_cost_bps=strategy_params.expected_unwind_cost_bps,
+    )
+    if not equity_curve or ending_equity != equity_curve[-1]:
+        equity_curve.append(ending_equity)
     return {
         "market_id": market["market_id"],
         "question": market["question"],
         "considered_points": considered,
         "quoted_points": quoted,
         "skipped_points": skipped,
+        "fill_events": fill_events,
         "filled_notional_usd": round(filled_notional, 4),
-        "pnl_usd": round(pnl, 6),
-        "event_pnls": event_pnls,
+        "pnl_usd": round(ending_equity - strategy_params.bankroll_usd, 6),
+        "equity_curve": equity_curve,
+        "telemetry": telemetry,
+        "orderbook_mode": market.get("orderbook_mode", "unknown"),
     }
 
 
@@ -872,6 +1378,7 @@ def run_backtest(
                 payload=fixture_payload,
                 start_ts=start_ts,
                 end_ts=end_ts,
+                backtest_params=backtest_params,
             )
             source = "file"
         elif config.get("backtest_markets"):
@@ -879,6 +1386,7 @@ def run_backtest(
                 payload=config.get("backtest_markets", []),
                 start_ts=start_ts,
                 end_ts=end_ts,
+                backtest_params=backtest_params,
             )
             source = "config"
         else:
@@ -910,10 +1418,13 @@ def run_backtest(
         }
 
     market_summaries: list[dict[str, Any]] = []
-    event_pnls: list[float] = []
+    equity_curve = [strategy_params.bankroll_usd]
     total_considered = 0
     total_quoted = 0
     total_notional = 0.0
+    total_fill_events = 0
+    telemetry_records: list[dict[str, Any]] = []
+    orderbook_modes: set[str] = set()
 
     for market in markets[: strategy_params.markets_max]:
         summary = _simulate_market_backtest(
@@ -928,26 +1439,32 @@ def run_backtest(
                 "considered_points": summary["considered_points"],
                 "quoted_points": summary["quoted_points"],
                 "skipped_points": summary["skipped_points"],
+                "fill_events": summary["fill_events"],
                 "filled_notional_usd": summary["filled_notional_usd"],
                 "pnl_usd": summary["pnl_usd"],
+                "orderbook_mode": summary["orderbook_mode"],
             }
         )
         total_considered += int(summary["considered_points"])
         total_quoted += int(summary["quoted_points"])
         total_notional += float(summary["filled_notional_usd"])
-        event_pnls.extend(summary["event_pnls"])
+        total_fill_events += int(summary["fill_events"])
+        telemetry_records.extend(summary["telemetry"])
+        orderbook_modes.add(_safe_str(summary.get("orderbook_mode"), "unknown"))
 
-    equity_curve = [strategy_params.bankroll_usd]
-    running_equity = strategy_params.bankroll_usd
-    for event_pnl in event_pnls:
-        running_equity += event_pnl
-        equity_curve.append(running_equity)
+        market_equity_curve = summary["equity_curve"]
+        if len(market_equity_curve) > len(equity_curve):
+            equity_curve.extend([equity_curve[-1]] * (len(market_equity_curve) - len(equity_curve)))
+        for idx, value in enumerate(market_equity_curve):
+            if idx < len(equity_curve):
+                equity_curve[idx] += value - strategy_params.bankroll_usd
 
-    ending_equity = running_equity
+    ending_equity = equity_curve[-1]
     total_pnl = ending_equity - strategy_params.bankroll_usd
     return_pct = (total_pnl / strategy_params.bankroll_usd) * 100.0
     max_drawdown = _max_drawdown(equity_curve)
     decision = "consider_live_guarded" if total_pnl > 0 else "paper_only_or_tune"
+    _write_telemetry_records(backtest_params.telemetry_path, telemetry_records)
 
     return {
         "status": "ok",
@@ -962,6 +1479,8 @@ def run_backtest(
             "markets_selected": len(market_summaries),
             "considered_points": total_considered,
             "quoted_points": total_quoted,
+            "fill_events": total_fill_events,
+            "orderbook_mode": ",".join(sorted(orderbook_modes)),
             "quote_rate_pct": round(
                 (total_quoted / total_considered) * 100.0 if total_considered else 0.0,
                 4,
@@ -973,8 +1492,9 @@ def run_backtest(
             "total_pnl_usd": round(total_pnl, 4),
             "return_pct": round(return_pct, 4),
             "filled_notional_usd": round(total_notional, 4),
-            "events": len(event_pnls),
+            "events": total_fill_events,
             "max_drawdown_usd": round(max_drawdown, 4),
+            "telemetry_path": backtest_params.telemetry_path or None,
             "decision_hint": decision,
             "disclaimer": (
                 "Backtests are estimates and do not guarantee future performance."
@@ -999,61 +1519,35 @@ def quote_market(
     mid = _safe_float(market.get("mid_price"), 0.5)
     vol_bps = _safe_float(market.get("volatility_bps"), p.min_spread_bps)
     rebate_bps = _safe_float(market.get("rebate_bps"), p.default_rebate_bps)
-    spread_bps = compute_spread_bps(vol_bps, p)
-    edge_bps = expected_edge_bps(spread_bps, rebate_bps, p)
-
-    if edge_bps < p.min_edge_bps:
+    quote_plan = _build_quote_plan(
+        market_id=market_id,
+        mid_price=mid,
+        volatility_bps=vol_bps,
+        rebate_bps=rebate_bps,
+        inventory_notional=inventory_notional,
+        outstanding_notional=outstanding_notional,
+        strategy_params=p,
+    )
+    if quote_plan.status != "quoted":
         return {
             "market_id": market_id,
             "status": "skipped",
-            "reason": "negative_or_thin_edge",
-            "edge_bps": round(edge_bps, 3),
+            "reason": quote_plan.reason,
+            "edge_bps": quote_plan.edge_bps,
         }
-
-    # Positive inventory -> lower ask / higher bid to de-risk longs.
-    inventory_ratio = 0.0
-    if p.max_position_notional_usd > 0:
-        inventory_ratio = clamp(
-            inventory_notional / p.max_position_notional_usd,
-            -1.0,
-            1.0,
-        )
-    skew_bps = -inventory_ratio * p.inventory_skew_strength_bps
-    half_spread_prob = (spread_bps / 2.0) / 10000.0
-    skew_prob = skew_bps / 10000.0
-
-    bid_px = clamp(mid - half_spread_prob + skew_prob, 0.001, 0.999)
-    ask_px = clamp(mid + half_spread_prob + skew_prob, 0.001, 0.999)
-    if bid_px >= ask_px:
-        return {
-            "market_id": market_id,
-            "status": "skipped",
-            "reason": "crossed_quote_after_skew",
-            "edge_bps": round(edge_bps, 3),
-        }
-
-    remaining_market = max(0.0, p.max_notional_per_market_usd - abs(inventory_notional))
-    remaining_total = max(0.0, p.max_total_notional_usd - max(0.0, outstanding_notional))
-    quote_notional = min(p.base_order_notional_usd, remaining_market, remaining_total)
-
-    if quote_notional <= 0:
-        return {
-            "market_id": market_id,
-            "status": "skipped",
-            "reason": "risk_capacity_exhausted",
-            "edge_bps": round(edge_bps, 3),
-        }
-
+    total_notional = quote_plan.bid_notional_usd + quote_plan.ask_notional_usd
     return {
         "market_id": market_id,
-        "status": "quoted",
-        "edge_bps": round(edge_bps, 3),
-        "spread_bps": round(spread_bps, 3),
-        "rebate_bps": round(rebate_bps, 3),
-        "quote_notional_usd": round(quote_notional, 2),
-        "bid_price": round(bid_px, 4),
-        "ask_price": round(ask_px, 4),
-        "inventory_notional_usd": round(inventory_notional, 2),
+        "status": quote_plan.status,
+        "edge_bps": quote_plan.edge_bps,
+        "spread_bps": quote_plan.spread_bps,
+        "rebate_bps": quote_plan.rebate_bps,
+        "quote_notional_usd": round(total_notional, 2),
+        "bid_notional_usd": quote_plan.bid_notional_usd,
+        "ask_notional_usd": quote_plan.ask_notional_usd,
+        "bid_price": quote_plan.bid_price,
+        "ask_price": quote_plan.ask_price,
+        "inventory_notional_usd": quote_plan.inventory_notional_usd,
     }
 
 
@@ -1118,10 +1612,10 @@ def run_once(
     inventory_notional_by_market = {
         str(k): _safe_float(v, 0.0) for k, v in inventory.items()
     }
-    live_trader: PolymarketPublisherTrader | None = None
+    live_trader: DirectClobTrader | None = None
     if live_mode:
         try:
-            live_trader = PolymarketPublisherTrader(
+            live_trader = DirectClobTrader(
                 skill_root=Path(__file__).resolve().parents[1],
                 client_name="polymarket-maker-rebate-bot",
             )

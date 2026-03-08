@@ -16,6 +16,13 @@
     "min_liquidity_usd": 25000,
     "markets_fetch_limit": 500,
     "min_history_points": 480,
+    "require_orderbook_history": false,
+    "spread_decay_bps": 45,
+    "join_best_queue_factor": 0.85,
+    "off_best_queue_factor": 0.35,
+    "synthetic_orderbook_half_spread_bps": 18,
+    "synthetic_orderbook_depth_usd": 125,
+    "telemetry_path": "logs/polymarket-maker-rebate-backtest-telemetry.jsonl",
     "gamma_markets_url": "https://api.serendb.com/publishers/polymarket-data/markets",
     "clob_history_url": "https://api.serendb.com/publishers/polymarket-trading-serenai/trades"
   },

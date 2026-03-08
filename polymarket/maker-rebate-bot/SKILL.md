@@ -13,10 +13,10 @@ description: "Provide two-sided liquidity on Polymarket with rebate-aware quotin
 
 ## Workflow Summary
 
-1. `fetch_backtest_universe` loads candidate markets from Polymarket APIs (or local fixtures).
-2. `replay_90d_history` replays historical prices and simulates maker fills.
-3. `score_edge_and_pnl` estimates realized edge and PnL (spread + rebate - pickoff/unwind costs).
-4. `summarize_backtest` returns return %, drawdown, quoted rate, and market-level results.
+1. `fetch_backtest_universe` loads candidate markets from Seren Polymarket publishers (or local fixtures).
+2. `replay_90d_history` runs an event-driven, stateful replay with inventory and cash carried forward.
+3. `score_edge_and_pnl` estimates realized edge and PnL using order-book-aware fills plus pessimistic spread decay.
+4. `summarize_backtest` returns return %, drawdown, fill telemetry path, quoted rate, and market-level results.
 5. `filter_markets` removes markets near resolution or outside quality thresholds.
 6. `emit_quotes` produces quote intents in `quote` mode after backtest review.
 7. `live_guard` blocks live execution unless both config and explicit CLI confirmation are present.
@@ -80,6 +80,7 @@ Each backtest market object should include:
 - `token_id` (string)
 - `end_ts` or `endDate` (market resolution timestamp)
 - `history` array of `{ "t": unix_ts, "p": probability_0_to_1 }`
+- optional `orderbooks` array of `{ "t": unix_ts, "best_bid": ..., "best_ask": ..., "bid_size_usd": ..., "ask_size_usd": ... }`
 - optional `rebate_bps` (number; otherwise default rebate from config)
 
 ## Safety Notes
@@ -87,6 +88,8 @@ Each backtest market object should include:
 - Live execution is never enabled by default.
 - Live quote cycles cancel stale orders, fetch fresh market snapshots, and then poll open orders/positions after requoting.
 - Backtests are estimates and can materially differ from live outcomes.
+- Replay enforces the same market, total, and position caps used by quote mode.
+- Backtests emit JSONL quote/fill telemetry for later calibration when `backtest.telemetry_path` is set.
 - Quotes are blocked when estimated edge is negative.
 - Markets close to resolution are excluded.
 - Position and notional caps are enforced before orders are emitted.

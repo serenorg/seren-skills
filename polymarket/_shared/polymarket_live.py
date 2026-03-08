@@ -120,7 +120,7 @@ def normalize_history(
         if isinstance(item, dict):
             t = safe_int(item.get("t"), -1)
             p = safe_float(item.get("p"), -1.0)
-        elif isinstance(item, list | tuple) and len(item) >= 2:
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
             t = safe_int(item[0], -1)
             p = safe_float(item[1], -1.0)
         if t < 0 or not (0.0 <= p <= 1.0) or t in seen:
@@ -162,7 +162,7 @@ def best_price(levels: Any, fallback: float = 0.0) -> float:
     level = levels[0]
     if isinstance(level, dict):
         return safe_float(level.get("price"), fallback)
-    if isinstance(level, list | tuple) and level:
+    if isinstance(level, (list, tuple)) and level:
         return safe_float(level[0], fallback)
     return fallback
 
@@ -361,7 +361,7 @@ def _extract_call_publisher_body(result: dict[str, Any]) -> Any:
     structured = result.get("structuredContent")
     if isinstance(structured, dict):
         body = structured.get("body")
-        if isinstance(body, dict | list):
+        if isinstance(body, (dict, list)):
             return body
         return structured
     content = result.get("content")
@@ -380,13 +380,13 @@ def _extract_call_publisher_body(result: dict[str, Any]) -> Any:
                 continue
             if isinstance(parsed, dict):
                 body = parsed.get("body")
-                if isinstance(body, dict | list):
+                if isinstance(body, (dict, list)):
                     return body
                 return parsed
             if isinstance(parsed, list):
                 return parsed
     body = result.get("body")
-    if isinstance(body, dict | list):
+    if isinstance(body, (dict, list)):
         return body
     return result.get("value")
 
@@ -954,6 +954,99 @@ class PolymarketPublisherTrader:
         return self._call("GET", "/positions")
 
 
+class DirectClobTrader:
+    """Direct Polymarket CLOB client for local py-clob-client execution."""
+
+    def __init__(
+        self,
+        *,
+        skill_root: Path,
+        client_name: str,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
+        maybe_load_dotenv(skill_root)
+        self.client_name = client_name
+        self.timeout_seconds = timeout_seconds
+
+        try:
+            from py_clob_client.client import ClobClient
+            from py_clob_client.clob_types import ApiCreds
+        except ImportError as exc:
+            raise RuntimeError(
+                "Direct CLOB trading requires `py-clob-client`. "
+                "Create and activate a virtual environment first, then run "
+                "`python -m pip install -r requirements.txt`."
+            ) from exc
+
+        private_key = safe_str(
+            os.getenv("POLY_PRIVATE_KEY") or os.getenv("WALLET_PRIVATE_KEY"),
+            "",
+        ).strip()
+        api_key = safe_str(os.getenv("POLY_API_KEY"), "").strip()
+        api_passphrase = safe_str(os.getenv("POLY_PASSPHRASE"), "").strip()
+        api_secret = safe_str(os.getenv("POLY_SECRET"), "").strip()
+        if not private_key:
+            raise RuntimeError(
+                "Direct CLOB trading requires `POLY_PRIVATE_KEY` or `WALLET_PRIVATE_KEY`."
+            )
+        if not api_key or not api_passphrase or not api_secret:
+            raise RuntimeError(
+                "Missing required Polymarket L2 credentials. Set "
+                "`POLY_API_KEY`, `POLY_PASSPHRASE`, and `POLY_SECRET`."
+            )
+
+        chain_id = safe_int(os.getenv("POLY_CHAIN_ID"), DEFAULT_CHAIN_ID)
+        creds = ApiCreds(
+            api_key=api_key,
+            api_secret=api_secret,
+            api_passphrase=api_passphrase,
+        )
+        self._client = ClobClient(
+            host="https://clob.polymarket.com",
+            key=private_key,
+            chain_id=chain_id,
+            creds=creds,
+        )
+        self.address = self._client.get_address()
+
+    def create_order(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        price: float,
+        size: float,
+        tick_size: str,
+        neg_risk: bool,
+        fee_rate_bps: int,
+    ) -> Any:
+        del tick_size, neg_risk, fee_rate_bps
+        from py_clob_client.clob_types import OrderArgs, OrderType
+        from py_clob_client.order_builder.constants import BUY, SELL
+
+        clob_side = BUY if side.upper() == "BUY" else SELL
+        order_args = OrderArgs(
+            price=price,
+            size=size,
+            side=clob_side,
+            token_id=token_id,
+        )
+        signed_order = self._client.create_order(order_args)
+        return self._client.post_order(signed_order, OrderType.GTC)
+
+    def cancel_all(self) -> Any:
+        return self._client.cancel_all()
+
+    def get_orders(self) -> Any:
+        return self._client.get_orders()
+
+    def get_positions(self) -> Any:
+        try:
+            return self._client.get_balance_allowance()
+        except Exception:
+            return []
+
+
 def single_market_inventory_notional(
     *,
     raw_positions: Any,
@@ -1010,7 +1103,7 @@ def live_settings_from_execution(execution: dict[str, Any]) -> LiveExecutionSett
 
 def execute_single_market_quotes(
     *,
-    trader: PolymarketPublisherTrader,
+    trader: PolymarketPublisherTrader | DirectClobTrader,
     quotes: list[dict[str, Any]],
     markets: list[dict[str, Any]],
     execution_settings: LiveExecutionSettings,
@@ -1038,16 +1131,18 @@ def execute_single_market_quotes(
         tick_size = safe_str(market.get("tick_size"), "0.01")
         neg_risk = bool(market.get("neg_risk", False))
         fee_rate_bps = fetch_fee_rate_bps(token_id)
-        quote_notional = max(0.0, safe_float(quote.get("quote_notional_usd"), 0.0))
-        if quote_notional <= 0.0:
+        fallback_notional = max(0.0, safe_float(quote.get("quote_notional_usd"), 0.0))
+        bid_notional = max(0.0, safe_float(quote.get("bid_notional_usd"), fallback_notional))
+        ask_notional = max(0.0, safe_float(quote.get("ask_notional_usd"), fallback_notional))
+        if bid_notional <= 0.0 and ask_notional <= 0.0:
             skips.append({"market_id": market["market_id"], "reason": "zero_quote_notional"})
             continue
 
         bid_price = snap_price(safe_float(quote.get("bid_price"), 0.0), tick_size, "BUY")
         ask_price = snap_price(safe_float(quote.get("ask_price"), 0.0), tick_size, "SELL")
 
-        if bid_price > 0.0:
-            bid_size = quote_notional / max(bid_price, 1e-9)
+        if bid_price > 0.0 and bid_notional > 0.0:
+            bid_size = bid_notional / max(bid_price, 1e-9)
             response = trader.create_order(
                 token_id=token_id,
                 side="BUY",
@@ -1069,7 +1164,7 @@ def execute_single_market_quotes(
             )
 
         available_shares = max(0.0, position_sizes.get(token_id, 0.0))
-        sell_notional = min(quote_notional, available_shares * max(ask_price, 0.0))
+        sell_notional = min(ask_notional, available_shares * max(ask_price, 0.0))
         if ask_price > 0.0 and sell_notional > 0.0:
             ask_size = sell_notional / max(ask_price, 1e-9)
             response = trader.create_order(
@@ -1124,7 +1219,7 @@ def execute_single_market_quotes(
 
 def execute_pair_trades(
     *,
-    trader: PolymarketPublisherTrader,
+    trader: PolymarketPublisherTrader | DirectClobTrader,
     pair_trades: list[dict[str, Any]],
     markets: list[dict[str, Any]],
     execution_settings: LiveExecutionSettings,

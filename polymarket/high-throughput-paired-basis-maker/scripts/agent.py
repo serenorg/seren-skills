@@ -24,7 +24,7 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
 from polymarket_live import (
-    PolymarketPublisherTrader,
+    DirectClobTrader,
     execute_pair_trades,
     live_settings_from_execution,
     load_live_pair_markets,
@@ -1163,10 +1163,10 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
 
     exposure = config.get("state", {}).get("leg_exposure", {})
     leg_exposure = {str(k): _safe_float(v, 0.0) for k, v in exposure.items()}
-    live_trader: PolymarketPublisherTrader | None = None
+    live_trader: DirectClobTrader | None = None
     if live_mode:
         try:
-            live_trader = PolymarketPublisherTrader(
+            live_trader = DirectClobTrader(
                 skill_root=Path(__file__).resolve().parents[1],
                 client_name="high-throughput-paired-basis-maker",
             )

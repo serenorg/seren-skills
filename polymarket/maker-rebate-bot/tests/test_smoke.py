@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import subprocess
 import sys
 import time
 from pathlib import Path
+
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "agent.py"
@@ -23,6 +25,102 @@ def _load_agent_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _build_history_and_orderbooks(
+    now_ts: int,
+    points: int = 240,
+) -> tuple[list[dict[str, float]], list[dict[str, float]]]:
+    start_ts = now_ts - (points * 3600)
+    history: list[dict[str, float]] = []
+    orderbooks: list[dict[str, float]] = []
+    for i in range(points):
+        px = max(0.05, min(0.95, 0.5 + (0.012 * math.sin(i / 5.0)) + (0.003 * math.cos(i / 11.0))))
+        ts = start_ts + (i * 3600)
+        history.append({"t": ts, "p": round(px, 6)})
+        orderbooks.append(
+            {
+                "t": ts,
+                "best_bid": round(px - 0.0015, 6),
+                "best_ask": round(px + 0.0015, 6),
+                "bid_size_usd": 250.0,
+                "ask_size_usd": 250.0,
+            }
+        )
+    return history, orderbooks
+
+
+def _base_backtest_payload(now_ts: int, telemetry_path: Path) -> dict:
+    history, orderbooks = _build_history_and_orderbooks(now_ts)
+    return {
+        "execution": {"dry_run": True, "live_mode": False},
+        "backtest": {
+            "days": 90,
+            "fidelity_minutes": 60,
+            "participation_rate": 0.25,
+            "volatility_window_points": 24,
+            "min_history_points": 120,
+            "min_liquidity_usd": 0,
+            "require_orderbook_history": True,
+            "spread_decay_bps": 45,
+            "join_best_queue_factor": 0.85,
+            "off_best_queue_factor": 0.35,
+            "telemetry_path": str(telemetry_path),
+        },
+        "strategy": {
+            "bankroll_usd": 1000,
+            "markets_max": 1,
+            "min_seconds_to_resolution": 21600,
+            "min_edge_bps": 2,
+            "default_rebate_bps": 3,
+            "expected_unwind_cost_bps": 1.5,
+            "adverse_selection_bps": 1.0,
+            "min_spread_bps": 20,
+            "max_spread_bps": 60,
+            "volatility_spread_multiplier": 0.0,
+            "base_order_notional_usd": 40,
+            "max_notional_per_market_usd": 120,
+            "max_total_notional_usd": 120,
+            "max_position_notional_usd": 90,
+            "inventory_skew_strength_bps": 25,
+        },
+        "backtest_markets": [
+            {
+                "market_id": "TEST-STATEFUL",
+                "question": "Synthetic stateful market",
+                "token_id": "TEST-STATEFUL",
+                "rebate_bps": 3,
+                "end_ts": now_ts + (14 * 24 * 3600),
+                "history": history,
+                "orderbooks": orderbooks,
+            }
+        ],
+    }
+
+
+def _run_backtest(tmp_path: Path, payload: dict) -> dict:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--config",
+            str(config_path),
+            "--run-type",
+            "backtest",
+            "--backtest-days",
+            "90",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout, result.stderr
+    output = json.loads(result.stdout)
+    assert result.returncode == (0 if output["status"] == "ok" else 1), result.stderr
+    return output
 
 
 def test_happy_path_fixture_is_successful() -> None:
@@ -99,61 +197,84 @@ def test_live_guard_fixture_blocks_execution() -> None:
     assert payload["error_code"] == "live_confirmation_required"
 
 
-def test_backtest_run_type_returns_result_from_config_history(tmp_path: Path) -> None:
-    payload = json.loads(CONFIG_EXAMPLE_PATH.read_text(encoding="utf-8"))
-    assert payload["strategy"]["bankroll_usd"] == 1000
-
+def test_backtest_run_type_returns_stateful_result_and_telemetry(tmp_path: Path) -> None:
     now_ts = int(time.time())
-    start_ts = now_ts - (90 * 24 * 3600)
-    history = []
-    for i in range(720):
-        wave = ((i % 24) - 12) / 600.0
-        drift = ((i % 11) - 5) / 3000.0
-        px = max(0.05, min(0.95, 0.5 + wave + drift))
-        history.append({"t": start_ts + (i * 3600), "p": round(px, 6)})
+    telemetry_path = tmp_path / "telemetry.jsonl"
+    payload = _base_backtest_payload(now_ts, telemetry_path)
 
-    payload["backtest"]["min_history_points"] = 200
-    payload["backtest"]["min_liquidity_usd"] = 0
-    payload["backtest_markets"] = [
-        {
-            "market_id": f"TEST-90D-{idx}",
-            "question": "Synthetic 90D market",
-            "token_id": f"TEST-90D-{idx}",
-            "rebate_bps": 3,
-            "end_ts": now_ts + (7 * 24 * 3600),
-            "history": history,
-        }
-        for idx in range(payload["strategy"]["markets_max"])
-    ]
-    config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    output = _run_backtest(tmp_path, payload)
 
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT_PATH),
-            "--config",
-            str(config_path),
-            "--run-type",
-            "backtest",
-            "--backtest-days",
-            "90",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    output = json.loads(result.stdout)
     assert output["status"] == "ok"
     assert output["mode"] == "backtest"
-    assert output["backtest_summary"]["days"] == 90
     assert output["backtest_summary"]["source"] == "config"
-    assert output["backtest_summary"]["markets_selected"] >= 1
+    assert output["backtest_summary"]["markets_selected"] == 1
+    assert output["backtest_summary"]["orderbook_mode"] == "historical"
     assert output["results"]["events"] > 0
-    assert output["results"]["starting_bankroll_usd"] == 1000
-    assert output["results"]["return_pct"] >= 20.0
+    assert output["results"]["telemetry_path"] == str(telemetry_path)
+    telemetry_lines = telemetry_path.read_text(encoding="utf-8").strip().splitlines()
+    assert telemetry_lines
+    first = json.loads(telemetry_lines[0])
+    assert first["market_id"] == "TEST-STATEFUL"
+    assert "fill_fraction" in first or first["status"] == "skipped"
+
+
+def test_stateful_backtest_enforces_risk_caps_in_replay(tmp_path: Path) -> None:
+    now_ts = int(time.time())
+    telemetry_path = tmp_path / "risk-caps.jsonl"
+    payload = _base_backtest_payload(now_ts, telemetry_path)
+    payload["strategy"].update(
+        {
+            "base_order_notional_usd": 200,
+            "max_notional_per_market_usd": 60,
+            "max_total_notional_usd": 60,
+            "max_position_notional_usd": 40,
+        }
+    )
+
+    output = _run_backtest(tmp_path, payload)
+
+    assert output["status"] == "ok"
+    records = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    quoted = [record for record in records if record.get("status") == "quoted"]
+    assert quoted
+    assert all((record["bid_notional_usd"] + record["ask_notional_usd"]) <= 60.0001 for record in quoted)
+    assert all(
+        abs(record.get("inventory_notional_after_usd", 0.0)) <= 40.0001
+        for record in records
+        if "inventory_notional_after_usd" in record
+    )
+
+
+def test_spread_decay_reduces_filled_notional_when_spread_widens(tmp_path: Path) -> None:
+    now_ts = int(time.time())
+    narrow_payload = _base_backtest_payload(now_ts, tmp_path / "narrow.jsonl")
+    narrow_payload["strategy"].update(
+        {"min_spread_bps": 20, "max_spread_bps": 20, "volatility_spread_multiplier": 0.0}
+    )
+    wide_payload = _base_backtest_payload(now_ts, tmp_path / "wide.jsonl")
+    wide_payload["strategy"].update(
+        {"min_spread_bps": 120, "max_spread_bps": 120, "volatility_spread_multiplier": 0.0}
+    )
+
+    narrow_output = _run_backtest(tmp_path / "narrow", narrow_payload)
+    wide_output = _run_backtest(tmp_path / "wide", wide_payload)
+
+    assert narrow_output["status"] == "ok"
+    assert wide_output["status"] == "ok"
+    assert wide_output["results"]["filled_notional_usd"] < narrow_output["results"]["filled_notional_usd"]
+
+
+def test_backtest_requires_orderbook_history_when_configured(tmp_path: Path) -> None:
+    now_ts = int(time.time())
+    telemetry_path = tmp_path / "missing-books.jsonl"
+    payload = _base_backtest_payload(now_ts, telemetry_path)
+    payload["backtest_markets"][0].pop("orderbooks")
+
+    output = _run_backtest(tmp_path, payload)
+
+    assert output["status"] == "error"
+    assert output["error_code"] == "backtest_data_load_failed"
+    assert "historical order-book snapshots" in output["message"]
 
 
 def test_config_example_uses_seren_polymarket_publisher_urls() -> None:
@@ -169,8 +290,6 @@ def test_config_example_uses_seren_polymarket_publisher_urls() -> None:
 
 
 def test_backtest_rejects_non_seren_polymarket_data_source(tmp_path: Path) -> None:
-    # Keep this negative-path test without embedding direct endpoint literals,
-    # so publisher-enforcement grep checks stay signal-only on runtime/config code.
     bad_gamma_url = "https://gamma" + "-api." + "polymarket.com/markets"
     bad_clob_url = "https://clob." + "polymarket.com/prices-history"
     payload = {
@@ -277,7 +396,7 @@ def test_live_quote_mode_uses_live_market_loader_and_executor(monkeypatch) -> No
             "updated_inventory": {"LIVE-MKT-1": 12.5},
         }
 
-    monkeypatch.setattr(agent, "PolymarketPublisherTrader", FakeTrader)
+    monkeypatch.setattr(agent, "DirectClobTrader", FakeTrader)
     monkeypatch.setattr(agent, "load_live_single_markets", fake_load_live_single_markets)
     monkeypatch.setattr(agent, "execute_single_market_quotes", fake_execute_single_market_quotes)
 

@@ -211,7 +211,7 @@ def test_live_trade_mode_uses_live_pair_loader_and_executor(monkeypatch) -> None
             "updated_leg_exposure": {"LIVE-PAIR-1A": 7.5, "LIVE-PAIR-1B": -7.5},
         }
 
-    monkeypatch.setattr(module, "PolymarketPublisherTrader", FakeTrader)
+    monkeypatch.setattr(module, "DirectClobTrader", FakeTrader)
     monkeypatch.setattr(module, "load_live_pair_markets", fake_load_live_pair_markets)
     monkeypatch.setattr(module, "execute_pair_trades", fake_execute_pair_trades)
 
