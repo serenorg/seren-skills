@@ -5,6 +5,10 @@ description: "Automated grid trading bot for Coinbase Exchange — profits from 
 
 # Coinbase Grid Trader
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 Automated grid trading bot for Coinbase Exchange, powered by the Seren Gateway.
 
 ## What This Skill Provides

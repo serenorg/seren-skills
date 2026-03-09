@@ -5,6 +5,10 @@ description: "Create, manage, and query SerenDB databases through the first-clas
 
 # Seren DB
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 Use this skill when a user wants to create, manage, or query SerenDB serverless Postgres databases.
 
 ## API

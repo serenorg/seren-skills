@@ -5,6 +5,10 @@ description: "Run a paired-market basis strategy on Polymarket with mandatory ba
 
 # Paired Market Basis Maker
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 ## When to Use
 
 - trade relative-value dislocations between logically linked Polymarket contracts

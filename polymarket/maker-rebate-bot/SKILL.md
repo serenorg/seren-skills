@@ -5,6 +5,10 @@ description: "Provide two-sided liquidity on Polymarket with rebate-aware quotin
 
 # Polymarket Maker Rebate Bot
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 ## When to Use
 
 - run a fast 90-day backtest on Polymarket maker-rebate logic before trading

@@ -5,6 +5,10 @@ description: "Reconcile CARF/DAC8 exchange-reported crypto transactions against 
 
 # CARF / DAC8 Crypto Asset Reporting
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 Local-first reconciliation skill for OECD CARF and EU DAC8 reporting data.
 
 ## When to Use

@@ -5,6 +5,10 @@ description: "Generate operating, investing, and financing cash flow statements 
 
 # Wells Fargo Cash Flow Statement
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 ## When To Use
 
 - Generate cash flow statements broken into Operating, Investing, and Financing activities.

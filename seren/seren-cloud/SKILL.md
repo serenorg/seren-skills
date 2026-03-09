@@ -5,6 +5,10 @@ description: "Deploy and operate hosted skills through the first-class seren-clo
 
 # Seren Cloud
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 Use this skill when a user wants to deploy or run skills in Seren-managed cloud runtime.
 
 ## API
