@@ -5,6 +5,10 @@ description: "Create or update skills that comply with the Agent Skills specific
 
 # Skill Creator
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 Use this skill to create new skills or modernize existing ones in this repository.
 
 ## When To Use

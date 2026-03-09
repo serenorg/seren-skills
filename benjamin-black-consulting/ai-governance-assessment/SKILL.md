@@ -5,6 +5,10 @@ description: "Assess AI governance maturity for compliance/risk leaders: evaluat
 
 # AI Governance Readiness Assessment
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 Assess your organization's AI governance maturity with results saved to SerenDB.
 
 ## What This Skill Provides

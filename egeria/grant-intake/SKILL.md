@@ -6,6 +6,10 @@ license: Apache-2.0
 
 # Grant Intake
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 Structured five-phase grant consultant intake to produce a Grant Readiness Summary and Organizational Profile.
 
 ## When to Use

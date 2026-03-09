@@ -5,6 +5,10 @@ description: "Wells Fargo bank statement retrieval skill for Seren Desktop: runt
 
 # Wells Fargo Bank Statements
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 ## When To Use
 
 - Download Wells Fargo monthly statements as PDFs.

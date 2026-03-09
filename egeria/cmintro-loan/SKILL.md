@@ -6,6 +6,10 @@ license: Apache-2.0
 
 # Ovadiya Loan Qualification
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 This skill qualifies potential borrowers for non-recourse loans against publicly listed equities or crypto assets, or for institutional block trades, without revealing the lending partner (Ovadiya).
 
 ## When to Use

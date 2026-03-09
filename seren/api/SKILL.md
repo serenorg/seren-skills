@@ -5,6 +5,10 @@ description: "Use Seren API directly for agent registration/authentication, acco
 
 # Seren API
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 Use this skill whenever a user needs direct platform-level Seren API calls (not just one publisher).
 
 Canonical references:

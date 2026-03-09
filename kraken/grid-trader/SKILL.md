@@ -5,6 +5,10 @@ description: "Automated grid trading bot for Kraken — profits from BTC volatil
 
 # Kraken Grid Trader
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 Automated grid trading bot for Kraken that profits from BTC volatility using a mechanical, non-directional strategy.
 
 ## What This Skill Provides

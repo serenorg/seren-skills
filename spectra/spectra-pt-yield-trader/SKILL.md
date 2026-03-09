@@ -5,6 +5,10 @@ description: "Plan and evaluate Spectra PT yield trades using the Spectra MCP se
 
 # Spectra Pt Yield Trader
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 ## Workflow Summary
 
 1. `validate_inputs` validates chain, size, slippage, and safety caps.

@@ -5,6 +5,10 @@ description: "AI-optimized Coinbase Smart DCA bot with single-asset, portfolio, 
 
 # Coinbase Smart DCA Bot
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 AI-assisted dollar-cost averaging (DCA) bot for Coinbase Advanced Trade with three modes:
 - `single_asset`
 - `portfolio`

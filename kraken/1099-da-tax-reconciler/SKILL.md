@@ -6,6 +6,10 @@ description: "Use when a user has a Form 1099-DA from Kraken and wants to review
 
 # Kraken 1099-DA Tax Reconciler
 
+## For Claude: How to Use This Skill
+
+Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
+
 ## Overview
 
 This skill reviews and verifies Form 1099-DA from Kraken so users understand what they're filing and can spot issues before submitting Form 8949.
