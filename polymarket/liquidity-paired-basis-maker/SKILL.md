@@ -19,10 +19,10 @@ description: "Run a liquidity-filtered paired-market basis strategy on Polymarke
 
 ## Workflow Summary
 
-1. `load_backtest_pairs` pulls live market histories from Seren Polymarket Publisher (Gamma markets + CLOB history), applies a liquidity-filtered universe cap, builds pairs, and timestamp-aligns each pair.
-2. `simulate_basis_reversion` evaluates entry/exit behavior on basis widening and convergence.
-3. `summarize_backtest` reports total return, annualized return, Sharpe-like score, max drawdown, hit rate, trade-rate, and pair-level contributions.
-4. `sample_gate` fails backtest if `events < backtest.min_events` (default `200`).
+1. `load_backtest_pairs` pulls live market histories from Seren Polymarket Publisher (Gamma markets + CLOB history), attaches per-leg order-book snapshots, applies a liquidity-filtered universe cap, builds pairs, and timestamp-aligns each pair.
+2. `simulate_basis_reversion` runs an event-driven stateful replay with carried cash and inventory across both legs, order-book-aware fills, and pessimistic spread-decay.
+3. `summarize_backtest` reports total return, annualized return, Sharpe-like score, max drawdown, hit rate, quoted/fill counts, order-book mode coverage, telemetry counts, and pair-level contributions.
+4. `sample_gate` fails backtest if `events < backtest.min_events` (default `120`).
 5. `backtest_gate` blocks trade mode by default if backtest return is non-positive.
 6. `emit_pair_trades` outputs two-leg trade intents (`primary` + `pair`) with risk caps.
 
@@ -64,6 +64,14 @@ If you are already running inside Seren Desktop, the runtime can use injected au
 ```bash
 python3 scripts/agent.py --config config.json --run-type trade
 ```
+
+## Optional Fixture Replay
+
+```bash
+python3 scripts/agent.py --config config.json --backtest-file tests/fixtures/backtest_pairs.json
+```
+
+Set `backtest.telemetry_path` to capture JSONL replay telemetry for each decision step.
 
 ## Disclaimer
 

@@ -30,6 +30,13 @@ from polymarket_live import (
     load_live_pair_markets,
     pair_leg_exposure_notional,
 )
+from pair_stateful_replay import (
+    PairReplayParams,
+    normalize_orderbook_snapshots,
+    simulate_pair_backtest,
+    snapshot_from_live_book,
+    write_telemetry_records,
+)
 
 
 DISCLAIMER = (
@@ -76,6 +83,14 @@ class BacktestParams:
     participation_rate: float = 0.95
     min_history_points: int = 72
     min_events: int = 200
+    volatility_window_points: int = 24
+    require_orderbook_history: bool = False
+    spread_decay_bps: float = 45.0
+    join_best_queue_factor: float = 0.85
+    off_best_queue_factor: float = 0.35
+    synthetic_orderbook_half_spread_bps: float = 18.0
+    synthetic_orderbook_depth_usd: float = 125.0
+    telemetry_path: str = ""
     min_liquidity_usd: float = 5000.0
     markets_fetch_page_size: int = 500
     max_markets: int = 0
@@ -96,6 +111,11 @@ def parse_args() -> argparse.Namespace:
         help="Run backtest only, or run trade mode after backtest gating.",
     )
     parser.add_argument("--markets-file", default=None, help="Optional trade market JSON file.")
+    parser.add_argument(
+        "--backtest-file",
+        default=None,
+        help="Optional paired backtest fixture JSON file with history and orderbook snapshots.",
+    )
     parser.add_argument("--backtest-days", type=int, default=None, help="Override backtest days.")
     parser.add_argument(
         "--allow-negative-backtest",
@@ -210,6 +230,20 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         participation_rate=clamp(_safe_float(raw.get("participation_rate"), 0.95), 0.0, 1.0),
         min_history_points=max(8, _safe_int(raw.get("min_history_points"), 72)),
         min_events=max(1, _safe_int(raw.get("min_events"), 200)),
+        volatility_window_points=max(3, _safe_int(raw.get("volatility_window_points"), 24)),
+        require_orderbook_history=_safe_bool(raw.get("require_orderbook_history"), False),
+        spread_decay_bps=max(1.0, _safe_float(raw.get("spread_decay_bps"), 45.0)),
+        join_best_queue_factor=clamp(_safe_float(raw.get("join_best_queue_factor"), 0.85), 0.0, 1.0),
+        off_best_queue_factor=clamp(_safe_float(raw.get("off_best_queue_factor"), 0.35), 0.0, 1.0),
+        synthetic_orderbook_half_spread_bps=max(
+            0.1,
+            _safe_float(raw.get("synthetic_orderbook_half_spread_bps"), 18.0),
+        ),
+        synthetic_orderbook_depth_usd=max(
+            0.0,
+            _safe_float(raw.get("synthetic_orderbook_depth_usd"), 125.0),
+        ),
+        telemetry_path=_safe_str(raw.get("telemetry_path"), ""),
         min_liquidity_usd=max(0.0, _safe_float(raw.get("min_liquidity_usd"), 5000.0)),
         markets_fetch_page_size=max(25, _safe_int(raw.get("markets_fetch_page_size"), 500)),
         max_markets=max(0, _safe_int(raw.get("max_markets"), 0)),
@@ -220,6 +254,34 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
             _safe_str(raw.get("clob_history_url"), "https://api.serendb.com/publishers/polymarket-trading-serenai/trades")
         ),
         history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 12)),
+    )
+
+
+def _to_pair_replay_params(p: StrategyParams, bt: BacktestParams) -> PairReplayParams:
+    return PairReplayParams(
+        bankroll_usd=p.bankroll_usd,
+        min_seconds_to_resolution=p.min_seconds_to_resolution,
+        min_edge_bps=p.min_edge_bps,
+        maker_rebate_bps=p.maker_rebate_bps,
+        expected_unwind_cost_bps=p.expected_unwind_cost_bps,
+        adverse_selection_bps=p.adverse_selection_bps,
+        basis_entry_bps=p.basis_entry_bps,
+        basis_exit_bps=p.basis_exit_bps,
+        expected_convergence_ratio=p.expected_convergence_ratio,
+        base_pair_notional_usd=p.base_pair_notional_usd,
+        max_notional_per_pair_usd=p.max_notional_per_pair_usd,
+        max_total_notional_usd=p.max_total_notional_usd,
+        max_leg_notional_usd=p.max_leg_notional_usd,
+        participation_rate=bt.participation_rate,
+        min_history_points=bt.min_history_points,
+        volatility_window_points=bt.volatility_window_points,
+        require_orderbook_history=bt.require_orderbook_history,
+        spread_decay_bps=bt.spread_decay_bps,
+        join_best_queue_factor=bt.join_best_queue_factor,
+        off_best_queue_factor=bt.off_best_queue_factor,
+        synthetic_orderbook_half_spread_bps=bt.synthetic_orderbook_half_spread_bps,
+        synthetic_orderbook_depth_usd=bt.synthetic_orderbook_depth_usd,
+        telemetry_path=bt.telemetry_path,
     )
 
 
@@ -415,7 +477,14 @@ def _align_histories(primary: list[tuple[int, float]], secondary: list[tuple[int
     return aligned_primary, aligned_secondary
 
 
+def _combine_orderbook_mode(primary_mode: str, pair_mode: str) -> str:
+    if primary_mode == pair_mode:
+        return primary_mode
+    return f"{primary_mode}|{pair_mode}"
+
+
 def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
+    replay_params = _to_pair_replay_params(p, bt)
     offset = 0
     candidates: list[dict[str, Any]] = []
     seen_token_ids: set[str] = set()
@@ -510,7 +579,23 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
         )
         if len(history) < bt.min_history_points:
             return None
-        return {**candidate, "history": history}
+        try:
+            book_payload = _http_get_json(
+                f"{SEREN_POLYMARKET_TRADING_PUBLISHER_PREFIX}book?{urlencode({'token_id': candidate['token_id']})}"
+            )
+        except Exception:
+            book_payload = None
+        orderbooks, orderbook_mode = snapshot_from_live_book(
+            payload=book_payload,
+            history=history,
+            params=replay_params,
+        )
+        return {
+            **candidate,
+            "history": history,
+            "orderbooks": orderbooks,
+            "orderbook_mode": orderbook_mode,
+        }
 
     with_history: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max(1, bt.history_fetch_workers)) as executor:
@@ -543,11 +628,19 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
                     "pair_market_id": pair_id,
                     "question": _safe_str(primary.get("question"), market_id),
                     "pair_question": _safe_str(secondary.get("question"), pair_id),
+                    "token_id": _safe_str(primary.get("token_id"), ""),
+                    "pair_token_id": _safe_str(secondary.get("token_id"), ""),
                     "event_id": event_id,
                     "end_ts": min(_safe_int(primary.get("end_ts"), end_ts + 86400), _safe_int(secondary.get("end_ts"), end_ts + 86400)),
                     "rebate_bps": (_safe_float(primary.get("rebate_bps"), p.maker_rebate_bps) + _safe_float(secondary.get("rebate_bps"), p.maker_rebate_bps)) / 2.0,
                     "history": h1,
                     "pair_history": h2,
+                    "orderbooks": primary.get("orderbooks", {}),
+                    "pair_orderbooks": secondary.get("orderbooks", {}),
+                    "orderbook_mode": _combine_orderbook_mode(
+                        _safe_str(primary.get("orderbook_mode"), "unknown"),
+                        _safe_str(secondary.get("orderbook_mode"), "unknown"),
+                    ),
                     "source": "live-api",
                 }
             )
@@ -571,11 +664,19 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
                 "pair_market_id": pair_id,
                 "question": _safe_str(primary.get("question"), market_id),
                 "pair_question": _safe_str(secondary.get("question"), pair_id),
+                "token_id": _safe_str(primary.get("token_id"), ""),
+                "pair_token_id": _safe_str(secondary.get("token_id"), ""),
                 "event_id": "fallback",
                 "end_ts": min(_safe_int(primary.get("end_ts"), end_ts + 86400), _safe_int(secondary.get("end_ts"), end_ts + 86400)),
                 "rebate_bps": (_safe_float(primary.get("rebate_bps"), p.maker_rebate_bps) + _safe_float(secondary.get("rebate_bps"), p.maker_rebate_bps)) / 2.0,
                 "history": h1,
                 "pair_history": h2,
+                "orderbooks": primary.get("orderbooks", {}),
+                "pair_orderbooks": secondary.get("orderbooks", {}),
+                "orderbook_mode": _combine_orderbook_mode(
+                    _safe_str(primary.get("orderbook_mode"), "unknown"),
+                    _safe_str(secondary.get("orderbook_mode"), "unknown"),
+                ),
                 "source": "live-api-fallback",
             }
         )
@@ -583,12 +684,102 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
     return pairs
 
 
+def _load_markets_from_fixture(
+    *,
+    fixture_path: Path,
+    p: StrategyParams,
+    bt: BacktestParams,
+    start_ts: int,
+    end_ts: int,
+) -> list[dict[str, Any]]:
+    replay_params = _to_pair_replay_params(p, bt)
+    payload = load_json(fixture_path)
+    if isinstance(payload, dict):
+        rows = payload.get("markets", [])
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        rows = []
+    if not isinstance(rows, list):
+        return []
+
+    markets: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        history = _normalize_history(
+            row.get("history"),
+            start_ts=start_ts,
+            end_ts=end_ts,
+            token_id=_safe_str(row.get("token_id"), _safe_str(row.get("market_id"), f"fixture-{idx}-a")),
+        )
+        pair_history = _normalize_history(
+            row.get("pair_history"),
+            start_ts=start_ts,
+            end_ts=end_ts,
+            token_id=_safe_str(row.get("pair_token_id"), _safe_str(row.get("pair_market_id"), f"fixture-{idx}-b")),
+        )
+        if len(history) < bt.min_history_points or len(pair_history) < bt.min_history_points:
+            continue
+        orderbooks, primary_mode = normalize_orderbook_snapshots(
+            row.get("orderbooks"),
+            history,
+            replay_params,
+        )
+        pair_orderbooks, pair_mode = normalize_orderbook_snapshots(
+            row.get("pair_orderbooks"),
+            pair_history,
+            replay_params,
+        )
+        markets.append(
+            {
+                "market_id": _safe_str(row.get("market_id"), f"fixture-{idx}-a"),
+                "pair_market_id": _safe_str(row.get("pair_market_id"), f"fixture-{idx}-b"),
+                "question": _safe_str(row.get("question"), _safe_str(row.get("market_id"), f"fixture-{idx}-a")),
+                "pair_question": _safe_str(
+                    row.get("pair_question"),
+                    _safe_str(row.get("pair_market_id"), f"fixture-{idx}-b"),
+                ),
+                "token_id": _safe_str(row.get("token_id"), _safe_str(row.get("market_id"), f"fixture-{idx}-a")),
+                "pair_token_id": _safe_str(
+                    row.get("pair_token_id"),
+                    _safe_str(row.get("pair_market_id"), f"fixture-{idx}-b"),
+                ),
+                "event_id": _safe_str(row.get("event_id"), f"fixture-{idx}"),
+                "end_ts": _safe_int(row.get("end_ts"), end_ts + 86400),
+                "rebate_bps": _safe_float(row.get("rebate_bps"), p.maker_rebate_bps),
+                "history": history,
+                "pair_history": pair_history,
+                "orderbooks": orderbooks,
+                "pair_orderbooks": pair_orderbooks,
+                "orderbook_mode": _combine_orderbook_mode(primary_mode, pair_mode),
+                "source": "fixture",
+            }
+        )
+    return markets
+
+
 def _load_backtest_markets(
     p: StrategyParams,
     bt: BacktestParams,
     start_ts: int,
     end_ts: int,
+    backtest_file: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
+    if backtest_file:
+        fixture_path = Path(backtest_file)
+        if not fixture_path.exists():
+            raise FileNotFoundError(f"Backtest fixture not found: {fixture_path}")
+        return (
+            _load_markets_from_fixture(
+                fixture_path=fixture_path,
+                p=p,
+                bt=bt,
+                start_ts=start_ts,
+                end_ts=end_ts,
+            ),
+            f"fixture:{fixture_path.name}",
+        )
     return _fetch_live_backtest_pairs(p=p, bt=bt, start_ts=start_ts, end_ts=end_ts), "live-api"
 
 
@@ -625,86 +816,63 @@ def _sharpe_like_score(event_pnls: list[float], bankroll_usd: float, days: int) 
 
 
 def _simulate_pair(market: dict[str, Any], p: StrategyParams, bt: BacktestParams) -> dict[str, Any]:
-    primary = market["history"]
-    pair = market["pair_history"]
-    n = min(len(primary), len(pair))
-    if n < bt.min_history_points:
-        return {
-            "market_id": market["market_id"],
-            "pair_market_id": market["pair_market_id"],
-            "considered_points": 0,
-            "traded_points": 0,
-            "filled_notional_usd": 0.0,
-            "pnl_usd": 0.0,
-            "event_pnls": [],
-        }
-
-    rebate_bps = _safe_float(market.get("rebate_bps"), p.maker_rebate_bps)
-    if rebate_bps <= 0:
-        rebate_bps = p.maker_rebate_bps
-
-    basis_series_bps = [(primary[i][1] - pair[i][1]) * 10000.0 for i in range(n)]
-    considered = 0
-    traded = 0
-    filled_notional = 0.0
-    pnl = 0.0
-    event_pnls: list[float] = []
-
-    for i in range(0, n - 1):
-        t = primary[i][0]
-        ttl = max(0, _safe_int(market.get("end_ts"), t + 86400) - t)
-        if ttl < p.min_seconds_to_resolution:
-            continue
-
-        basis_now = basis_series_bps[i]
-        basis_next = basis_series_bps[i + 1]
-        abs_basis_now = abs(basis_now)
-        if abs_basis_now < p.basis_entry_bps:
-            continue
-
-        considered += 1
-        basis_change = abs_basis_now - abs(basis_next)
-        expected_convergence = abs_basis_now * p.expected_convergence_ratio
-        expected_edge = expected_convergence + rebate_bps - p.expected_unwind_cost_bps - p.adverse_selection_bps
-        if expected_edge < p.min_edge_bps:
-            continue
-
-        traded += 1
-        fill_intensity = min(1.0, abs_basis_now / max(p.basis_entry_bps * 2.0, 1e-9))
-        event_notional = p.base_pair_notional_usd * bt.participation_rate * fill_intensity
-        realized_edge = basis_change + rebate_bps - p.expected_unwind_cost_bps - p.adverse_selection_bps
-        event_pnl = event_notional * realized_edge / 10000.0
-
-        filled_notional += event_notional
-        pnl += event_pnl
-        event_pnls.append(event_pnl)
-
+    replay_params = _to_pair_replay_params(p, bt)
+    history = market.get("history", [])
+    pair_history = market.get("pair_history", [])
+    orderbooks = market.get("orderbooks")
+    pair_orderbooks = market.get("pair_orderbooks")
+    orderbook_mode = _safe_str(market.get("orderbook_mode"), "")
+    if not isinstance(orderbooks, dict):
+        orderbooks, primary_mode = normalize_orderbook_snapshots([], history, replay_params)
+        market = {**market, "orderbooks": orderbooks}
+        orderbook_mode = primary_mode
+    else:
+        primary_mode = orderbook_mode.split("|", 1)[0] if orderbook_mode else "unknown"
+    if not isinstance(pair_orderbooks, dict):
+        pair_orderbooks, pair_mode = normalize_orderbook_snapshots([], pair_history, replay_params)
+        market = {**market, "pair_orderbooks": pair_orderbooks}
+        orderbook_mode = _combine_orderbook_mode(primary_mode, pair_mode)
+    if orderbook_mode:
+        market = {**market, "orderbook_mode": orderbook_mode}
+    result = simulate_pair_backtest(market=market, params=replay_params)
     return {
-        "market_id": market["market_id"],
-        "pair_market_id": market["pair_market_id"],
-        "considered_points": considered,
-        "traded_points": traded,
-        "filled_notional_usd": round(filled_notional, 4),
-        "pnl_usd": round(pnl, 6),
-        "event_pnls": event_pnls,
+        **result,
+        "traded_points": result["quoted_points"],
     }
 
 
-def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str, Any]:
+def run_backtest(
+    config: dict[str, Any],
+    backtest_days: int | None,
+    backtest_file: str | None = None,
+) -> dict[str, Any]:
     p = to_strategy_params(config)
     bt = to_backtest_params(config)
     days = int(clamp(backtest_days if backtest_days is not None else bt.days, bt.days_min, bt.days_max))
+    configured_backtest_file = ""
+    if isinstance(config.get("backtest"), dict):
+        configured_backtest_file = _safe_str(config["backtest"].get("backtest_file"), "")
+    selected_backtest_file = backtest_file or configured_backtest_file or None
 
     end_ts = int(time.time())
     start_ts = end_ts - (days * 24 * 60 * 60)
 
     try:
-        markets, source = _load_backtest_markets(
-            p=p,
-            bt=bt,
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
+        if selected_backtest_file:
+            markets, source = _load_backtest_markets(
+                p=p,
+                bt=bt,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                backtest_file=selected_backtest_file,
+            )
+        else:
+            markets, source = _load_backtest_markets(
+                p=p,
+                bt=bt,
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
     except Exception as exc:
         return {
             "status": "error",
@@ -726,8 +894,12 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
     summaries: list[dict[str, Any]] = []
     event_pnls: list[float] = []
     considered = 0
-    traded = 0
+    quoted = 0
+    skipped = 0
+    fill_events = 0
     total_notional = 0.0
+    telemetry: list[dict[str, Any]] = []
+    orderbook_modes: dict[str, int] = defaultdict(int)
 
     for market in markets:
         result = _simulate_pair(market, p, bt)
@@ -736,15 +908,23 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
                 "market_id": result["market_id"],
                 "pair_market_id": result["pair_market_id"],
                 "considered_points": result["considered_points"],
+                "quoted_points": result["quoted_points"],
                 "traded_points": result["traded_points"],
+                "skipped_points": result["skipped_points"],
+                "fill_events": result["fill_events"],
                 "filled_notional_usd": result["filled_notional_usd"],
                 "pnl_usd": result["pnl_usd"],
+                "orderbook_mode": result["orderbook_mode"],
             }
         )
         considered += int(result["considered_points"])
-        traded += int(result["traded_points"])
+        quoted += int(result["quoted_points"])
+        skipped += int(result["skipped_points"])
+        fill_events += int(result["fill_events"])
         total_notional += float(result["filled_notional_usd"])
         event_pnls.extend(result["event_pnls"])
+        telemetry.extend(result.get("telemetry", []))
+        orderbook_modes[_safe_str(result.get("orderbook_mode"), "unknown")] += 1
 
     equity_curve = [p.bankroll_usd]
     equity = p.bankroll_usd
@@ -778,10 +958,15 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
                 "source": source,
                 "pairs_loaded": len(markets),
                 "events_observed": events,
+                "quoted_points": quoted,
+                "fill_events": fill_events,
                 "min_events_required": bt.min_events,
+                "orderbook_modes": dict(sorted(orderbook_modes.items())),
             },
             "disclaimer": DISCLAIMER,
         }
+
+    write_telemetry_records(bt.telemetry_path, telemetry)
 
     return {
         "status": "ok",
@@ -796,8 +981,14 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
             "source": source,
             "pairs_selected": len(summaries),
             "considered_points": considered,
-            "traded_points": traded,
-            "trade_rate_pct": round((traded / considered) * 100.0 if considered else 0.0, 4),
+            "quoted_points": quoted,
+            "traded_points": quoted,
+            "skipped_points": skipped,
+            "fill_events": fill_events,
+            "trade_rate_pct": round((quoted / considered) * 100.0 if considered else 0.0, 4),
+            "orderbook_modes": dict(sorted(orderbook_modes.items())),
+            "telemetry_path": bt.telemetry_path,
+            "telemetry_records": len(telemetry),
         },
         "results": {
             "starting_bankroll_usd": round(p.bankroll_usd, 2),
@@ -811,6 +1002,7 @@ def run_backtest(config: dict[str, Any], backtest_days: int | None) -> dict[str,
             "filled_notional_usd": round(total_notional, 2),
             "turnover_multiple": round(turnover_multiple, 4),
             "events": events,
+            "fill_events": fill_events,
             "min_events_required": bt.min_events,
             "max_drawdown_usd": round(max_drawdown_usd, 4),
             "max_drawdown_pct": round(display_max_drawdown_pct, 4),
@@ -1250,6 +1442,7 @@ def main() -> int:
     backtest = run_backtest(
         config=config,
         backtest_days=args.backtest_days,
+        backtest_file=args.backtest_file,
     )
     if backtest.get("status") != "ok":
         print(json.dumps(backtest, sort_keys=True))
