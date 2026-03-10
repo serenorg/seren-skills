@@ -16,6 +16,22 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - pause or resume a scheduled job
 - inspect scheduled job run history
 
+## Pricing
+
+- This skill uses the `seren-cron` publisher.
+- Current publisher listing: `$0.0001` per scheduled job execution.
+- Job creation and management are lightweight control actions, but actual recurring executions spend from the user's SerenBucks balance.
+- Before scaling a high-frequency schedule, confirm the live publisher listing in Seren because marketplace pricing can change.
+
+## Paying With SerenBucks
+
+- Seren skills and publisher calls are paid from the user's SerenBucks balance.
+- Users can buy SerenBucks at `https://serendb.com/serenbucks` or through `https://console.serendb.com`.
+- Current funding flow: add funds via Stripe, starting at `$5`.
+- A verified email is required before making Stripe deposits through Seren.
+- Current SerenBucks page also advertises free credits: `$1` signup bonus, `$5` payment-method bonus, and `$0.10/day` in daily claim credits.
+- API-first users can fund their balance through `POST /wallet/deposit` on `https://api.serendb.com`.
+
 ## Workflow Summary
 
 1. `health_check` uses `connector.scheduler.get`
