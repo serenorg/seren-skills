@@ -1,0 +1,35 @@
+{
+  "status": "error",
+  "skill": "seren-scheduler",
+  "error_code": "connector_failure",
+  "connector": "scheduler",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "scheduler": {
+      "delete": {
+        "status": "error",
+        "connector": "scheduler",
+        "action": "delete",
+        "error_code": "connector_failure"
+      },
+      "get": {
+        "status": "error",
+        "connector": "scheduler",
+        "action": "get",
+        "error_code": "connector_failure"
+      },
+      "post": {
+        "status": "error",
+        "connector": "scheduler",
+        "action": "post",
+        "error_code": "connector_failure"
+      },
+      "put": {
+        "status": "error",
+        "connector": "scheduler",
+        "action": "put",
+        "error_code": "connector_failure"
+      }
+    }
+  }
+}

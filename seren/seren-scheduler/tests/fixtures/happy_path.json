@@ -1,0 +1,49 @@
+{
+  "status": "ok",
+  "skill": "seren-scheduler",
+  "workflow_step_count": 14,
+  "dry_run": true,
+  "inputs": {
+    "action": "create_job",
+    "body_json": "{}",
+    "cron_expression": "",
+    "enabled": true,
+    "failure_webhook_url": "",
+    "group_id": "",
+    "group_payload_json": "{}",
+    "headers_json": "{}",
+    "job_id": "",
+    "max_payment_per_call": 0,
+    "method": "POST",
+    "name": "",
+    "success_pattern": "",
+    "success_webhook_url": "",
+    "timeout_seconds": 30,
+    "timezone": "UTC",
+    "url": ""
+  },
+  "connectors": {
+    "scheduler": {
+      "delete": {
+        "status": "ok",
+        "connector": "scheduler",
+        "action": "delete"
+      },
+      "get": {
+        "status": "ok",
+        "connector": "scheduler",
+        "action": "get"
+      },
+      "post": {
+        "status": "ok",
+        "connector": "scheduler",
+        "action": "post"
+      },
+      "put": {
+        "status": "ok",
+        "connector": "scheduler",
+        "action": "put"
+      }
+    }
+  }
+}

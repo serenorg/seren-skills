@@ -1,0 +1,26 @@
+{
+  "connectors": [
+    "scheduler"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "action": "create_job",
+    "body_json": "{}",
+    "cron_expression": "",
+    "enabled": true,
+    "failure_webhook_url": "",
+    "group_id": "",
+    "group_payload_json": "{}",
+    "headers_json": "{}",
+    "job_id": "",
+    "max_payment_per_call": 0,
+    "method": "POST",
+    "name": "",
+    "success_pattern": "",
+    "success_webhook_url": "",
+    "timeout_seconds": 30,
+    "timezone": "UTC",
+    "url": ""
+  },
+  "skill": "seren-scheduler"
+}
