@@ -24,6 +24,7 @@ if str(SHARED_DIR) not in sys.path:
 from polymarket_live import (
     DirectClobTrader,
     execute_single_market_quotes,
+    inject_held_position_markets,
     live_settings_from_execution,
     load_live_single_markets,
     single_market_inventory_notional,
@@ -1619,8 +1620,14 @@ def run_once(
                 skill_root=Path(__file__).resolve().parents[1],
                 client_name="polymarket-maker-rebate-bot",
             )
+            raw_positions = live_trader.get_positions()
+            markets = inject_held_position_markets(
+                raw_positions=raw_positions,
+                markets=markets,
+                default_rebate_bps=params.default_rebate_bps,
+            )
             inventory_notional_by_market = single_market_inventory_notional(
-                raw_positions=live_trader.get_positions(),
+                raw_positions=raw_positions,
                 markets=markets,
             )
         except Exception as exc:

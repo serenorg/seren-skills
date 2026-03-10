@@ -29,6 +29,7 @@ from polymarket_live import (
     live_settings_from_execution,
     load_live_pair_markets,
     pair_leg_exposure_notional,
+    sell_held_inventory,
 )
 from pair_stateful_replay import (
     PairReplayParams,
@@ -1417,6 +1418,7 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
 
     exposure = config.get("state", {}).get("leg_exposure", {})
     leg_exposure = {str(k): _safe_float(v, 0.0) for k, v in exposure.items()}
+    raw_positions: Any = []
     live_trader: DirectClobTrader | None = None
     if live_mode:
         try:
@@ -1424,8 +1426,9 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
                 skill_root=Path(__file__).resolve().parents[1],
                 client_name="liquidity-paired-basis-maker",
             )
+            raw_positions = live_trader.get_positions()
             leg_exposure = pair_leg_exposure_notional(
-                raw_positions=live_trader.get_positions(),
+                raw_positions=raw_positions,
                 markets=markets,
             )
         except Exception as exc:
@@ -1494,6 +1497,20 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
         payload["state"] = {"leg_exposure": live_execution.get("updated_leg_exposure", {})}
         payload["strategy_summary"]["orders_submitted"] = len(live_execution.get("orders_submitted", []))
         payload["strategy_summary"]["open_orders"] = len(live_execution.get("open_order_ids", []))
+        covered_tokens = {
+            _safe_str(o.get("token_id"), "")
+            for o in live_execution.get("orders_submitted", [])
+            if _safe_str(o.get("side"), "") == "SELL"
+        }
+        covered_tokens.discard("")
+        unwind_sells = sell_held_inventory(
+            trader=live_trader,
+            raw_positions=raw_positions,
+            covered_token_ids=covered_tokens,
+        )
+        if unwind_sells:
+            payload["live_execution"]["held_inventory_unwinds"] = unwind_sells
+            payload["strategy_summary"]["held_inventory_sells"] = len(unwind_sells)
     return payload
 
 

@@ -1047,6 +1047,64 @@ class DirectClobTrader:
             return []
 
 
+def inject_held_position_markets(
+    *,
+    raw_positions: Any,
+    markets: list[dict[str, Any]],
+    default_rebate_bps: float = 0.0,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> list[dict[str, Any]]:
+    """Inject markets for held positions missing from the discovery list.
+
+    Without this, the bot never generates SELL orders for tokens it already
+    owns because those markets are not in the quote cycle.
+    """
+    sizes = positions_by_key(raw_positions)
+    if not sizes:
+        return markets
+
+    existing_tokens: set[str] = set()
+    for market in markets:
+        existing_tokens.add(safe_str(market.get("token_id"), ""))
+        existing_tokens.add(safe_str(market.get("market_id"), ""))
+    existing_tokens.discard("")
+
+    injected: list[dict[str, Any]] = []
+    for token_id, shares in sizes.items():
+        if shares <= 0 or token_id in existing_tokens:
+            continue
+        try:
+            book = fetch_book(token_id, timeout_seconds=timeout_seconds)
+            best_bid = safe_float(book.get("best_bid"), 0.0)
+            best_ask = safe_float(book.get("best_ask"), 0.0)
+            if not (0.0 < best_bid <= 1.0 and 0.0 < best_ask <= 1.0):
+                continue
+            midpoint = fetch_midpoint(token_id, fallback_mid=(best_bid + best_ask) / 2.0, timeout_seconds=timeout_seconds)
+            injected.append(
+                {
+                    "market_id": token_id,
+                    "question": f"held-position:{token_id[:12]}",
+                    "token_id": token_id,
+                    "mid_price": round(midpoint, 4),
+                    "best_bid": round(best_bid, 4),
+                    "best_ask": round(best_ask, 4),
+                    "seconds_to_resolution": 999999,
+                    "volatility_bps": round(abs(best_ask - best_bid) * 10000.0, 3),
+                    "rebate_bps": default_rebate_bps,
+                    "tick_size": safe_str(book.get("tick_size"), "0.01"),
+                    "neg_risk": bool(book.get("neg_risk", False)),
+                    "source": "held-position-injection",
+                }
+            )
+            existing_tokens.add(token_id)
+        except Exception:
+            continue
+
+    if injected:
+        return list(markets) + injected
+    return markets
+
+
 def single_market_inventory_notional(
     *,
     raw_positions: Any,
@@ -1343,3 +1401,54 @@ def execute_pair_trades(
             markets=markets,
         ),
     }
+
+
+def sell_held_inventory(
+    *,
+    trader: PolymarketPublisherTrader,
+    raw_positions: Any,
+    covered_token_ids: set[str],
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> list[dict[str, Any]]:
+    """Sell any held tokens not already covered by the main execution pass.
+
+    Pair bots may leave individual legs unsold because they only trade in
+    pairs.  This function generates SELL-only orders to unwind those positions.
+    """
+    sizes = positions_by_key(raw_positions)
+    sells: list[dict[str, Any]] = []
+    for token_id, shares in sizes.items():
+        if shares <= 0 or token_id in covered_token_ids:
+            continue
+        try:
+            book = fetch_book(token_id, timeout_seconds=timeout_seconds)
+            ask_price = safe_float(book.get("best_ask"), 0.0)
+            tick_size = safe_str(book.get("tick_size"), "0.01")
+            neg_risk = bool(book.get("neg_risk", False))
+            if ask_price <= 0.0:
+                continue
+            ask_price = snap_price(ask_price, tick_size, "SELL")
+            size = shares
+            fee_rate_bps = fetch_fee_rate_bps(token_id, timeout_seconds=timeout_seconds)
+            response = trader.create_order(
+                token_id=token_id,
+                side="SELL",
+                price=ask_price,
+                size=size,
+                tick_size=tick_size,
+                neg_risk=neg_risk,
+                fee_rate_bps=fee_rate_bps,
+            )
+            sells.append(
+                {
+                    "token_id": token_id,
+                    "side": "SELL",
+                    "price": ask_price,
+                    "size": round(size, 6),
+                    "source": "held-inventory-unwind",
+                    "response": response,
+                }
+            )
+        except Exception:
+            continue
+    return sells
