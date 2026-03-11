@@ -728,7 +728,9 @@ def _fetch_market_history(
     end_ts: int,
 ) -> list[tuple[int, float]]:
     history_limit = max(backtest_params.min_history_points * 12, 1000)
+    fidelity = backtest_params.fidelity_minutes
     queries = (
+        {"market": token_id, "interval": "max", "fidelity": fidelity},
         {"market": token_id, "limit": history_limit},
         {"asset_id": token_id, "limit": history_limit},
         {"token_id": token_id, "limit": history_limit},

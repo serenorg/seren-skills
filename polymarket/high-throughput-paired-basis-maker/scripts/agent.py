@@ -588,15 +588,19 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
 
     def _fetch_candidate_history(candidate: dict[str, Any]) -> dict[str, Any] | None:
         history_limit = max(bt.min_history_points * 12, 1000)
-        history_query = urlencode(
-            {
-                "market": candidate["token_id"],
-                "limit": history_limit,
-            }
+        queries = (
+            {"market": candidate["token_id"], "interval": bt.history_interval, "fidelity": bt.history_fidelity_minutes},
+            {"market": candidate["token_id"], "limit": history_limit},
         )
-        try:
-            payload = _http_get_json(f"{bt.clob_history_url}?{history_query}")
-        except Exception:
+        payload = None
+        for params in queries:
+            try:
+                payload = _http_get_json(f"{bt.clob_history_url}?{urlencode(params)}")
+                if payload:
+                    break
+            except Exception:
+                continue
+        if payload is None:
             return None
         history = _normalize_history(
             payload,
