@@ -56,21 +56,16 @@ class TestPolymarketClientAuthMode:
 
 
 class TestPolymarketClientTradingFallback:
-    def test_falls_back_to_legacy_slug_on_404(self):
+    def test_raises_on_404_without_fallback(self):
         seren = _mock_seren()
-        seren.call_publisher.side_effect = [
-            Exception("Publisher call failed: 404 - not found"),
-            {'data': []},
-        ]
+        seren.call_publisher.side_effect = Exception("Publisher call failed: 404 - not found")
         client = PolymarketClient(seren_client=seren)
 
-        result = client._call_trading(method='GET', path='/positions')
-        assert result == {'data': []}
-        assert seren.call_publisher.call_count == 2
+        with pytest.raises(Exception, match=r"404"):
+            client._call_trading(method='GET', path='/positions')
+        assert seren.call_publisher.call_count == 1
         first_call = seren.call_publisher.call_args_list[0].kwargs
-        second_call = seren.call_publisher.call_args_list[1].kwargs
         assert first_call['publisher'] == 'polymarket-trading'
-        assert second_call['publisher'] == 'polymarket-trading-serenai'
 
     def test_desktop_auth_unauthorized_raises_helpful_error(self):
         seren = _mock_seren()

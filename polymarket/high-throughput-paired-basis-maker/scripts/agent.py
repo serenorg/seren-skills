@@ -47,10 +47,9 @@ DISCLAIMER = (
 )
 SEREN_POLYMARKET_PUBLISHER_PREFIX = "https://api.serendb.com/publishers/"
 SEREN_POLYMARKET_DATA_PUBLISHER_PREFIX = f"{SEREN_POLYMARKET_PUBLISHER_PREFIX}polymarket-data/"
-SEREN_POLYMARKET_TRADING_PUBLISHER_PREFIX = f"{SEREN_POLYMARKET_PUBLISHER_PREFIX}polymarket-trading-serenai/"
+POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
 SEREN_ALLOWED_POLYMARKET_PUBLISHER_PREFIXES = (
     SEREN_POLYMARKET_DATA_PUBLISHER_PREFIX,
-    SEREN_POLYMARKET_TRADING_PUBLISHER_PREFIX,
 )
 MISSING_RUNTIME_AUTH_ERROR = (
     "missing_runtime_auth: set API_KEY (Seren Desktop runtime) or SEREN_API_KEY; "
@@ -98,7 +97,7 @@ class BacktestParams:
     history_interval: str = "max"
     history_fidelity_minutes: int = 60
     gamma_markets_url: str = "https://api.serendb.com/publishers/polymarket-data/markets"
-    clob_history_url: str = "https://api.serendb.com/publishers/polymarket-trading-serenai/trades"
+    clob_history_url: str = f"{POLYMARKET_CLOB_BASE_URL}/prices-history"
     history_fetch_workers: int = 12
 
 
@@ -149,8 +148,8 @@ def _safe_str(value: Any, default: str = "") -> str:
 
 def _canonicalize_history_url(url: str) -> str:
     trimmed = url.rstrip("/")
-    if trimmed.endswith("/prices-history"):
-        return trimmed[: -len("/prices-history")] + "/trades"
+    if trimmed.endswith("/trades"):
+        return trimmed[: -len("/trades")] + "/prices-history"
     return url
 
 
@@ -252,7 +251,7 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         history_fidelity_minutes=max(1, _safe_int(raw.get("history_fidelity_minutes"), 60)),
         gamma_markets_url=_safe_str(raw.get("gamma_markets_url"), "https://api.serendb.com/publishers/polymarket-data/markets"),
         clob_history_url=_canonicalize_history_url(
-            _safe_str(raw.get("clob_history_url"), "https://api.serendb.com/publishers/polymarket-trading-serenai/trades")
+            _safe_str(raw.get("clob_history_url"), f"{POLYMARKET_CLOB_BASE_URL}/prices-history")
         ),
         history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 12)),
     )
@@ -451,7 +450,26 @@ def _unwrap_seren_response(data: dict[str, Any] | list[Any]) -> dict[str, Any] |
     return data
 
 
+def _http_get_json_public(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
+    req = Request(
+        url,
+        headers={
+            "User-Agent": "high-throughput-paired-basis-maker/1.1",
+            "Accept": "application/json",
+        },
+    )
+    with urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _is_clob_direct_url(url: str) -> bool:
+    return url.startswith(f"{POLYMARKET_CLOB_BASE_URL}/")
+
+
 def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
+    if _is_clob_direct_url(url):
+        return _http_get_json_public(url, timeout=timeout)
+
     if not any(url.startswith(prefix) for prefix in SEREN_ALLOWED_POLYMARKET_PUBLISHER_PREFIXES):
         raise ValueError(
             "policy_violation: backtest data source must use Seren Polymarket publisher "
@@ -589,8 +607,8 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
         if len(history) < bt.min_history_points:
             return None
         try:
-            book_payload = _http_get_json(
-                f"{SEREN_POLYMARKET_TRADING_PUBLISHER_PREFIX}book?{urlencode({'token_id': candidate['token_id']})}"
+            book_payload = _http_get_json_public(
+                f"{POLYMARKET_CLOB_BASE_URL}/book?{urlencode({'token_id': candidate['token_id']})}"
             )
         except Exception:
             book_payload = None

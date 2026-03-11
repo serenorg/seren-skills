@@ -174,7 +174,7 @@ This skill helps users set up and manage an autonomous trading agent that:
   - Response includes: market IDs, questions, token IDs, prices, liquidity
   - Verified working with 100+ markets returned
 
-- `polymarket-trading` (preferred) / `polymarket-trading-serenai` (fallback) - Polymarket CLOB trading API
+- `polymarket-trading` - Polymarket CLOB trading API
   - Place/cancel orders with server-side EIP-712 signing
   - Query positions, open orders, balances
   - Desktop mode: uses keychain-backed publisher credentials
@@ -867,7 +867,7 @@ def calculate_position_size(fair_value, market_price, bankroll, max_kelly=0.06):
 
 **Seren Publishers Used:**
 - `polymarket-data` - Real-time market data (prices, liquidity, volumes)
-- `polymarket-trading` (preferred) / `polymarket-trading-serenai` (fallback) - Order placement with server-side signing
+- `polymarket-trading` - Order placement with server-side signing
 - `perplexity` - AI-powered market research
 - `seren-models` - LLM inference (Claude, GPT, Gemini, etc.)
 - `seren-cron` - Autonomous job scheduling

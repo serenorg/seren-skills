@@ -71,7 +71,7 @@
 **Status:** Fully implemented with sidecar-first publisher routing and legacy fallback
 
 **What was added:**
-- Order placement via sidecar slug (`polymarket-trading`) with fallback to `polymarket-trading-serenai`
+- Order placement via sidecar slug (`polymarket-trading`)
 - EIP-712 signing handled server-side by the publisher
 - Simplified client-side code (no cryptography needed)
 - Supports desktop keychain auth by default, legacy `POLY_*` headers as fallback

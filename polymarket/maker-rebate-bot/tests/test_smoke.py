@@ -284,14 +284,14 @@ def test_config_example_uses_seren_polymarket_publisher_urls() -> None:
         "https://api.serendb.com/publishers/polymarket-data/"
     )
     assert backtest.get("clob_history_url", "").startswith(
-        "https://api.serendb.com/publishers/polymarket-trading-serenai/"
+        "https://clob.polymarket.com/"
     )
-    assert backtest.get("clob_history_url", "").endswith("/trades")
+    assert backtest.get("clob_history_url", "").endswith("/prices-history")
 
 
 def test_backtest_rejects_non_seren_polymarket_data_source(tmp_path: Path) -> None:
     bad_gamma_url = "https://gamma" + "-api." + "polymarket.com/markets"
-    bad_clob_url = "https://clob." + "polymarket.com/prices-history"
+    bad_clob_url = "https://evil." + "example.com/prices-history"
     payload = {
         "execution": {"dry_run": True, "live_mode": False},
         "backtest": {

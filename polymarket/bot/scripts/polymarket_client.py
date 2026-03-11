@@ -71,8 +71,7 @@ class PolymarketClient:
                 slug.strip() for slug in publishers_env.split(',') if slug.strip()
             ]
         else:
-            # Sidecar-native slug first, legacy slug second.
-            self.trading_publishers = ['polymarket-trading', 'polymarket-trading-serenai']
+            self.trading_publishers = ['polymarket-trading']
 
     def _get_auth_headers(self) -> Dict[str, str]:
         """Get authentication headers for Polymarket API"""

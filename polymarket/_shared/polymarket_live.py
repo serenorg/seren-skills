@@ -18,14 +18,11 @@ from urllib.request import Request, urlopen
 SEREN_POLYMARKET_PUBLISHER_HOST = "api.serendb.com"
 SEREN_PUBLISHERS_PREFIX = "/publishers/"
 SEREN_POLYMARKET_DATA_PUBLISHER = "polymarket-data"
-SEREN_POLYMARKET_TRADING_PUBLISHER = "polymarket-trading-serenai"
 SEREN_API_BASE = f"https://{SEREN_POLYMARKET_PUBLISHER_HOST}"
 SEREN_POLYMARKET_DATA_URL_PREFIX = (
     f"{SEREN_API_BASE}{SEREN_PUBLISHERS_PREFIX}{SEREN_POLYMARKET_DATA_PUBLISHER}"
 )
-SEREN_POLYMARKET_TRADING_URL_PREFIX = (
-    f"{SEREN_API_BASE}{SEREN_PUBLISHERS_PREFIX}{SEREN_POLYMARKET_TRADING_PUBLISHER}"
-)
+POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_CHAIN_ID = 137
 
@@ -476,13 +473,20 @@ def call_publisher_json(
         return json.loads(text)
 
 
-def fetch_trading_json(path: str, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> Any:
-    return call_publisher_json(
-        publisher=SEREN_POLYMARKET_TRADING_PUBLISHER,
-        method="GET",
-        path=path,
-        timeout_seconds=timeout_seconds,
+def _call_clob_json(path: str, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> Any:
+    request = Request(
+        f"{POLYMARKET_CLOB_BASE_URL}{path}",
+        headers={"Accept": "application/json", "User-Agent": "seren-polymarket-live/1.0"},
     )
+    with urlopen(request, timeout=timeout_seconds) as response:
+        text = response.read().decode("utf-8")
+        if not text:
+            return {}
+        return json.loads(text)
+
+
+def fetch_trading_json(path: str, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> Any:
+    return _call_clob_json(path=path, timeout_seconds=timeout_seconds)
 
 
 def fetch_markets_page(
@@ -524,9 +528,7 @@ def fetch_history(
             "fidelity": max(1, fidelity_minutes),
         }
     )
-    payload = call_publisher_json(
-        publisher=SEREN_POLYMARKET_TRADING_PUBLISHER,
-        method="GET",
+    payload = _call_clob_json(
         path=f"/prices-history?{query}",
         timeout_seconds=timeout_seconds,
     )
@@ -536,9 +538,7 @@ def fetch_history(
 
 
 def fetch_book(token_id: str, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> dict[str, Any]:
-    payload = call_publisher_json(
-        publisher=SEREN_POLYMARKET_TRADING_PUBLISHER,
-        method="GET",
+    payload = _call_clob_json(
         path=f"/book?{urlencode({'token_id': token_id})}",
         timeout_seconds=timeout_seconds,
     )
@@ -546,9 +546,7 @@ def fetch_book(token_id: str, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) 
 
 
 def fetch_midpoint(token_id: str, fallback_mid: float, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> float:
-    payload = call_publisher_json(
-        publisher=SEREN_POLYMARKET_TRADING_PUBLISHER,
-        method="GET",
+    payload = _call_clob_json(
         path=f"/midpoint?{urlencode({'token_id': token_id})}",
         timeout_seconds=timeout_seconds,
     )
@@ -557,9 +555,7 @@ def fetch_midpoint(token_id: str, fallback_mid: float, timeout_seconds: float = 
 
 def fetch_fee_rate_bps(token_id: str, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> int:
     try:
-        payload = call_publisher_json(
-            publisher=SEREN_POLYMARKET_TRADING_PUBLISHER,
-            method="GET",
+        payload = _call_clob_json(
             path=f"/fee-rate?{urlencode({'token_id': token_id})}",
             timeout_seconds=timeout_seconds,
         )
@@ -895,14 +891,26 @@ class PolymarketPublisherTrader:
         )
 
     def _call(self, method: str, path: str, body: Any = None) -> Any:
-        return call_publisher_json(
-            publisher=SEREN_POLYMARKET_TRADING_PUBLISHER,
-            method=method,
-            path=path,
-            headers=self._signed_headers(method, path, body=body),
-            body=body,
-            timeout_seconds=self.timeout_seconds,
+        req_headers = {
+            "Accept": "application/json",
+            "User-Agent": "seren-polymarket-live/1.0",
+        }
+        req_headers.update(self._signed_headers(method, path, body=body))
+        data = None
+        if body is not None:
+            req_headers["Content-Type"] = "application/json"
+            data = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        request = Request(
+            f"{POLYMARKET_CLOB_BASE_URL}{path}",
+            headers=req_headers,
+            method=method.upper(),
+            data=data,
         )
+        with urlopen(request, timeout=self.timeout_seconds) as response:
+            text = response.read().decode("utf-8")
+            if not text:
+                return {}
+            return json.loads(text)
 
     def next_nonce(self) -> int:
         self._nonce += 1
