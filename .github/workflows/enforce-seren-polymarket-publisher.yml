@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Block direct Polymarket API endpoints in maker runtimes/configs
+      - name: Block direct Polymarket Gamma API endpoints (must use Seren publisher)
         run: |
           set -euo pipefail
           TARGETS=(
@@ -27,8 +27,8 @@ jobs:
             polymarket/liquidity-paired-basis-maker
             polymarket/high-throughput-paired-basis-maker
           )
-          if grep -R -nE "https://(gamma-api|clob)\.polymarket\.com" "${TARGETS[@]}"; then
-            echo "::error::Direct Polymarket API endpoints are forbidden. Use api.serendb.com publisher routes only."
+          if grep -R -nE "https://gamma-api\.polymarket\.com" "${TARGETS[@]}"; then
+            echo "::error::Direct Polymarket Gamma API endpoints are forbidden. Use api.serendb.com/publishers/polymarket-data/ routes for market data."
             exit 1
           fi
 
