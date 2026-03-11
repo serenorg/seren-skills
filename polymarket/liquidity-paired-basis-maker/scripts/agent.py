@@ -626,6 +626,15 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
                 event_id = _safe_str(market.get("category"), "misc")
 
             market_id = _safe_str(market.get("id"), token_id)
+            # Score by market-making quality for ranking
+            outcome_prices = _json_to_list(market.get("outcomePrices"))
+            mid_price = _safe_float(outcome_prices[0] if outcome_prices else None, 0.5)
+            spread = _safe_float(market.get("spread"), 1.0)
+            volume24hr = _safe_float(market.get("volume24hr"), 0.0)
+            price_score = 1.0 - abs(mid_price - 0.5) * 2.0
+            spread_score = max(0.0, 1.0 - spread * 10.0)
+            volume_score = min(1.0, volume24hr / 50000.0)
+            mm_score = price_score * 0.4 + volume_score * 0.4 + spread_score * 0.2
             candidates.append(
                 {
                     "market_id": market_id,
@@ -634,7 +643,8 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
                     "event_id": event_id,
                     "end_ts": end_market,
                     "rebate_bps": _safe_float(market.get("rebate_bps"), p.maker_rebate_bps),
-                    "volume24hr": _safe_float(market.get("volume24hr"), 0.0),
+                    "volume24hr": volume24hr,
+                    "mm_score": mm_score,
                 }
             )
             added_on_page += 1
@@ -645,7 +655,8 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
         if len(raw) < bt.markets_fetch_page_size:
             break
 
-    candidates_with_cap = candidates[: bt.max_markets] if bt.max_markets > 0 else candidates
+    # Sort candidates by mm_score before fetching history for all of them
+    candidates.sort(key=lambda c: c.get("mm_score", 0.0), reverse=True)
 
     def _fetch_candidate_history(candidate: dict[str, Any]) -> dict[str, Any] | None:
         history_limit = max(bt.min_history_points * 12, 1000)
@@ -691,7 +702,7 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
 
     with_history: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max(1, bt.history_fetch_workers)) as executor:
-        futures = [executor.submit(_fetch_candidate_history, candidate) for candidate in candidates_with_cap]
+        futures = [executor.submit(_fetch_candidate_history, candidate) for candidate in candidates]
         for future in as_completed(futures):
             row = future.result()
             if row:

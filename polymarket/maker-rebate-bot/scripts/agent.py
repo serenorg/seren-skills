@@ -9,6 +9,7 @@ import math
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -888,6 +889,16 @@ def _fetch_live_markets(
         token_id = _safe_str(token_ids[0], "")
         if not token_id:
             continue
+        # Parse mid-price from outcomePrices for ranking
+        outcome_prices = _json_to_list(market.get("outcomePrices"))
+        mid_price = _safe_float(outcome_prices[0] if outcome_prices else None, 0.5)
+        spread = _safe_float(market.get("spread"), 1.0)
+        volume24hr = _safe_float(market.get("volume24hr"), 0.0)
+        # Score: prefer price near 0.5 (two-way flow), high volume, tight spread
+        price_score = 1.0 - abs(mid_price - 0.5) * 2.0  # 1.0 at 0.50, 0.0 at 0.0/1.0
+        spread_score = max(0.0, 1.0 - spread * 10.0)     # penalise wide spreads
+        volume_score = min(1.0, volume24hr / 50000.0)     # saturates at $50K/day
+        mm_score = price_score * 0.4 + volume_score * 0.4 + spread_score * 0.2
         candidates.append(
             {
                 "market_id": _safe_str(market.get("id"), token_id),
@@ -895,14 +906,16 @@ def _fetch_live_markets(
                 "token_id": token_id,
                 "end_ts": end_market,
                 "rebate_bps": _safe_float(market.get("rebate_bps"), 0.0),
-                "volume24hr": _safe_float(market.get("volume24hr"), 0.0),
+                "volume24hr": volume24hr,
+                "mm_score": mm_score,
             }
         )
 
-    selected: list[dict[str, Any]] = []
-    for candidate in candidates:
-        if len(selected) >= strategy_params.markets_max:
-            break
+    # Rank by market-making quality score, not arbitrary API order
+    candidates.sort(key=lambda c: c["mm_score"], reverse=True)
+
+    # Fetch history for ALL candidates concurrently, then rank and pick best N
+    def _enrich_candidate(candidate: dict[str, Any]) -> dict[str, Any] | None:
         history = _fetch_market_history(
             backtest_params=backtest_params,
             token_id=candidate["token_id"],
@@ -910,7 +923,7 @@ def _fetch_live_markets(
             end_ts=end_ts,
         )
         if len(history) < backtest_params.min_history_points:
-            continue
+            return None
         try:
             book_payload = _http_get_json_public(
                 f"{POLYMARKET_CLOB_BASE_URL}/book?{urlencode({'token_id': candidate['token_id']})}"
@@ -922,16 +935,25 @@ def _fetch_live_markets(
             history=history,
             backtest_params=backtest_params,
         )
-        selected.append(
-            {
-                **candidate,
-                "history": history,
-                "orderbooks": orderbooks,
-                "orderbook_mode": "synthetic-from-live-book",
-                "source": "live-seren-publisher",
-            }
-        )
-    return selected
+        return {
+            **candidate,
+            "history": history,
+            "orderbooks": orderbooks,
+            "orderbook_mode": "synthetic-from-live-book",
+            "source": "live-seren-publisher",
+        }
+
+    enriched: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = {executor.submit(_enrich_candidate, c): c for c in candidates}
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                enriched.append(result)
+
+    # Re-sort enriched candidates by mm_score and return top N
+    enriched.sort(key=lambda c: c.get("mm_score", 0.0), reverse=True)
+    return enriched[: strategy_params.markets_max]
 
 
 def _fetch_live_quote_markets(config: dict[str, Any]) -> list[dict[str, Any]]:
