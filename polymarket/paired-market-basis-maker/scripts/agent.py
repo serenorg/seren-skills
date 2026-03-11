@@ -444,6 +444,13 @@ def _parse_iso_ts(value: Any) -> int | None:
         return None
 
 
+def _unwrap_seren_response(data: dict[str, Any] | list[Any]) -> dict[str, Any] | list[Any]:
+    """Unwrap Seren gateway response envelope {status, body, ...} -> body."""
+    if isinstance(data, dict) and "body" in data and "status" in data:
+        return data["body"]
+    return data
+
+
 def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
     if not any(url.startswith(prefix) for prefix in SEREN_ALLOWED_POLYMARKET_PUBLISHER_PREFIXES):
         raise ValueError(
@@ -462,7 +469,8 @@ def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
         },
     )
     with urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        raw = json.loads(resp.read().decode("utf-8"))
+        return _unwrap_seren_response(raw)
 
 
 def _align_histories(primary: list[tuple[int, float]], secondary: list[tuple[int, float]]) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:

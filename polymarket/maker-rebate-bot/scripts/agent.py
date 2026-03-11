@@ -630,6 +630,13 @@ def _runtime_api_key() -> str:
     return ""
 
 
+def _unwrap_seren_response(data: dict[str, Any] | list[Any]) -> dict[str, Any] | list[Any]:
+    """Unwrap Seren gateway response envelope {status, body, ...} -> body."""
+    if isinstance(data, dict) and "body" in data and "status" in data:
+        return data["body"]
+    return data
+
+
 def _http_get_json_via_api_key(url: str, api_key: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
     request = Request(
         url,
@@ -640,7 +647,8 @@ def _http_get_json_via_api_key(url: str, api_key: str, timeout: int = 30) -> dic
         },
     )
     with urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+        raw = json.loads(response.read().decode("utf-8"))
+        return _unwrap_seren_response(raw)
 
 
 def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
