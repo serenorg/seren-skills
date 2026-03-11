@@ -39,6 +39,10 @@ SEREN_POLYMARKET_DATA_URL_PREFIX = (
     f"https://{SEREN_POLYMARKET_PUBLISHER_HOST}{SEREN_PUBLISHERS_PREFIX}{SEREN_POLYMARKET_DATA_PUBLISHER}"
 )
 POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
+SEREN_PREDICTIONS_PUBLISHER = "seren-polymarket-predictions"
+SEREN_PREDICTIONS_URL_PREFIX = (
+    f"https://api.serendb.com/publishers/{SEREN_PREDICTIONS_PUBLISHER}"
+)
 SEREN_ALLOWED_POLYMARKET_PUBLISHERS = frozenset(
     {SEREN_POLYMARKET_DATA_PUBLISHER}
 )
@@ -86,6 +90,12 @@ class BacktestParams:
     telemetry_path: str = "logs/polymarket-maker-rebate-backtest-telemetry.jsonl"
     gamma_markets_url: str = f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/markets"
     clob_history_url: str = f"{POLYMARKET_CLOB_BASE_URL}/prices-history"
+    # Seren Predictions intelligence (costs SerenBucks per call)
+    predictions_enabled: bool = False
+    predictions_divergence_url: str = f"{SEREN_PREDICTIONS_URL_PREFIX}/api/oracle/divergence/batch"
+    predictions_consensus_url: str = f"{SEREN_PREDICTIONS_URL_PREFIX}/api/oracle/consensus/batch"
+    predictions_skew_strength_bps: float = 15.0  # max directional skew from predictions
+    predictions_score_boost: float = 0.3  # mm_score boost for divergent markets
 
 
 @dataclass(frozen=True)
@@ -327,6 +337,13 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
                 backtest.get("clob_history_url"),
                 f"{POLYMARKET_CLOB_BASE_URL}/prices-history",
             )
+        ),
+        predictions_enabled=bool(backtest.get("predictions_enabled", False)),
+        predictions_skew_strength_bps=max(
+            0.0, _safe_float(backtest.get("predictions_skew_strength_bps"), 15.0)
+        ),
+        predictions_score_boost=clamp(
+            _safe_float(backtest.get("predictions_score_boost"), 0.3), 0.0, 1.0
         ),
     )
 
@@ -678,6 +695,130 @@ def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
     return _http_get_json_via_api_key(url, api_key=api_key, timeout=timeout)
 
 
+def _http_post_json(url: str, body: dict[str, Any], timeout: int = 30) -> dict[str, Any] | list[Any]:
+    """POST JSON to a Seren publisher endpoint (authenticated)."""
+    api_key = _runtime_api_key()
+    if not api_key:
+        raise RuntimeError(MISSING_RUNTIME_AUTH_ERROR)
+    data = json.dumps(body).encode("utf-8")
+    request = Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "User-Agent": "seren-maker-rebate-bot/1.0",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+    )
+    with urlopen(request, timeout=timeout) as response:
+        raw = json.loads(response.read().decode("utf-8"))
+        return _unwrap_seren_response(raw)
+
+
+def _check_serenbucks_balance(api_key: str) -> float:
+    """Check SerenBucks balance. Returns balance in USD or 0.0 on error."""
+    try:
+        request = Request(
+            "https://api.serendb.com/v1/billing/balance",
+            headers={
+                "User-Agent": "seren-maker-rebate-bot/1.0",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return _safe_float(data.get("funded_balance_usd") or data.get("balance_usd"), 0.0)
+    except Exception:
+        return 0.0
+
+
+def _fetch_predictions_signals(
+    market_ids: list[str],
+    backtest_params: "BacktestParams",
+) -> dict[str, dict[str, Any]]:
+    """Fetch cross-platform consensus and divergence signals from Seren Predictions.
+
+    Returns a dict of market_id -> {consensus_prob, divergence_bps, direction, confidence}.
+    Costs SerenBucks per batch call. Gracefully returns empty dict on any failure.
+    """
+    if not backtest_params.predictions_enabled or not market_ids:
+        return {}
+
+    api_key = _runtime_api_key()
+    if not api_key:
+        return {}
+
+    # Check SerenBucks balance first — warn if insufficient
+    balance = _check_serenbucks_balance(api_key)
+    estimated_cost = 0.30  # batch consensus ($0.15) + batch divergence ($0.15)
+    if balance < estimated_cost:
+        import sys
+        print(
+            f"WARNING: SerenBucks balance (${balance:.2f}) may be insufficient for "
+            f"predictions intelligence (estimated ${estimated_cost:.2f}). "
+            f"Top up at https://serendb.com/billing to use Seren Predictions.",
+            file=sys.stderr,
+        )
+        if balance <= 0.0:
+            return {}
+
+    signals: dict[str, dict[str, Any]] = {}
+
+    # Fetch batch divergence — tells us which markets are mispriced vs cross-platform consensus
+    try:
+        divergence_data = _http_post_json(
+            backtest_params.predictions_divergence_url,
+            body={"polymarket_ids": market_ids},
+            timeout=30,
+        )
+        if isinstance(divergence_data, dict):
+            for market in divergence_data.get("markets", []):
+                mid = _safe_str(market.get("polymarket_id"), "")
+                if mid:
+                    signals[mid] = {
+                        "consensus_prob": _safe_float(market.get("consensus_probability"), 0.0),
+                        "polymarket_prob": _safe_float(market.get("polymarket_probability"), 0.0),
+                        "divergence_bps": _safe_float(market.get("divergence_bps"), 0.0),
+                        "direction": _safe_str(market.get("direction"), "neutral"),
+                        "confidence": _safe_float(market.get("confidence"), 0.0),
+                        "platforms_matched": _safe_int(market.get("platforms_matched"), 0),
+                    }
+    except Exception:
+        pass
+
+    # Fetch batch consensus as fallback if divergence didn't populate
+    if not signals:
+        try:
+            consensus_data = _http_post_json(
+                backtest_params.predictions_consensus_url,
+                body={"polymarket_ids": market_ids},
+                timeout=30,
+            )
+            if isinstance(consensus_data, dict):
+                for market in consensus_data.get("results", []):
+                    mid = _safe_str(market.get("polymarket_id"), "")
+                    if mid:
+                        consensus_prob = _safe_float(market.get("consensus_probability"), 0.0)
+                        poly_prob = _safe_float(market.get("polymarket_probability"), 0.0)
+                        div_bps = abs(consensus_prob - poly_prob) * 10000.0
+                        direction = "buy" if consensus_prob > poly_prob else "sell" if consensus_prob < poly_prob else "neutral"
+                        signals[mid] = {
+                            "consensus_prob": consensus_prob,
+                            "polymarket_prob": poly_prob,
+                            "divergence_bps": div_bps,
+                            "direction": direction,
+                            "confidence": _safe_float(market.get("confidence"), 0.0),
+                            "platforms_matched": _safe_int(market.get("platforms_matched"), 0),
+                        }
+        except Exception:
+            pass
+
+    return signals
+
+
 def _normalize_history(
     history_payload: Any,
     start_ts: int,
@@ -951,6 +1092,22 @@ def _fetch_live_markets(
             if result is not None:
                 enriched.append(result)
 
+    # Fetch Seren Predictions intelligence to boost scoring (costs SerenBucks)
+    predictions = _fetch_predictions_signals(
+        market_ids=[c["market_id"] for c in enriched],
+        backtest_params=backtest_params,
+    )
+    if predictions:
+        for candidate in enriched:
+            signal = predictions.get(candidate["market_id"])
+            if signal and signal.get("divergence_bps", 0) > 0:
+                # Boost mm_score for markets with cross-platform divergence (= edge)
+                divergence_factor = min(1.0, signal["divergence_bps"] / 500.0)
+                candidate["mm_score"] = candidate.get("mm_score", 0.0) + (
+                    backtest_params.predictions_score_boost * divergence_factor
+                )
+                candidate["prediction_signal"] = signal
+
     # Re-sort enriched candidates by mm_score and return top N
     enriched.sort(key=lambda c: c.get("mm_score", 0.0), reverse=True)
     return enriched[: strategy_params.markets_max]
@@ -1043,10 +1200,13 @@ def _build_quote_plan(
     inventory_notional: float,
     outstanding_notional: float,
     strategy_params: StrategyParams,
+    prediction_skew_bps: float = 0.0,
 ) -> QuotePlan:
     spread_bps = compute_spread_bps(volatility_bps, strategy_params)
     edge_bps = expected_edge_bps(spread_bps, rebate_bps, strategy_params)
-    if edge_bps < strategy_params.min_edge_bps:
+    # Predictions intelligence adds directional edge
+    effective_edge = edge_bps + abs(prediction_skew_bps) * 0.5
+    if effective_edge < strategy_params.min_edge_bps:
         return QuotePlan(
             status="skipped",
             market_id=market_id,
@@ -1064,7 +1224,8 @@ def _build_quote_plan(
             -1.0,
             1.0,
         )
-    skew_bps = -inventory_ratio * strategy_params.inventory_skew_strength_bps
+    # Combine inventory skew with predictions directional skew
+    skew_bps = -inventory_ratio * strategy_params.inventory_skew_strength_bps + prediction_skew_bps
     half_spread_prob = (spread_bps / 2.0) / 10000.0
     skew_prob = skew_bps / 10000.0
     bid_price = clamp(mid_price - half_spread_prob + skew_prob, 0.001, 0.999)
@@ -1233,6 +1394,19 @@ def _simulate_market_backtest(
     end_ts = _safe_int(market.get("end_ts"), 0)
     moves_bps = [abs((history[i][1] - history[i - 1][1]) * 10000.0) for i in range(1, len(history))]
 
+    # Compute prediction-based directional skew (positive = lean bid/buy, negative = lean ask/sell)
+    prediction_skew_bps = 0.0
+    signal = market.get("prediction_signal")
+    if signal and backtest_params.predictions_enabled:
+        confidence = _safe_float(signal.get("confidence"), 0.0)
+        divergence = _safe_float(signal.get("divergence_bps"), 0.0)
+        direction = _safe_str(signal.get("direction"), "neutral")
+        if direction != "neutral" and confidence > 0.0 and divergence > 0.0:
+            strength = min(1.0, divergence / 500.0) * min(1.0, confidence)
+            prediction_skew_bps = backtest_params.predictions_skew_strength_bps * strength
+            if direction == "sell":
+                prediction_skew_bps = -prediction_skew_bps
+
     cash_usd = capital
     position_shares = 0.0
     considered = 0
@@ -1286,6 +1460,7 @@ def _simulate_market_backtest(
             inventory_notional=position_shares * mid_price,
             outstanding_notional=abs(position_shares * mid_price),
             strategy_params=strategy_params,
+            prediction_skew_bps=prediction_skew_bps,
         )
         record.update(
             {
@@ -1531,6 +1706,19 @@ def run_backtest(
         "skill": "polymarket-maker-rebate-bot",
         "mode": "backtest",
         "dry_run": True,
+        "predictions_intelligence": {
+            "enabled": backtest_params.predictions_enabled,
+            "markets_with_signals": sum(
+                1 for m in selected_markets if m.get("prediction_signal")
+            ),
+            "skew_strength_bps": backtest_params.predictions_skew_strength_bps,
+            "score_boost": backtest_params.predictions_score_boost,
+            "note": (
+                "Seren Predictions intelligence active — costs SerenBucks per batch call."
+                if backtest_params.predictions_enabled
+                else "Disabled. Set predictions_enabled: true in config to activate (costs SerenBucks)."
+            ),
+        },
         "backtest_summary": {
             "days": days,
             "source": source,
