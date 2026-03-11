@@ -24,7 +24,10 @@
     "synthetic_orderbook_depth_usd": 125,
     "telemetry_path": "logs/polymarket-maker-rebate-backtest-telemetry.jsonl",
     "gamma_markets_url": "https://api.serendb.com/publishers/polymarket-data/markets",
-    "clob_history_url": "https://clob.polymarket.com/prices-history"
+    "clob_history_url": "https://clob.polymarket.com/prices-history",
+    "predictions_enabled": false,
+    "predictions_skew_strength_bps": 15,
+    "predictions_score_boost": 0.3
   },
   "strategy": {
     "bankroll_usd": 1000,
