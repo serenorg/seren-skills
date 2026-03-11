@@ -289,6 +289,7 @@ def _fill_fraction(
 def simulate_pair_backtest(
     market: dict[str, Any],
     params: PairReplayParams,
+    allocated_capital: float = 0.0,
 ) -> dict[str, Any]:
     primary_history: list[tuple[int, float]] = market["history"]
     pair_history: list[tuple[int, float]] = market["pair_history"]
@@ -305,6 +306,7 @@ def simulate_pair_backtest(
         aligned_primary.append((t, primary_price))
         aligned_pair.append((t, pair_price))
 
+    capital = allocated_capital if allocated_capital > 0.0 else params.bankroll_usd
     window = max(3, params.volatility_window_points)
     if len(aligned_primary) < max(params.min_history_points, window + 2):
         return {
@@ -316,7 +318,7 @@ def simulate_pair_backtest(
             "fill_events": 0,
             "filled_notional_usd": 0.0,
             "pnl_usd": 0.0,
-            "equity_curve": [params.bankroll_usd],
+            "equity_curve": [capital],
             "telemetry": [],
             "event_pnls": [],
             "orderbook_mode": _safe_str(market.get("orderbook_mode"), "unknown"),
@@ -328,7 +330,7 @@ def simulate_pair_backtest(
 
     primary_position_shares = 0.0
     pair_position_shares = 0.0
-    cash_usd = params.bankroll_usd
+    cash_usd = capital
     considered = 0
     quoted = 0
     skipped = 0
@@ -336,7 +338,7 @@ def simulate_pair_backtest(
     filled_notional = 0.0
     telemetry: list[dict[str, Any]] = []
     event_pnls: list[float] = []
-    equity_curve = [params.bankroll_usd]
+    equity_curve = [capital]
     basis_series_bps = [
         (aligned_primary[idx][1] - aligned_pair[idx][1]) * 10000.0 for idx in range(len(aligned_primary))
     ]
@@ -588,6 +590,7 @@ def simulate_pair_backtest(
             pair_price=next_pair_mid,
             unwind_cost_bps=params.expected_unwind_cost_bps,
         )
+        equity_after = max(0.0, equity_after)
         equity_curve.append(equity_after)
         if (
             primary_fill_notional > 0.0
@@ -623,6 +626,8 @@ def simulate_pair_backtest(
             }
         )
         telemetry.append(record)
+        if equity_after <= 0.0:
+            break
 
     ending_equity = _pair_equity(
         cash_usd=cash_usd,
@@ -643,7 +648,7 @@ def simulate_pair_backtest(
         "skipped_points": skipped,
         "fill_events": fill_events,
         "filled_notional_usd": round(filled_notional, 4),
-        "pnl_usd": round(ending_equity - params.bankroll_usd, 6),
+        "pnl_usd": round(ending_equity - capital, 6),
         "equity_curve": equity_curve,
         "telemetry": telemetry,
         "event_pnls": event_pnls,
