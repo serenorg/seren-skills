@@ -842,7 +842,7 @@ def _sharpe_like_score(event_pnls: list[float], bankroll_usd: float, days: int) 
     return (mean / stdev) * math.sqrt(events_per_year)
 
 
-def _simulate_pair(market: dict[str, Any], p: StrategyParams, bt: BacktestParams) -> dict[str, Any]:
+def _simulate_pair(market: dict[str, Any], p: StrategyParams, bt: BacktestParams, allocated_capital: float = 0.0) -> dict[str, Any]:
     replay_params = _to_pair_replay_params(p, bt)
     history = market.get("history", [])
     pair_history = market.get("pair_history", [])
@@ -861,7 +861,7 @@ def _simulate_pair(market: dict[str, Any], p: StrategyParams, bt: BacktestParams
         orderbook_mode = _combine_orderbook_mode(primary_mode, pair_mode)
     if orderbook_mode:
         market = {**market, "orderbook_mode": orderbook_mode}
-    result = simulate_pair_backtest(market=market, params=replay_params)
+    result = simulate_pair_backtest(market=market, params=replay_params, allocated_capital=allocated_capital)
     return {
         **result,
         "traded_points": result["quoted_points"],
@@ -927,9 +927,11 @@ def run_backtest(
     total_notional = 0.0
     telemetry: list[dict[str, Any]] = []
     orderbook_modes: dict[str, int] = defaultdict(int)
+    num_pairs = len(markets)
+    capital_per_pair = p.bankroll_usd / max(1, num_pairs)
 
     for market in markets:
-        result = _simulate_pair(market, p, bt)
+        result = _simulate_pair(market, p, bt, allocated_capital=capital_per_pair)
         summaries.append(
             {
                 "market_id": result["market_id"],

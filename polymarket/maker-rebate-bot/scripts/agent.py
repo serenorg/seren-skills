@@ -1182,7 +1182,9 @@ def _simulate_market_backtest(
     market: dict[str, Any],
     strategy_params: StrategyParams,
     backtest_params: BacktestParams,
+    allocated_capital: float = 0.0,
 ) -> dict[str, Any]:
+    capital = allocated_capital if allocated_capital > 0.0 else strategy_params.bankroll_usd
     history: list[tuple[int, float]] = market["history"]
     orderbooks: dict[int, OrderBookSnapshot] = market.get("orderbooks", {})
     window = backtest_params.volatility_window_points
@@ -1196,7 +1198,7 @@ def _simulate_market_backtest(
             "fill_events": 0,
             "filled_notional_usd": 0.0,
             "pnl_usd": 0.0,
-            "equity_curve": [strategy_params.bankroll_usd],
+            "equity_curve": [capital],
             "telemetry": [],
             "orderbook_mode": market.get("orderbook_mode", "unknown"),
         }
@@ -1207,7 +1209,7 @@ def _simulate_market_backtest(
     end_ts = _safe_int(market.get("end_ts"), 0)
     moves_bps = [abs((history[i][1] - history[i - 1][1]) * 10000.0) for i in range(1, len(history))]
 
-    cash_usd = strategy_params.bankroll_usd
+    cash_usd = capital
     position_shares = 0.0
     considered = 0
     quoted = 0
@@ -1215,7 +1217,7 @@ def _simulate_market_backtest(
     fill_events = 0
     filled_notional = 0.0
     telemetry: list[dict[str, Any]] = []
-    equity_curve = [strategy_params.bankroll_usd]
+    equity_curve = [capital]
 
     for i in range(window, len(history) - 1):
         t, mid_price = history[i]
@@ -1349,6 +1351,7 @@ def _simulate_market_backtest(
             mark_price=next_price,
             unwind_cost_bps=strategy_params.expected_unwind_cost_bps,
         )
+        equity_after = max(0.0, equity_after)
         equity_curve.append(equity_after)
         record.update(
             {
@@ -1362,6 +1365,8 @@ def _simulate_market_backtest(
             }
         )
         telemetry.append(record)
+        if equity_after <= 0.0:
+            break
 
     ending_equity = _liquidation_equity(
         cash_usd=cash_usd,
@@ -1379,7 +1384,7 @@ def _simulate_market_backtest(
         "skipped_points": skipped,
         "fill_events": fill_events,
         "filled_notional_usd": round(filled_notional, 4),
-        "pnl_usd": round(ending_equity - strategy_params.bankroll_usd, 6),
+        "pnl_usd": round(ending_equity - capital, 6),
         "equity_curve": equity_curve,
         "telemetry": telemetry,
         "orderbook_mode": market.get("orderbook_mode", "unknown"),
@@ -1452,11 +1457,16 @@ def run_backtest(
     telemetry_records: list[dict[str, Any]] = []
     orderbook_modes: set[str] = set()
 
-    for market in markets[: strategy_params.markets_max]:
+    selected_markets = markets[: strategy_params.markets_max]
+    num_markets = len(selected_markets)
+    capital_per_market = strategy_params.bankroll_usd / max(1, num_markets)
+
+    for market in selected_markets:
         summary = _simulate_market_backtest(
             market=market,
             strategy_params=strategy_params,
             backtest_params=backtest_params,
+            allocated_capital=capital_per_market,
         )
         market_summaries.append(
             {
@@ -1483,7 +1493,7 @@ def run_backtest(
             equity_curve.extend([equity_curve[-1]] * (len(market_equity_curve) - len(equity_curve)))
         for idx, value in enumerate(market_equity_curve):
             if idx < len(equity_curve):
-                equity_curve[idx] += value - strategy_params.bankroll_usd
+                equity_curve[idx] += value - capital_per_market
 
     ending_equity = equity_curve[-1]
     total_pnl = ending_equity - strategy_params.bankroll_usd
