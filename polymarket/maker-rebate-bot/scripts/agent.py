@@ -722,7 +722,7 @@ def _check_serenbucks_balance(api_key: str) -> float:
     """Check SerenBucks balance. Returns balance in USD or 0.0 on error."""
     try:
         request = Request(
-            "https://api.serendb.com/v1/billing/balance",
+            "https://api.serendb.com/wallet/balance",
             headers={
                 "User-Agent": "seren-maker-rebate-bot/1.0",
                 "Accept": "application/json",
@@ -731,8 +731,11 @@ def _check_serenbucks_balance(api_key: str) -> float:
         )
         with urlopen(request, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
-            return _safe_float(data.get("funded_balance_usd") or data.get("balance_usd"), 0.0)
-    except Exception:
+            sb = data.get("serenbucks") or {}
+            raw = sb.get("balance_usd") or sb.get("funded_balance_usd") or "0"
+            return _safe_float(str(raw).replace("$", "").replace(",", ""), 0.0)
+    except Exception as exc:
+        print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
 
 
