@@ -47,7 +47,7 @@ Live execution also requires:
 ## Quick Start
 
 ```bash
-cd polymarket/maker-rebate-bot
+cd ~/.config/seren/skills/polymarket-maker-rebate-bot
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip

@@ -51,7 +51,7 @@ Live execution requires both:
 ## Quick Start
 
 ```bash
-cd polymarket/liquidity-paired-basis-maker
+cd ~/.config/seren/skills/polymarket-liquidity-paired-basis-maker
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
