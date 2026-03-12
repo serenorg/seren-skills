@@ -882,7 +882,6 @@ def calculate_position_size(fair_value, market_price, bankroll, max_kelly=0.06):
 - Web dashboard (command-line only)
 - Email/webhook notifications (file logs only)
 - Backtesting with historical data
-- Real-time Polymarket balance checking (placeholder returns $0.00)
 
 ---
 
