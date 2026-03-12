@@ -158,6 +158,31 @@ curl -sS -X GET "https://api.serendb.com/wallet/balance" \
   -H "Authorization: Bearer $SEREN_API_KEY"
 ```
 
+**Response:**
+
+```json
+{
+  "data": {
+    "wallet_address": "0x...",
+    "balance_atomic": 22771925,
+    "balance_usd": "$22.77",
+    "funded_balance_atomic": 22171925,
+    "funded_balance_usd": "$22.17",
+    "promotional_balance_atomic": 600000,
+    "promotional_balance_usd": "$0.60",
+    "by_source": [],
+    "total_purchases_cents": 12500,
+    "total_purchases_usd": "$125.00",
+    "has_recovery": true
+  }
+}
+```
+
+> **Note:** The raw HTTP API wraps the payload in a `"data"` key. The Seren MCP
+> tool `get_wallet_status` reformats this into `{"serenbucks": {...}}`. Code that
+> calls the HTTP API directly should use `data.get("data")` to extract the balance
+> fields. See [seren-core#103](https://github.com/serenorg/seren-core/issues/103).
+
 ### POST `/wallet/deposit`
 
 ```bash
