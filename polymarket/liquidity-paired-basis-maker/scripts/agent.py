@@ -537,7 +537,8 @@ def _http_get_json_public(url: str, timeout: int = 30) -> dict[str, Any] | list[
         },
     )
     with urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        raw = json.loads(resp.read().decode("utf-8"))
+        return _unwrap_seren_response(raw)
 
 
 def _http_get_json(url: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
