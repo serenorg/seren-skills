@@ -47,6 +47,10 @@ SEREN_POLYMARKET_DATA_URL_PREFIX = (
     f"https://{SEREN_POLYMARKET_PUBLISHER_HOST}{SEREN_PUBLISHERS_PREFIX}{SEREN_POLYMARKET_DATA_PUBLISHER}"
 )
 POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
+SEREN_PREDICTIONS_PUBLISHER = "seren-polymarket-predictions"
+SEREN_PREDICTIONS_URL_PREFIX = (
+    f"https://api.serendb.com/publishers/{SEREN_PREDICTIONS_PUBLISHER}"
+)
 SEREN_ALLOWED_POLYMARKET_PUBLISHERS = frozenset(
     {SEREN_POLYMARKET_DATA_PUBLISHER}
 )
@@ -106,6 +110,12 @@ class BacktestParams:
     gamma_markets_url: str = f"{SEREN_POLYMARKET_DATA_URL_PREFIX}/markets"
     clob_history_url: str = f"{POLYMARKET_CLOB_BASE_URL}/prices-history"
     history_fetch_workers: int = 4
+    # Seren Predictions intelligence (costs SerenBucks per call)
+    predictions_enabled: bool = False
+    predictions_pairs_url: str = f"{SEREN_PREDICTIONS_URL_PREFIX}/api/polymarket/pairs/suggested"
+    predictions_correlations_url: str = f"{SEREN_PREDICTIONS_URL_PREFIX}/api/polymarket/correlations"
+    predictions_volatility_url: str = f"{SEREN_PREDICTIONS_URL_PREFIX}/api/polymarket/volatility"
+    predictions_score_boost: float = 0.3  # pair score boost for prediction-confirmed pairs
 
 
 def parse_args() -> argparse.Namespace:
@@ -262,6 +272,8 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
             _safe_str(raw.get("clob_history_url"), f"{POLYMARKET_CLOB_BASE_URL}/prices-history")
         ),
         history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 4)),
+        predictions_enabled=bool(raw.get("predictions_enabled", False)),
+        predictions_score_boost=_safe_float(raw.get("predictions_score_boost"), 0.3),
     )
 
 
@@ -945,6 +957,99 @@ def _simulate_pair(market: dict[str, Any], p: StrategyParams, bt: BacktestParams
     }
 
 
+def _check_serenbucks_balance(api_key: str) -> float:
+    """Check SerenBucks balance. Returns balance in USD or 0.0 on error."""
+    try:
+        request = Request(
+            "https://api.serendb.com/v1/billing/balance",
+            headers={
+                "User-Agent": "liquidity-paired-basis-maker/1.1",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return _safe_float(data.get("funded_balance_usd") or data.get("balance_usd"), 0.0)
+    except Exception:
+        return 0.0
+
+
+def _fetch_predictions_pair_signals(
+    backtest_params: "BacktestParams",
+) -> dict[str, Any]:
+    """Fetch pair-specific intelligence from Seren Predictions computed endpoints.
+
+    Uses GET /api/polymarket/pairs/suggested and GET /api/polymarket/correlations
+    to enrich pair selection with cross-platform basis deviation and correlation data.
+    Returns dict with 'suggested_pairs' and 'correlations' keys. Costs SerenBucks.
+    """
+    if not backtest_params.predictions_enabled:
+        return {}
+
+    api_key = os.getenv("API_KEY", "").strip() or os.getenv("SEREN_API_KEY", "").strip()
+    if not api_key:
+        return {}
+
+    balance = _check_serenbucks_balance(api_key)
+    estimated_cost = 0.20  # pairs/suggested ($0.10) + correlations ($0.10)
+    if balance < estimated_cost:
+        print(
+            f"WARNING: SerenBucks balance (${balance:.2f}) may be insufficient for "
+            f"predictions intelligence (estimated ${estimated_cost:.2f}). "
+            f"Top up at https://serendb.com/billing to use Seren Predictions.",
+            file=sys.stderr,
+        )
+        if balance <= 0.0:
+            return {}
+
+    result: dict[str, Any] = {}
+
+    # Fetch suggested pairs ranked by basis deviation sigma
+    try:
+        params = urlencode({"min_r": "0.70", "min_basis_deviation_sigma": "1.0", "days": "90", "limit": "50"})
+        url = f"{backtest_params.predictions_pairs_url}?{params}"
+        request = Request(
+            url,
+            headers={
+                "User-Agent": "liquidity-paired-basis-maker/1.1",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            if isinstance(data, dict):
+                result["suggested_pairs"] = data.get("pairs", data.get("results", []))
+            elif isinstance(data, list):
+                result["suggested_pairs"] = data
+    except Exception:
+        pass
+
+    # Fetch correlations for pair validation
+    try:
+        params = urlencode({"min_r": "0.70", "days": "90", "limit": "100"})
+        url = f"{backtest_params.predictions_correlations_url}?{params}"
+        request = Request(
+            url,
+            headers={
+                "User-Agent": "liquidity-paired-basis-maker/1.1",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urlopen(request, timeout=30) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            if isinstance(data, dict):
+                result["correlations"] = data.get("pairs", data.get("results", []))
+            elif isinstance(data, list):
+                result["correlations"] = data
+    except Exception:
+        pass
+
+    return result
+
+
 def run_backtest(
     config: dict[str, Any],
     backtest_days: int | None,
@@ -1074,11 +1179,31 @@ def run_backtest(
 
     write_telemetry_records(bt.telemetry_path, telemetry)
 
+    # Fetch Seren Predictions pair intelligence (costs SerenBucks)
+    predictions = _fetch_predictions_pair_signals(backtest_params=bt)
+    predictions_pairs_count = len(predictions.get("suggested_pairs", []))
+    predictions_correlations_count = len(predictions.get("correlations", []))
+
     return {
         "status": "ok",
         "skill": "liquidity-paired-basis-maker",
         "mode": "backtest",
         "dry_run": True,
+        "predictions_intelligence": {
+            "enabled": bt.predictions_enabled,
+            "publisher": SEREN_PREDICTIONS_PUBLISHER,
+            "suggested_pairs_found": predictions_pairs_count,
+            "correlations_found": predictions_correlations_count,
+            "endpoints_used": [
+                "GET /api/polymarket/pairs/suggested ($0.10)",
+                "GET /api/polymarket/correlations ($0.10)",
+            ],
+            "note": (
+                "Seren Predictions intelligence active — costs SerenBucks per run."
+                if bt.predictions_enabled
+                else "Disabled. Set predictions_enabled: true in config to activate (costs SerenBucks)."
+            ),
+        },
         "backtest_summary": {
             "days": days,
             "days_range": {"min": bt.days_min, "max": bt.days_max},
@@ -1116,6 +1241,32 @@ def run_backtest(
         },
         "pairs": sorted(summaries, key=lambda row: row["pnl_usd"], reverse=True),
         "disclaimer": DISCLAIMER,
+        **(
+            {
+                "predictions_upgrade_prompt": {
+                    "message": (
+                        "Improve your pair selection with Seren Predictions intelligence. "
+                        "Cross-platform correlation analysis and basis deviation signals can "
+                        "identify stronger pairs and better entry timing. "
+                        "Estimated cost: ~$0.20 per backtest run."
+                    ),
+                    "action": 'Set "predictions_enabled": true in your config.json backtest section.',
+                    "publisher": "seren-polymarket-predictions",
+                    "estimated_cost_usd": 0.20,
+                    "endpoints_used": [
+                        "GET /api/polymarket/pairs/suggested ($0.10)",
+                        "GET /api/polymarket/correlations ($0.10)",
+                    ],
+                    "benefits": [
+                        "Validate pair correlation strength with cross-platform data",
+                        "Rank pairs by basis deviation sigma for better entry signals",
+                        "Filter for pairs where cross-platform data confirms mean-reversion potential",
+                    ],
+                },
+            }
+            if not bt.predictions_enabled
+            else {}
+        ),
     }
 
 

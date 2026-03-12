@@ -87,6 +87,16 @@ Each backtest market object should include:
 - optional `orderbooks` array of `{ "t": unix_ts, "best_bid": ..., "best_ask": ..., "bid_size_usd": ..., "ask_size_usd": ... }`
 - optional `rebate_bps` (number; otherwise default rebate from config)
 
+## Seren Predictions Intelligence
+
+After a backtest completes, the output will suggest enabling **Seren Predictions** if it is not already active. This optional feature uses cross-platform consensus and divergence signals from Kalshi, Manifold, Metaculus, PredictIt, and Betfair to:
+
+- Boost market selection scores for markets where Polymarket diverges from consensus
+- Add directional skew to quotes based on cross-platform price differences
+- Filter for higher-edge opportunities where platforms disagree
+
+To enable, set `predictions_enabled: true` in the `backtest` section of your `config.json`. Estimated cost: ~$0.30 SerenBucks per backtest run.
+
 ## Safety Notes
 
 - Live execution is never enabled by default.

@@ -77,6 +77,21 @@ python3 scripts/agent.py --config config.json --backtest-file tests/fixtures/bac
 
 Set `backtest.telemetry_path` to capture JSONL replay telemetry for each decision step.
 
+## Seren Predictions Intelligence
+
+After a backtest completes, the output will suggest enabling **Seren Predictions** if it is not already active. This optional feature uses computed pair-specific endpoints to:
+
+- Validate pair correlation strength with cross-platform data
+- Rank pairs by basis deviation sigma for better entry signals
+- Filter for pairs where cross-platform data confirms mean-reversion potential
+
+Endpoints used (computed, not consensus):
+
+- `GET /api/polymarket/pairs/suggested` ($0.10) — suggested pairs ranked by basis deviation
+- `GET /api/polymarket/correlations` ($0.10) — pair correlation and basis spread statistics
+
+To enable, set `predictions_enabled: true` in the `backtest` section of your `config.json`. Estimated cost: ~$0.20 SerenBucks per backtest run.
+
 ## Disclaimer
 
 This skill can lose money. Basis spreads can persist or widen, hedge legs can slip, and liquidity can fail during volatility. Backtests are hypothetical and do not guarantee future results. This skill is software tooling and not financial advice. Use dry-run first and only trade with risk capital.
