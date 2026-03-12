@@ -1186,13 +1186,16 @@ def _fetch_live_quote_markets(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _max_drawdown(equity_curve: list[float]) -> float:
+    if not equity_curve:
+        return 0.0
+    bankroll = equity_curve[0]
     peak = float("-inf")
     max_dd = 0.0
     for value in equity_curve:
         if value > peak:
             peak = value
         max_dd = max(max_dd, peak - value)
-    return max_dd
+    return min(max_dd, bankroll)
 
 
 def _build_quote_plan(
@@ -1482,12 +1485,12 @@ def _simulate_market_backtest(
             skipped += 1
             telemetry.append(record)
             equity_curve.append(
-                _liquidation_equity(
+                max(0.0, _liquidation_equity(
                     cash_usd=cash_usd,
                     position_shares=position_shares,
                     mark_price=next_price,
                     unwind_cost_bps=strategy_params.expected_unwind_cost_bps,
-                )
+                ))
             )
             continue
 
@@ -1571,12 +1574,12 @@ def _simulate_market_backtest(
         if equity_after <= 0.0:
             break
 
-    ending_equity = _liquidation_equity(
+    ending_equity = max(0.0, _liquidation_equity(
         cash_usd=cash_usd,
         position_shares=position_shares,
         mark_price=history[-1][1],
         unwind_cost_bps=strategy_params.expected_unwind_cost_bps,
-    )
+    ))
     if not equity_curve or ending_equity != equity_curve[-1]:
         equity_curve.append(ending_equity)
     return {

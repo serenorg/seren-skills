@@ -529,7 +529,7 @@ class StrategyEngine:
         series = self.storage.get_pnl_series(mode=mode) + [current_net]
         if not series:
             return 0.0
-        peak = -10**18
+        peak = 0.0
         max_dd = 0.0
         for v in series:
             peak = max(peak, v)
@@ -1046,7 +1046,7 @@ class StrategyEngine:
         net5 = sum(p5)
         net10 = sum(p10)
         net20 = sum(p20)
-        max_dd = max(0.0, abs(min(0.0, min(p5)))) + (0.10 * gross / 100.0)
+        max_dd = max(0.0, abs(min(0.0, min(p5))))
 
         return {
             "net_pnl_5d": round(net5, 6),

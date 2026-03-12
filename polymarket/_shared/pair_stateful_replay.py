@@ -374,14 +374,14 @@ def simulate_pair_backtest(
             record["reason"] = "missing_orderbook_snapshot"
             telemetry.append(record)
             equity_curve.append(
-                _pair_equity(
+                max(0.0, _pair_equity(
                     cash_usd=cash_usd,
                     primary_shares=primary_position_shares,
                     pair_shares=pair_position_shares,
                     primary_price=next_primary_mid,
                     pair_price=next_pair_mid,
                     unwind_cost_bps=params.expected_unwind_cost_bps,
-                )
+                ))
             )
             continue
 
@@ -392,14 +392,14 @@ def simulate_pair_backtest(
             record["reason"] = "near_resolution"
             telemetry.append(record)
             equity_curve.append(
-                _pair_equity(
+                max(0.0, _pair_equity(
                     cash_usd=cash_usd,
                     primary_shares=primary_position_shares,
                     pair_shares=pair_position_shares,
                     primary_price=next_primary_mid,
                     pair_price=next_pair_mid,
                     unwind_cost_bps=params.expected_unwind_cost_bps,
-                )
+                ))
             )
             continue
 
@@ -409,14 +409,14 @@ def simulate_pair_backtest(
             record["reason"] = "invalid_mid_prices"
             telemetry.append(record)
             equity_curve.append(
-                _pair_equity(
+                max(0.0, _pair_equity(
                     cash_usd=cash_usd,
                     primary_shares=primary_position_shares,
                     pair_shares=pair_position_shares,
                     primary_price=next_primary_mid,
                     pair_price=next_pair_mid,
                     unwind_cost_bps=params.expected_unwind_cost_bps,
-                )
+                ))
             )
             continue
 
@@ -504,14 +504,14 @@ def simulate_pair_backtest(
             )
             telemetry.append(record)
             equity_curve.append(
-                _pair_equity(
+                max(0.0, _pair_equity(
                     cash_usd=cash_usd,
                     primary_shares=primary_position_shares,
                     pair_shares=pair_position_shares,
                     primary_price=next_primary_mid,
                     pair_price=next_pair_mid,
                     unwind_cost_bps=params.expected_unwind_cost_bps,
-                )
+                ))
             )
             continue
 
@@ -637,6 +637,7 @@ def simulate_pair_backtest(
         pair_price=aligned_pair[-1][1],
         unwind_cost_bps=params.expected_unwind_cost_bps,
     )
+    ending_equity = max(0.0, ending_equity)
     if not equity_curve or ending_equity != equity_curve[-1]:
         equity_curve.append(ending_equity)
 

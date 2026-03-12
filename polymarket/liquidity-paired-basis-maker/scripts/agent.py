@@ -900,6 +900,9 @@ def _load_backtest_markets(
 
 
 def _max_drawdown_stats(equity_curve: list[float]) -> tuple[float, float]:
+    if not equity_curve:
+        return 0.0, 0.0
+    bankroll = equity_curve[0]
     peak = float("-inf")
     max_dd_usd = 0.0
     max_dd_pct = 0.0
@@ -910,7 +913,7 @@ def _max_drawdown_stats(equity_curve: list[float]) -> tuple[float, float]:
         drawdown_pct = (drawdown / peak) * 100.0 if peak > 0 else 0.0
         max_dd_usd = max(max_dd_usd, drawdown)
         max_dd_pct = max(max_dd_pct, drawdown_pct)
-    return max_dd_usd, max_dd_pct
+    return min(max_dd_usd, bankroll), min(max_dd_pct, 100.0)
 
 
 def _annualized_return_pct(starting: float, ending: float, days: int) -> float:
@@ -1143,7 +1146,7 @@ def run_backtest(
     equity_curve = [p.bankroll_usd]
     equity = p.bankroll_usd
     for event_pnl in event_pnls:
-        equity += event_pnl
+        equity = max(0.0, equity + event_pnl)
         equity_curve.append(equity)
 
     total_pnl = equity - p.bankroll_usd
