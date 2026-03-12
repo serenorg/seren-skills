@@ -6,6 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import os
+import sys
+from urllib.request import Request, urlopen
 
 
 DEFAULT_DRY_RUN = True
@@ -37,6 +40,50 @@ def run_once(config: dict, dry_run: bool) -> dict:
         "input_keys": sorted(config.get("inputs", {}).keys()),
     }
 
+
+
+# ---------------------------------------------------------------------------
+# SerenBucks balance helpers
+# ---------------------------------------------------------------------------
+
+from typing import Any
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _runtime_api_key() -> str:
+    """Return the Seren API key from environment (Desktop or .env)."""
+    for env_name in ("API_KEY", "SEREN_API_KEY"):
+        token = (os.getenv(env_name) or "").strip()
+        if token:
+            return token
+    return ""
+
+
+def _check_serenbucks_balance(api_key: str) -> float:
+    """Check SerenBucks balance. Returns balance in USD or 0.0 on error."""
+    try:
+        request = Request(
+            "https://api.serendb.com/wallet/balance",
+            headers={
+                "User-Agent": "seren-euler-base-vault-bot/1.0",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urlopen(request, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            sb = data.get("serenbucks") or {}
+            raw = sb.get("balance_usd") or sb.get("funded_balance_usd") or "0"
+            return _safe_float(str(raw).replace("$", "").replace(",", ""), 0.0)
+    except Exception as exc:
+        print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
+        return 0.0
 
 def main() -> int:
     args = parse_args()
