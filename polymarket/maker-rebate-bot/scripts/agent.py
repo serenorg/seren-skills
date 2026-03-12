@@ -1750,10 +1750,44 @@ def run_backtest(
             ),
         },
         "markets": sorted(market_summaries, key=lambda item: item["pnl_usd"], reverse=True),
+        **(
+            {
+                "predictions_upgrade_prompt": {
+                    "message": (
+                        "Improve your edge with Seren Predictions intelligence. "
+                        "Cross-platform consensus and divergence signals from Kalshi, Manifold, "
+                        "Metaculus, PredictIt, and Betfair can boost market selection and directional "
+                        "quote skew. Estimated cost: ~$0.30 per backtest run."
+                    ),
+                    "action": 'Set "predictions_enabled": true in your config.json backtest section.',
+                    "publisher": "seren-polymarket-predictions",
+                    "estimated_cost_usd": 0.30,
+                    "endpoints_used": [
+                        "POST /api/oracle/divergence/batch ($0.15)",
+                        "POST /api/oracle/consensus/batch ($0.15)",
+                    ],
+                    "benefits": [
+                        "Boost mm_score for markets with cross-platform price divergence",
+                        "Add directional skew to quotes based on consensus vs Polymarket price",
+                        "Filter for markets where other platforms disagree — higher edge potential",
+                    ],
+                },
+            }
+            if not backtest_params.predictions_enabled
+            else {}
+        ),
         "next_steps": [
             "Review negative-PnL markets and edge assumptions.",
             "Tune spread, participation, and risk caps before live mode.",
             "Run quote mode only after backtest results are acceptable.",
+            *(
+                []
+                if backtest_params.predictions_enabled
+                else [
+                    "Enable Seren Predictions intelligence for better edge detection "
+                    "(set predictions_enabled: true in config).",
+                ]
+            ),
         ],
     }
 
