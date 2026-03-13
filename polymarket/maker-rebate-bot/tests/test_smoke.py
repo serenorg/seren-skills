@@ -289,6 +289,16 @@ def test_config_example_uses_seren_polymarket_publisher_urls() -> None:
     assert backtest.get("clob_history_url", "").endswith("/prices-history")
 
 
+def test_deprecated_history_publisher_url_is_canonicalized_to_direct_clob() -> None:
+    agent = _load_agent_module()
+
+    deprecated = "https://api.serendb.com/publishers/polymarket-trading-serenai/prices-history"
+    assert agent._canonicalize_history_url(deprecated) == "https://clob.polymarket.com/prices-history"
+    assert agent._canonicalize_history_url(f"{deprecated}?market=abc&interval=max") == (
+        "https://clob.polymarket.com/prices-history?market=abc&interval=max"
+    )
+
+
 def test_backtest_rejects_non_seren_polymarket_data_source(tmp_path: Path) -> None:
     bad_gamma_url = "https://gamma" + "-api." + "polymarket.com/markets"
     bad_clob_url = "https://evil." + "example.com/prices-history"

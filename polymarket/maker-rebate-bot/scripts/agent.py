@@ -35,8 +35,12 @@ SEREN_POLYMARKET_PUBLISHER_HOST = "api.serendb.com"
 SEREN_PUBLISHERS_PREFIX = "/publishers/"
 SEREN_POLYMARKET_PUBLISHER_PREFIX = f"https://{SEREN_POLYMARKET_PUBLISHER_HOST}{SEREN_PUBLISHERS_PREFIX}"
 SEREN_POLYMARKET_DATA_PUBLISHER = "polymarket-data"
+SEREN_POLYMARKET_TRADING_PUBLISHER = "polymarket-trading-serenai"
 SEREN_POLYMARKET_DATA_URL_PREFIX = (
     f"https://{SEREN_POLYMARKET_PUBLISHER_HOST}{SEREN_PUBLISHERS_PREFIX}{SEREN_POLYMARKET_DATA_PUBLISHER}"
+)
+SEREN_POLYMARKET_TRADING_URL_PREFIX = (
+    f"https://{SEREN_POLYMARKET_PUBLISHER_HOST}{SEREN_PUBLISHERS_PREFIX}{SEREN_POLYMARKET_TRADING_PUBLISHER}"
 )
 POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
 SEREN_PREDICTIONS_PUBLISHER = "seren-polymarket-predictions"
@@ -259,11 +263,28 @@ def _extract_live_book(payload: dict[str, Any], mid_price: float) -> tuple[float
 
 
 def _canonicalize_history_url(url: str) -> str:
-    parsed = urlparse(url)
+    trimmed = url.strip()
+    if not trimmed:
+        return trimmed
+    if trimmed.startswith(SEREN_POLYMARKET_TRADING_URL_PREFIX):
+        parsed = urlparse(trimmed)
+        if parsed.path in {
+            f"{SEREN_PUBLISHERS_PREFIX}{SEREN_POLYMARKET_TRADING_PUBLISHER}/prices-history",
+            f"{SEREN_PUBLISHERS_PREFIX}{SEREN_POLYMARKET_TRADING_PUBLISHER}/trades",
+        }:
+            return urlunparse(
+                parsed._replace(
+                    scheme="https",
+                    netloc="clob.polymarket.com",
+                    path="/prices-history",
+                )
+            )
+
+    parsed = urlparse(trimmed)
     if parsed.path.endswith("/trades"):
         path = parsed.path[: -len("/trades")] + "/prices-history"
         return urlunparse(parsed._replace(path=path))
-    return url
+    return trimmed
 
 
 def to_params(config: dict[str, Any]) -> StrategyParams:
