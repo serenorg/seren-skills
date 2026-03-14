@@ -12,6 +12,7 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 Autonomous strategy agent for shorting SaaS names under AI-driven multiple compression.
 
 Default backend is MCP-native:
+
 - Data collection via `mcp__seren-mcp__call_publisher`
 - Storage and PnL via `mcp__seren-mcp__run_sql` / `mcp__seren-mcp__run_sql_transaction`
 - Project/database lifecycle via `mcp__seren-mcp__list_*` / `create_*`
@@ -40,6 +41,7 @@ Legacy Python/API scripts remain available as fallback, not default.
 - `scripts/run_agent_server.py` - authenticated webhook runner for seren-cron
 - `scripts/setup_cron.py` - create/update cron jobs
 - `scripts/setup_serendb.py` - apply base + learning schemas
+
 ## Execution Modes
 
 - `paper` - plan and store paper orders
@@ -92,22 +94,152 @@ python3 scripts/strategy_engine.py --api-key "$SEREN_API_KEY" --run-type post-cl
 python3 scripts/self_learning.py --api-key "$SEREN_API_KEY" --action full --mode paper-sim
 ```
 
-## Legacy Continuous Runner (Optional, seren-cron)
+## Seren-Cron Integration
 
-1. Start runner:
+Use `seren-cron` to run this skill on a schedule — no terminal windows to keep open, no daemons, no permanent computer changes required. Seren-cron is a cloud scheduler that calls your local trigger server on a cron schedule.
 
-```bash
-SEREN_API_KEY="$SEREN_API_KEY" SAAS_SHORT_TRADER_WEBHOOK_SECRET="$SAAS_SHORT_TRADER_WEBHOOK_SECRET" \
-python3 scripts/run_agent_server.py --host 0.0.0.0 --port 8787
+**Requirements:** Seren Desktop login or a valid `SEREN_API_KEY`.
+
+### Step 1 — Check seren-cron is available
+
+Before scheduling, verify the publisher is reachable using `mcp__seren__call_publisher`:
+
+```text
+publisher: seren-cron
+path:      /health
+method:    GET
 ```
 
-2. Create cron jobs:
+If this call fails, **stop here** and tell the user:
+
+> "The seren-cron service could not be reached. Please send this error to <hello@serendb.com> for support."
+
+### Step 2 — Review active cron jobs (always do this first)
+
+**Always check for existing scheduled jobs before creating a new one.** A user may have forgotten a live job is already running.
+
+```text
+publisher: seren-cron
+path:      /jobs
+method:    GET
+```
+
+If jobs for this skill already exist, show them to the user and ask:
+
+> "You have [N] active cron job(s) for this skill. Would you like to:
+>
+> 1. Keep them running (recommended if intentional)
+> 2. Stop all and create a new schedule
+> 3. Cancel"
+
+**Do not create a duplicate cron job without explicit user confirmation.**
+
+### Step 3 — Start the local trigger server
+
+Start the webhook server that seren-cron will call on each scheduled tick:
 
 ```bash
-python3 scripts/setup_cron.py \
-  --runner-url "https://YOUR_PUBLIC_RUNNER_URL" \
-  --webhook-secret "$SAAS_SHORT_TRADER_WEBHOOK_SECRET"
+SEREN_API_KEY="$SEREN_API_KEY" python3 scripts/run_agent_server.py --config config.json --port 8080
 ```
+
+This process runs in your terminal session. When you close the terminal, it stops — **that is expected and correct**. Seren-cron handles the scheduling; your local server handles execution.
+
+### Step 4 — Create the cron schedules
+
+This skill uses multiple schedules aligned to market hours (ET). Create one job per schedule:
+
+**Scan (08:15 ET weekdays):**
+
+```text
+publisher: seren-cron
+path:      /jobs
+method:    POST
+body: {
+  "name":            "alpaca-saas-short-trader-live-scan",
+  "url":             "http://localhost:8080/run",
+  "method":          "POST",
+  "cron_expression": "15 8 * * 1-5",
+  "timezone":        "UTC",
+  "enabled":         true,
+  "timeout_seconds": 60
+}
+```
+
+**Monitor (10:15–15:15 ET weekdays, hourly):**
+
+```text
+publisher: seren-cron
+path:      /jobs
+method:    POST
+body: {
+  "name":            "alpaca-saas-short-trader-live-monitor",
+  "url":             "http://localhost:8080/run",
+  "method":          "POST",
+  "cron_expression": "15 10-15 * * 1-5",
+  "timezone":        "UTC",
+  "enabled":         true,
+  "timeout_seconds": 60
+}
+```
+
+**Post-close (16:20 ET weekdays):**
+
+```text
+publisher: seren-cron
+path:      /jobs
+method:    POST
+body: {
+  "name":            "alpaca-saas-short-trader-live-postclose",
+  "url":             "http://localhost:8080/run",
+  "method":          "POST",
+  "cron_expression": "20 16 * * 1-5",
+  "timezone":        "UTC",
+  "enabled":         true,
+  "timeout_seconds": 60
+}
+```
+
+Save the returned `job_id` for each job — you need them to pause, resume, or delete jobs later.
+
+### Step 5 — Manage the schedule
+
+**List all active jobs:**
+
+```text
+publisher: seren-cron, path: /jobs, method: GET
+```
+
+**Pause:**
+
+```text
+publisher: seren-cron, path: /jobs/{job_id}/pause, method: POST
+```
+
+**Resume:**
+
+```text
+publisher: seren-cron, path: /jobs/{job_id}/resume, method: POST
+```
+
+**Stop permanently:**
+
+```text
+publisher: seren-cron, path: /jobs/{job_id}, method: DELETE
+```
+
+### Insufficient Funds Guard
+
+If a live trade or cycle fails because the trading balance or SerenBucks balance is too low to execute, **immediately pause the cron job**:
+
+```text
+publisher: seren-cron, path: /jobs/{job_id}/pause, method: POST
+```
+
+Then tell the user:
+
+> "Automated trading has been paused: insufficient funds detected. Please top up your balance before resuming the schedule."
+
+Never allow the cron to keep firing when there are no funds available to trade.
 
 ## Safety Notes
 
