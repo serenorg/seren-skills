@@ -60,6 +60,10 @@ python3 scripts/agent.py --config config.json
 This runs the default 90-day backtest and returns a decision hint to keep paper-only or proceed to quote mode.
 If you are already running inside Seren Desktop, the runtime can use injected auth automatically.
 
+> **Live market data only.** Always leave `"markets": []` and `"state": {"inventory": {}}` empty in your config.json.
+> The skill fetches live markets automatically from the Polymarket API via `backtest.gamma_markets_url`.
+> Never add placeholder or example market IDs (e.g. `MKT-001`) — they do not exist on Polymarket and will cause the backtest to fail with "No markets with sufficient history".
+
 ## Run Quote Mode (After Backtest Review)
 
 ```bash

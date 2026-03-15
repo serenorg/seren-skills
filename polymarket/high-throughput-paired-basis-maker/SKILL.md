@@ -44,7 +44,7 @@ Live execution requires both:
 ## Runtime Files
 
 - `scripts/agent.py` - basis backtest + paired trade-intent runtime
-- `config.example.json` - strategy parameters, live backtest defaults, and trade-mode sample markets
+- `config.example.json` - strategy parameters and live backtest defaults
 - `.env.example` - environment template for API credentials
 - `requirements.txt` - installs `py-clob-client` for live order signing/submission
 
@@ -62,6 +62,10 @@ python3 scripts/agent.py --config config.json
 ```
 
 If you are already running inside Seren Desktop, the runtime can use injected auth automatically.
+
+> **Live market data only.** Always leave `"markets": []` and `"state": {"leg_exposure": {}}` empty in your config.json.
+> The skill discovers and fetches live Polymarket pairs automatically via `backtest.gamma_markets_url`.
+> Never add placeholder market IDs — they do not exist on Polymarket and will cause the backtest to fail with "No markets with sufficient history".
 
 ## Run Trade Mode (Backtest-First)
 
