@@ -404,6 +404,7 @@ def test_live_quote_mode_uses_live_market_loader_and_executor(monkeypatch) -> No
             "orders_submitted": [{"id": "ORDER-1"}, {"id": "ORDER-2"}],
             "open_order_ids": ["ORDER-1"],
             "updated_inventory": {"LIVE-MKT-1": 12.5},
+            "live_risk": {"peak_equity_usd": 1000.0, "current_equity_usd": 980.0, "drawdown_pct": 2.0},
         }
 
     monkeypatch.setattr(agent, "DirectClobTrader", FakeTrader)
@@ -459,9 +460,14 @@ def test_live_quote_mode_uses_live_market_loader_and_executor(monkeypatch) -> No
     assert result["status"] == "ok"
     assert result["mode"] == "live"
     assert result["market_source"] == "live-seren-publisher"
-    assert result["state"] == {"inventory": {"LIVE-MKT-1": 12.5}}
+    assert result["state"] == {
+        "inventory": {"LIVE-MKT-1": 12.5},
+        "live_risk": {"peak_equity_usd": 1000.0, "current_equity_usd": 980.0, "drawdown_pct": 2.0},
+    }
     assert result["strategy_summary"]["orders_submitted"] == 2
     assert result["strategy_summary"]["open_orders"] == 1
+    assert result["strategy_summary"]["current_equity_usd"] == 980.0
+    assert result["strategy_summary"]["drawdown_pct"] == 2.0
     assert load_calls and load_calls[0]["markets_max"] == 1
     assert execute_calls and execute_calls[0]["client_name"] == "polymarket-maker-rebate-bot"
     assert execute_calls[0]["quotes"][0]["market_id"] == "LIVE-MKT-1"

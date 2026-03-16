@@ -2001,16 +2001,42 @@ def run_once(
         "skips": rejected,
     }
     if mode == "live" and live_trader is not None:
+        prior_live_risk = config.get("state", {}).get("live_risk", {})
+        execution_settings = live_settings_from_execution(
+            {
+                **execution,
+                "prior_peak_equity_usd": _safe_float(
+                    prior_live_risk.get("peak_equity_usd"),
+                    0.0,
+                ),
+            }
+        )
         live_execution = execute_single_market_quotes(
             trader=live_trader,
             quotes=proposals,
             markets=markets,
-            execution_settings=live_settings_from_execution(execution),
+            execution_settings=execution_settings,
         )
         payload["live_execution"] = live_execution
-        payload["state"] = {"inventory": live_execution.get("updated_inventory", {})}
+        payload["state"] = {
+            "inventory": live_execution.get("updated_inventory", {}),
+            "live_risk": live_execution.get("live_risk", {}),
+        }
         payload["strategy_summary"]["orders_submitted"] = len(live_execution.get("orders_submitted", []))
         payload["strategy_summary"]["open_orders"] = len(live_execution.get("open_order_ids", []))
+        if isinstance(live_execution.get("live_risk"), dict):
+            payload["strategy_summary"]["current_equity_usd"] = _safe_float(
+                live_execution["live_risk"].get("current_equity_usd"),
+                0.0,
+            )
+            payload["strategy_summary"]["drawdown_pct"] = _safe_float(
+                live_execution["live_risk"].get("drawdown_pct"),
+                0.0,
+            )
+        if live_execution.get("status") == "error":
+            payload["status"] = "error"
+            payload["error_code"] = live_execution.get("error_code")
+            payload["message"] = live_execution.get("message")
     return payload
 
 
@@ -2043,7 +2069,7 @@ def main() -> int:
         )
     else:
         result = run_quote(config=config, markets_file=args.markets_file, yes_live=args.yes_live)
-        if result.get("status") == "ok" and isinstance(result.get("state"), dict):
+        if isinstance(result.get("state"), dict):
             try:
                 _persist_runtime_state(args.config, config, result["state"])
             except Exception as exc:  # pragma: no cover - defensive runtime path

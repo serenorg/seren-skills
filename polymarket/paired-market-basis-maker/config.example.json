@@ -6,8 +6,14 @@
     "require_positive_backtest": true,
     "prefer_live_market_data": true,
     "cancel_before_requote": true,
+    "cancel_on_error": true,
     "poll_attempts": 2,
-    "poll_interval_seconds": 1.5
+    "poll_interval_seconds": 1.5,
+    "cycle_timeout_seconds": 45,
+    "operation_timeout_seconds": 10,
+    "operation_retry_attempts": 1,
+    "min_cash_reserve_usd": 100,
+    "max_live_drawdown_pct": 15
   },
   "backtest": {
     "days": 270,
@@ -52,8 +58,9 @@
     "max_leg_notional_usd": 800
   },
   "state": {
-    "_note": "Leave leg_exposure empty. The skill populates this from live position state.",
-    "leg_exposure": {}
+    "_note": "Leave leg_exposure/live_risk empty. The skill populates these from live position and cash state.",
+    "leg_exposure": {},
+    "live_risk": {}
   },
   "markets": []
 }
