@@ -55,7 +55,12 @@
       "AVAX-USD"
     ],
     "loop_interval_seconds": 60,
-    "cancel_pending_on_shutdown": true
+    "cancel_pending_on_shutdown": true,
+    "cancel_on_error": true,
+    "api_timeout_seconds": 30,
+    "run_timeout_seconds": 90,
+    "min_cash_reserve_usd": 100.0,
+    "max_live_drawdown_pct": 15.0
   },
   "seren": {
     "auto_register_key": true,
