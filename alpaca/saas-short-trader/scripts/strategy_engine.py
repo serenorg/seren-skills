@@ -9,6 +9,7 @@ import argparse
 import json
 import math
 import os
+import signal
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -87,6 +88,8 @@ TICKER_COMPANY_MAP = {
 }
 
 WEIGHTS = {"f": 0.30, "a": 0.30, "s": 0.20, "t": 0.20, "p": 1.00}
+LIVE_SAFETY_VERSION = "2026-03-16.alpaca-live-safety-v1"
+LIVE_SAFETY_STATE_PATH = Path("state/live_safety_state.json")
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
@@ -109,17 +112,28 @@ class FeedResult:
     error: str = ""
 
 
+class LiveRiskError(RuntimeError):
+    """Raised when live risk controls block execution."""
+
+
+class LiveSafetyTimeout(TimeoutError):
+    """Raised when a live safety operation exceeds the configured timeout."""
+
+
 class StrategyEngine:
     def __init__(
         self,
         dsn: str,
         api_key: Optional[str] = None,
         strict_required_feeds: bool = True,
+        live_controls: Optional[Dict[str, Any]] = None,
     ):
         self.storage = SerenDBStorage(dsn)
         self.strict_required_feeds = strict_required_feeds
         self.api_key = api_key or os.getenv("SEREN_API_KEY")
         self.seren: Optional[SerenClient] = None
+        self.live_controls = self._normalize_live_controls(live_controls)
+        self.live_safety_state = self._load_live_safety_state()
         if self.api_key:
             self.seren = SerenClient(api_key=self.api_key)
 
@@ -128,6 +142,259 @@ class StrategyEngine:
         self.storage.ensure_schemas(
             base_sql=root / "serendb_schema.sql",
             learning_sql=root / "self_learning_schema.sql",
+        )
+
+    @staticmethod
+    def _normalize_live_controls(live_controls: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        controls = dict(live_controls or {})
+        defaults = {
+            "fail_closed_on_error": True,
+            "operation_timeout_seconds": 30,
+            "run_timeout_seconds": 120,
+            "min_buying_power_usd": 0.0,
+            "max_live_drawdown_pct": 0.0,
+            "max_live_gross_exposure_usd": 0.0,
+        }
+        defaults.update(controls)
+        return defaults
+
+    def _load_live_safety_state(self) -> Dict[str, Any]:
+        try:
+            if LIVE_SAFETY_STATE_PATH.exists():
+                raw = json.loads(LIVE_SAFETY_STATE_PATH.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    return raw
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        return {}
+
+    def _persist_live_safety_state(self, live_risk: Dict[str, Any]) -> None:
+        LIVE_SAFETY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = dict(live_risk)
+        payload["runtime_version"] = LIVE_SAFETY_VERSION
+        LIVE_SAFETY_STATE_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        self.live_safety_state = payload
+
+    def _live_operation_timeout_seconds(self) -> float:
+        return max(safe_float(self.live_controls.get("operation_timeout_seconds"), 30.0), 0.0)
+
+    def _live_run_timeout_seconds(self) -> float:
+        return max(safe_float(self.live_controls.get("run_timeout_seconds"), 120.0), 0.0)
+
+    def _fail_closed_on_error(self) -> bool:
+        return bool(self.live_controls.get("fail_closed_on_error", True))
+
+    def _call_with_timeout(self, label: str, fn, timeout_seconds: Optional[float] = None):
+        timeout = self._live_operation_timeout_seconds() if timeout_seconds is None else max(
+            safe_float(timeout_seconds, self._live_operation_timeout_seconds()),
+            0.0,
+        )
+        if timeout <= 0 or not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+            return fn()
+
+        previous_handler = signal.getsignal(signal.SIGALRM)
+
+        def _handle_timeout(signum: int, frame: Any) -> None:  # pragma: no cover
+            del signum, frame
+            raise LiveSafetyTimeout(f"{label} timed out after {timeout:.2f}s")
+
+        signal.signal(signal.SIGALRM, _handle_timeout)
+        signal.setitimer(signal.ITIMER_REAL, timeout)
+        try:
+            return fn()
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+
+    @staticmethod
+    def _order_notional(order: Dict[str, Any]) -> float:
+        details = order.get("details") or {}
+        price = safe_float(details.get("entry_price"), safe_float(order.get("limit_price")))
+        qty = safe_float(order.get("qty"))
+        return abs(price * qty)
+
+    def _planned_exposure(self, orders: List[Dict[str, Any]]) -> Tuple[float, float]:
+        gross = 0.0
+        net = 0.0
+        for order in orders:
+            notional = self._order_notional(order)
+            gross += notional
+            net -= notional
+        return gross, net
+
+    def _current_live_gross_exposure(self) -> float:
+        try:
+            orders = self.storage.get_latest_selected_orders(mode="live")
+        except Exception:  # noqa: BLE001
+            return 0.0
+        return round(sum(self._order_notional(order) for order in orders), 6)
+
+    def _strategy_live_order_refs(self, orders: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+        order_list = orders
+        if order_list is None:
+            try:
+                order_list = self.storage.get_latest_selected_orders(mode="live")
+            except Exception:  # noqa: BLE001
+                order_list = []
+        refs = []
+        for order in order_list or []:
+            ref = str(order.get("order_ref") or "").strip()
+            if ref:
+                refs.append(ref)
+        return refs
+
+    def _get_alpaca_account(self) -> Dict[str, Any]:
+        if not self.seren:
+            raise LiveRiskError("SEREN_API_KEY is required for live Alpaca preflight")
+        response = self.seren.call_publisher(
+            "alpaca",
+            method="GET",
+            path="/v2/account",
+            timeout=max(1, int(self._live_operation_timeout_seconds())),
+        )
+        body = SerenClient.unwrap_body(response)
+        if not isinstance(body, dict):
+            raise LiveRiskError("alpaca account response was not an object")
+        return body
+
+    def _list_alpaca_open_orders(self) -> List[Dict[str, Any]]:
+        if not self.seren:
+            return []
+        response = self.seren.call_publisher(
+            "alpaca",
+            method="GET",
+            path="/v2/orders?status=open&limit=500&nested=false",
+            timeout=max(1, int(self._live_operation_timeout_seconds())),
+        )
+        body = SerenClient.unwrap_body(response)
+        if isinstance(body, dict) and isinstance(body.get("orders"), list):
+            return [row for row in body["orders"] if isinstance(row, dict)]
+        if isinstance(body, list):
+            return [row for row in body if isinstance(row, dict)]
+        return []
+
+    def _compute_live_risk(self, planned_orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+        account = self._call_with_timeout("alpaca_account", self._get_alpaca_account)
+        planned_gross, planned_net = self._planned_exposure(planned_orders)
+        current_gross = self._current_live_gross_exposure()
+        buying_power = safe_float(
+            account.get("buying_power"),
+            safe_float(account.get("regt_buying_power"), safe_float(account.get("cash"))),
+        )
+        equity = safe_float(
+            account.get("equity"),
+            safe_float(account.get("portfolio_value"), safe_float(account.get("last_equity"))),
+        )
+        prior_peak = safe_float(self.live_safety_state.get("peak_equity_usd"), equity)
+        peak_equity = max(prior_peak, equity)
+        drawdown_usd = max(peak_equity - equity, 0.0)
+        drawdown_pct = (drawdown_usd / peak_equity * 100.0) if peak_equity > 0 else 0.0
+        remaining_buying_power = buying_power - planned_gross
+
+        live_risk = {
+            "runtime_version": LIVE_SAFETY_VERSION,
+            "account_status": str(account.get("status") or "").upper(),
+            "trading_blocked": bool(account.get("trading_blocked", False)),
+            "account_blocked": bool(account.get("account_blocked", False)),
+            "buying_power_usd": round(buying_power, 2),
+            "remaining_buying_power_usd": round(remaining_buying_power, 2),
+            "equity_usd": round(equity, 2),
+            "peak_equity_usd": round(peak_equity, 2),
+            "drawdown_usd": round(drawdown_usd, 2),
+            "drawdown_pct": round(drawdown_pct, 4),
+            "current_live_gross_exposure_usd": round(current_gross, 2),
+            "planned_live_gross_exposure_usd": round(planned_gross, 2),
+            "planned_live_net_exposure_usd": round(planned_net, 2),
+            "projected_live_gross_exposure_usd": round(current_gross + planned_gross, 2),
+        }
+        self._persist_live_safety_state(live_risk)
+
+        if live_risk["trading_blocked"] or live_risk["account_blocked"]:
+            raise LiveRiskError("alpaca account is blocked for trading")
+
+        min_buying_power = safe_float(self.live_controls.get("min_buying_power_usd"), 0.0)
+        if min_buying_power > 0 and remaining_buying_power < min_buying_power:
+            raise LiveRiskError(
+                "live buying power reserve would be breached: "
+                f"remaining={remaining_buying_power:.2f} reserve={min_buying_power:.2f}"
+            )
+
+        max_drawdown_pct = safe_float(self.live_controls.get("max_live_drawdown_pct"), 0.0)
+        if max_drawdown_pct > 0 and drawdown_pct > max_drawdown_pct:
+            raise LiveRiskError(
+                f"live drawdown {drawdown_pct:.2f}% exceeds cap {max_drawdown_pct:.2f}%"
+            )
+
+        max_gross = safe_float(self.live_controls.get("max_live_gross_exposure_usd"), 0.0)
+        projected_gross = current_gross + planned_gross
+        if max_gross > 0 and projected_gross > max_gross:
+            raise LiveRiskError(
+                f"projected live gross exposure {projected_gross:.2f} exceeds cap {max_gross:.2f}"
+            )
+
+        return live_risk
+
+    def _cancel_live_orders(self, order_refs: List[str]) -> List[Dict[str, Any]]:
+        if not self.seren:
+            return []
+        ref_set = {str(ref).strip() for ref in order_refs if str(ref).strip()}
+        if not ref_set:
+            return []
+
+        open_orders = self._call_with_timeout("alpaca_open_orders", self._list_alpaca_open_orders)
+        cancelled: List[Dict[str, Any]] = []
+        for order in open_orders:
+            order_id = str(order.get("id") or "").strip()
+            client_order_id = str(order.get("client_order_id") or "").strip()
+            if client_order_id not in ref_set and order_id not in ref_set:
+                continue
+            result = self._call_with_timeout(
+                f"alpaca_cancel_order:{order_id}",
+                lambda oid=order_id: self.seren.call_publisher(
+                    "alpaca",
+                    method="DELETE",
+                    path=f"/v2/orders/{oid}",
+                    timeout=max(1, int(self._live_operation_timeout_seconds())),
+                ),
+            )
+            cancelled.append(
+                {
+                    "order_id": order_id,
+                    "client_order_id": client_order_id,
+                    "result": SerenClient.unwrap_body(result) if isinstance(result, dict) else result,
+                }
+            )
+        return cancelled
+
+    def _handle_live_failure(
+        self,
+        *,
+        run_id: str,
+        run_type: str,
+        exc: Exception,
+        order_refs: List[str],
+        live_risk: Optional[Dict[str, Any]],
+    ) -> None:
+        cancelled_live_orders: List[Dict[str, Any]] = []
+        cleanup_error = ""
+        if self._fail_closed_on_error():
+            try:
+                cancelled_live_orders = self._cancel_live_orders(order_refs)
+            except Exception as cleanup_exc:  # noqa: BLE001
+                cleanup_error = str(cleanup_exc)
+
+        self.storage.update_run_status(
+            run_id,
+            "failed",
+            {
+                "error": str(exc),
+                "run_type": run_type,
+                "runtime_version": LIVE_SAFETY_VERSION,
+                "live_risk": live_risk or self.live_safety_state,
+                "cancelled_live_orders": cancelled_live_orders,
+                "cleanup_error": cleanup_error,
+                "order_refs": order_refs,
+            },
         )
 
     def run_scan(
@@ -169,6 +436,8 @@ class StrategyEngine:
             metadata=metadata,
         )
 
+        orders: List[Dict[str, Any]] = []
+        live_risk: Optional[Dict[str, Any]] = None
         try:
             sec_result = self.fetch_sec_features(universe)
             trends_result = self.fetch_trends_features(universe)
@@ -207,6 +476,26 @@ class StrategyEngine:
                     "feed_errors": feed_errors,
                 }
 
+            if mode == "live" and not market_result.ok:
+                self.storage.update_run_status(
+                    run_id,
+                    "blocked",
+                    {
+                        "feed_status": feed_status,
+                        "feed_errors": feed_errors,
+                        "blocked_reason": "live_market_feed_failure",
+                        "runtime_version": LIVE_SAFETY_VERSION,
+                    },
+                )
+                return {
+                    "status": "blocked",
+                    "run_id": run_id,
+                    "mode": mode,
+                    "run_type": run_type,
+                    "feed_status": feed_status,
+                    "feed_errors": feed_errors,
+                }
+
             scored_rows = self.score_universe(
                 universe=universe,
                 sec_data=sec_result.data,
@@ -219,7 +508,17 @@ class StrategyEngine:
             self.storage.insert_candidate_scores(run_id, scored_rows)
 
             selected = [r for r in scored_rows if r["selected"]]
-            orders = self.build_orders(selected, portfolio_notional_usd=100000.0)
+            orders = self.build_orders(
+                selected,
+                portfolio_notional_usd=100000.0,
+                is_simulated=(mode != "live"),
+            )
+            if mode == "live":
+                live_risk = self._call_with_timeout(
+                    "live_scan_preflight",
+                    lambda: self._compute_live_risk(orders),
+                    timeout_seconds=self._live_run_timeout_seconds(),
+                )
             self.storage.insert_order_events(run_id, mode, orders)
 
             sim = self.simulate(selected, orders)
@@ -274,6 +573,8 @@ class StrategyEngine:
                     "hit_rate_20D": round(sim["hit_rate_20d"], 4),
                 },
                 "selected_count": len(selected),
+                "runtime_version": LIVE_SAFETY_VERSION,
+                "live_risk": live_risk,
                 "data_sources": ["alpaca", "sec-filings-intelligence", "google-trends", news_result.data.get("_source", "exa")],
             }
             self.storage.update_run_status(run_id, "completed", metadata_patch)
@@ -285,9 +586,19 @@ class StrategyEngine:
                 "selected": [r["ticker"] for r in selected],
                 "sim": sim,
                 "feed_status": feed_status,
+                "live_risk": live_risk,
             }
         except Exception as exc:
-            self.storage.update_run_status(run_id, "failed", {"error": str(exc)})
+            if mode == "live":
+                self._handle_live_failure(
+                    run_id=run_id,
+                    run_type=run_type,
+                    exc=exc,
+                    order_refs=self._strategy_live_order_refs(orders),
+                    live_risk=live_risk,
+                )
+            else:
+                self.storage.update_run_status(run_id, "failed", {"error": str(exc)})
             raise
 
     def run_monitor(
@@ -309,6 +620,8 @@ class StrategyEngine:
             status="running",
             metadata={"run_type": run_type, "run_profile": run_profile},
         )
+        live_risk: Optional[Dict[str, Any]] = None
+        latest_orders: List[Dict[str, Any]] = []
         try:
             latest_orders = self.storage.get_latest_selected_orders(mode=mode)
             if not latest_orders:
@@ -317,6 +630,23 @@ class StrategyEngine:
 
             tickers = [o["ticker"] for o in latest_orders]
             market = self.fetch_market_features(tickers)
+            if mode == "live":
+                live_risk = self._call_with_timeout(
+                    "live_monitor_preflight",
+                    lambda: self._compute_live_risk(latest_orders),
+                    timeout_seconds=self._live_run_timeout_seconds(),
+                )
+                if not market.ok:
+                    self.storage.update_run_status(
+                        run_id,
+                        "blocked",
+                        {
+                            "blocked_reason": "live_market_feed_failure",
+                            "runtime_version": LIVE_SAFETY_VERSION,
+                            "live_risk": live_risk,
+                        },
+                    )
+                    return {"status": "blocked", "run_id": run_id, "reason": "live_market_feed_failure", "live_risk": live_risk}
 
             marks = []
             close_events = []
@@ -431,6 +761,8 @@ class StrategyEngine:
                     "auto_close_enabled": auto_close_enabled,
                     "closed_positions": closed_positions,
                     "open_positions": len(latest_orders) - closed_positions,
+                    "runtime_version": LIVE_SAFETY_VERSION,
+                    "live_risk": live_risk,
                 },
             )
             return {
@@ -443,9 +775,19 @@ class StrategyEngine:
                 "unrealized_pnl": round(total_unrealized, 6),
                 "closed_positions": closed_positions,
                 "hit_rate": round(hit_rate, 4),
+                "live_risk": live_risk,
             }
         except Exception as exc:
-            self.storage.update_run_status(run_id, "failed", {"error": str(exc)})
+            if mode == "live":
+                self._handle_live_failure(
+                    run_id=run_id,
+                    run_type=run_type,
+                    exc=exc,
+                    order_refs=self._strategy_live_order_refs(latest_orders),
+                    live_risk=live_risk,
+                )
+            else:
+                self.storage.update_run_status(run_id, "failed", {"error": str(exc)})
             raise
 
     def run_post_close(self, mode: str = "paper-sim", run_profile: str = "continuous") -> Dict[str, Any]:
@@ -471,11 +813,24 @@ class StrategyEngine:
             self.storage.update_run_status(
                 run_id,
                 "completed",
-                {"monitor_result": monitor_result, "label_update": label_result},
+                {
+                    "monitor_result": monitor_result,
+                    "label_update": label_result,
+                    "runtime_version": LIVE_SAFETY_VERSION,
+                },
             )
             return {"status": "completed", "run_id": run_id, "monitor": monitor_result, "label_update": label_result}
         except Exception as exc:
-            self.storage.update_run_status(run_id, "failed", {"error": str(exc)})
+            if mode == "live":
+                self._handle_live_failure(
+                    run_id=run_id,
+                    run_type=run_type,
+                    exc=exc,
+                    order_refs=self._strategy_live_order_refs(),
+                    live_risk=self.live_safety_state,
+                )
+            else:
+                self.storage.update_run_status(run_id, "failed", {"error": str(exc)})
             raise
 
     def compute_drawdown(self, mode: str, current_net: float) -> float:
@@ -834,7 +1189,12 @@ class StrategyEngine:
                 selected_count += 1
         return rows
 
-    def build_orders(self, selected_rows: List[Dict[str, Any]], portfolio_notional_usd: float) -> List[Dict[str, Any]]:
+    def build_orders(
+        self,
+        selected_rows: List[Dict[str, Any]],
+        portfolio_notional_usd: float,
+        is_simulated: bool = True,
+    ) -> List[Dict[str, Any]]:
         orders: List[Dict[str, Any]] = []
         if not selected_rows:
             return orders
@@ -873,7 +1233,7 @@ class StrategyEngine:
                     "stop_price": round(stop, 6),
                     "filled_qty": None,
                     "filled_avg_price": None,
-                    "is_simulated": True,
+                    "is_simulated": bool(is_simulated),
                     "details": {
                         "conviction_0_100": row["conviction_0_100"],
                         "planned_notional_usd": round(notional, 2),
@@ -1010,6 +1370,7 @@ def main() -> None:
         dsn=dsn,
         api_key=args.api_key or os.getenv("SEREN_API_KEY"),
         strict_required_feeds=bool(args.strict_required_feeds or config.get("strict_required_feeds", False)),
+        live_controls=config.get("live_controls"),
     )
     engine.ensure_schema()
 

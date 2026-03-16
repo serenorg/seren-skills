@@ -7,6 +7,14 @@
   "max_names_scored": 30,
   "max_names_orders": 8,
   "min_conviction": 65,
+  "live_controls": {
+    "fail_closed_on_error": true,
+    "operation_timeout_seconds": 30,
+    "run_timeout_seconds": 120,
+    "min_buying_power_usd": 0,
+    "max_live_drawdown_pct": 0,
+    "max_live_gross_exposure_usd": 0
+  },
   "portfolio_notional_usd": 100000,
   "timezone": "America/New_York",
   "universe": [

@@ -67,6 +67,9 @@ class Handler(BaseHTTPRequestHandler):
         run_type = str(payload.get("run_type", "scan"))
         action = str(payload.get("action", "")).strip().lower()
         strict_feeds = bool(payload.get("strict_required_feeds", True))
+        live_controls = payload.get("live_controls")
+        if isinstance(live_controls, dict):
+            self.engine.live_controls = self.engine._normalize_live_controls(live_controls)
 
         try:
             # Direct learning actions
