@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Kraken Grid Trading Bot - Automated grid trading on Kraken via Seren Gateway
 
@@ -13,6 +15,7 @@ Usage:
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 import uuid
@@ -28,6 +31,18 @@ from logger import GridTraderLogger
 from serendb_store import SerenDBStore
 import pair_selector
 from urllib.request import Request, urlopen
+
+
+LIVE_SAFETY_VERSION = "2026-03-16.kraken-coinbase-live-safety-v1"
+LIVE_RISK_STATE_PATH = Path("state/live_risk.json")
+
+
+class LiveRiskError(RuntimeError):
+    """Raised when live risk controls halt execution."""
+
+
+class LiveSafetyTimeout(TimeoutError):
+    """Raised when a live operation exceeds the configured timeout."""
 
 
 def _get_seren_api_key() -> str | None:
@@ -91,6 +106,8 @@ class KrakenGridTrader:
         self.tracker = None
         self.running = False
         self.active_orders = {}  # order_id -> order_details
+        self.live_risk_state = self._load_live_risk_state()
+        self._cycle_deadline_at: Optional[float] = None
 
         try:
             self.store = _build_store_from_env()
@@ -147,6 +164,7 @@ class KrakenGridTrader:
                     "campaign_name": campaign_name,
                     "trading_pair": trading_pair,
                     "dry_run": self.is_dry_run,
+                    "runtime_version": LIVE_SAFETY_VERSION,
                 },
             ),
         )
@@ -168,7 +186,148 @@ class KrakenGridTrader:
         if 'trading_pair' not in config and 'pairs' not in config:
             raise ValueError("Config must contain either 'trading_pair' or 'pairs'")
 
+        execution = config.setdefault('execution', {})
+        execution.setdefault('dry_run', True)
+        execution.setdefault('log_level', 'INFO')
+        execution.setdefault('cancel_on_error', True)
+        execution.setdefault('operation_timeout_seconds', 30)
+        execution.setdefault('cycle_timeout_seconds', 90)
+        risk = config.setdefault('risk_management', {})
+        risk.setdefault('min_quote_reserve_usd', 0.0)
+        risk.setdefault('max_live_drawdown_pct', 0.0)
+
         return config
+
+    def _load_live_risk_state(self) -> Dict[str, Any]:
+        try:
+            payload = json.loads(LIVE_RISK_STATE_PATH.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            payload = {}
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload.setdefault('runtime_version', LIVE_SAFETY_VERSION)
+        return payload
+
+    def _persist_live_risk_state(self, payload: Dict[str, Any]) -> None:
+        state = dict(payload)
+        state['runtime_version'] = LIVE_SAFETY_VERSION
+        state['updated_at'] = datetime.utcnow().isoformat()
+        LIVE_RISK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LIVE_RISK_STATE_PATH.write_text(
+            json.dumps(state, sort_keys=True, indent=2),
+            encoding='utf-8',
+        )
+        self.live_risk_state = state
+
+    def _operation_timeout_seconds(self) -> float:
+        return float(self.config.get('execution', {}).get('operation_timeout_seconds', 30))
+
+    def _cycle_timeout_seconds(self) -> float:
+        return float(self.config.get('execution', {}).get('cycle_timeout_seconds', 90))
+
+    def _cancel_on_error(self) -> bool:
+        return bool(self.config.get('execution', {}).get('cancel_on_error', True))
+
+    def _call_with_timeout(self, label: str, fn, timeout_seconds: Optional[float] = None):
+        timeout = float(timeout_seconds or self._operation_timeout_seconds())
+        if self._cycle_deadline_at is not None:
+            remaining = self._cycle_deadline_at - time.monotonic()
+            if remaining <= 0:
+                raise LiveSafetyTimeout(f"{label} exceeded cycle timeout")
+            timeout = min(timeout, remaining)
+        if timeout <= 0 or not hasattr(signal, 'SIGALRM'):
+            return fn()
+
+        previous_handler = signal.getsignal(signal.SIGALRM)
+
+        def _handle_timeout(signum, frame):  # noqa: ANN001,ARG001
+            raise LiveSafetyTimeout(f"{label} timed out after {timeout:.2f}s")
+
+        signal.signal(signal.SIGALRM, _handle_timeout)
+        signal.setitimer(signal.ITIMER_REAL, timeout)
+        try:
+            return fn()
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+
+    def _build_live_risk(self, current_price: float, base_balance: float, usd_balance: float) -> Dict[str, Any]:
+        current_equity = (base_balance * current_price) + usd_balance
+        prior_peak = float(self.live_risk_state.get('peak_equity_usd', current_equity))
+        peak_equity = max(prior_peak, current_equity)
+        drawdown_usd = max(peak_equity - current_equity, 0.0)
+        drawdown_pct = (drawdown_usd / peak_equity * 100.0) if peak_equity > 0 else 0.0
+        return {
+            'peak_equity_usd': round(peak_equity, 2),
+            'current_equity_usd': round(current_equity, 2),
+            'drawdown_usd': round(drawdown_usd, 2),
+            'drawdown_pct': round(drawdown_pct, 4),
+            'quote_balance_usd': round(usd_balance, 2),
+            'base_balance': round(base_balance, 8),
+        }
+
+    def _enforce_live_risk(self, current_price: float, base_balance: float, usd_balance: float) -> Dict[str, Any]:
+        live_risk = self._build_live_risk(current_price, base_balance, usd_balance)
+        self._persist_live_risk_state(live_risk)
+        max_drawdown_pct = float(self.config.get('risk_management', {}).get('max_live_drawdown_pct', 0.0))
+        if (not self.is_dry_run) and max_drawdown_pct > 0 and live_risk['drawdown_pct'] > max_drawdown_pct:
+            raise LiveRiskError(
+                f"live drawdown {live_risk['drawdown_pct']:.2f}% exceeds cap {max_drawdown_pct:.2f}%"
+            )
+        return live_risk
+
+    def _halt_live_trading(self, reason: str, details: Dict[str, Any]) -> None:
+        self.running = False
+        if details:
+            self.logger.log_error(
+                operation=reason,
+                error_type=str(details.get('error_type', reason)),
+                error_message=str(details.get('error_message', reason)),
+                context=details,
+            )
+        self._store_call(
+            f"{reason}_event",
+            lambda: self.store.save_event(
+                self.session_id,
+                reason,
+                {
+                    'runtime_version': LIVE_SAFETY_VERSION,
+                    **details,
+                },
+            ),
+        )
+
+        if self.is_dry_run or not self._cancel_on_error():
+            return
+
+        try:
+            cancelled = self._call_with_timeout(
+                'cancel_all_orders',
+                lambda: self.seren.cancel_all_orders(),
+            )
+            self.active_orders.clear()
+            self._store_call(
+                f"{reason}_cancelled_orders_event",
+                lambda: self.store.save_event(
+                    self.session_id,
+                    f"{reason}_cancelled_orders",
+                    {'cancel_result': cancelled},
+                ),
+            )
+        except Exception as cancel_exc:  # noqa: BLE001
+            self._store_call(
+                f"{reason}_cancel_error_event",
+                lambda: self.store.save_event(
+                    self.session_id,
+                    f"{reason}_cancel_error",
+                    {
+                        'error_type': type(cancel_exc).__name__,
+                        'error_message': str(cancel_exc),
+                    },
+                ),
+            )
 
     def _select_trading_pair(self):
         """
@@ -415,6 +574,7 @@ class KrakenGridTrader:
                     "pair": pair,
                     "scan_interval_seconds": scan_interval,
                     "stop_loss_bankroll": stop_loss,
+                    "runtime_version": LIVE_SAFETY_VERSION,
                 },
             ),
         )
@@ -436,17 +596,22 @@ class KrakenGridTrader:
         stop_loss = self.config['risk_management']['stop_loss_bankroll']
 
         try:
+            self._cycle_deadline_at = time.monotonic() + self._cycle_timeout_seconds()
             # 1. Get current price
-            current_price = self.seren.get_current_price(pair)
+            current_price = self._call_with_timeout(
+                'get_current_price',
+                lambda: self.seren.get_current_price(pair),
+            )
 
             # 2. Update balances
-            balance = self.seren.get_balance()
+            balance = self._call_with_timeout('get_balance', self.seren.get_balance)
             balance_key = pair_selector.get_balance_key(
                 pair, self.config.get('base_balance_key')
             )
             base_balance = float(balance['result'].get(balance_key, 0))
             usd_balance = float(balance['result'].get('ZUSD', 0))
             self.tracker.update_balances(base_balance, usd_balance)
+            live_risk = self._enforce_live_risk(current_price, base_balance, usd_balance)
 
             # 3. Check stop loss
             if self.tracker.should_stop_loss(current_price, stop_loss):
@@ -461,6 +626,7 @@ class KrakenGridTrader:
                             "current_price": current_price,
                             "portfolio_value": self.tracker.get_current_value(current_price),
                             "stop_loss_bankroll": stop_loss,
+                            "live_risk": live_risk,
                         },
                     ),
                 )
@@ -468,7 +634,10 @@ class KrakenGridTrader:
                 return
 
             # 4. Get open orders from Kraken
-            open_orders_response = self.seren.get_open_orders()
+            open_orders_response = self._call_with_timeout(
+                'get_open_orders',
+                self.seren.get_open_orders,
+            )
             current_open_orders = open_orders_response['result']['open']
 
             # 5. Find filled orders
@@ -485,7 +654,7 @@ class KrakenGridTrader:
             required_orders = self.grid.get_required_orders(current_price)
 
             # 8. Place new orders
-            self._place_grid_orders(required_orders, current_open_orders)
+            self._place_grid_orders(required_orders, current_open_orders, usd_balance)
 
             # 9. Log position update
             total_value_usd = self.tracker.get_current_value(current_price)
@@ -521,43 +690,65 @@ class KrakenGridTrader:
         except Exception as e:
             error_msg = str(e)
             print(f"ERROR in trading cycle: {error_msg}")
-            self.logger.log_error(
-                operation='trading_cycle',
-                error_type=type(e).__name__,
-                error_message=error_msg
+            self._halt_live_trading(
+                'trading_cycle_error',
+                {
+                    "error_type": type(e).__name__,
+                    "error_message": error_msg,
+                    "pair": pair,
+                },
             )
-            self._store_call(
-                "trading_cycle_error_event",
-                lambda: self.store.save_event(
-                    self.session_id,
-                    "trading_cycle_error",
-                    {
-                        "error_type": type(e).__name__,
-                        "error_message": error_msg,
-                    },
-                ),
-            )
+        finally:
+            self._cycle_deadline_at = None
 
-    def _place_grid_orders(self, required_orders: Dict, current_open_orders: Dict):
+    def _place_grid_orders(self, required_orders: Dict, current_open_orders: Dict, usd_balance: float):
         """Place grid orders that aren't already open"""
         pair = self.config['trading_pair']
+        min_quote_reserve = float(self.config.get('risk_management', {}).get('min_quote_reserve_usd', 0.0))
 
         # Get currently open order prices
         open_prices = set()
+        committed_buy_notional = 0.0
         for order_data in current_open_orders.values():
             descr = order_data['descr']
             price = float(descr['price'])
             open_prices.add(price)
+            if descr.get('type') == 'buy':
+                committed_buy_notional += price * float(order_data.get('vol', 0.0))
 
         # Place buy orders
         for order in required_orders['buy']:
             if order['price'] not in open_prices:
+                order_notional = float(order['price']) * float(order['volume'])
+                available_buying_power = usd_balance - committed_buy_notional - min_quote_reserve
+                if (not self.is_dry_run) and order_notional > max(available_buying_power, 0.0):
+                    print(
+                        f"Skipping buy @ ${order['price']:,.2f}: "
+                        f"quote reserve ${min_quote_reserve:,.2f} would be breached"
+                    )
+                    self._store_call(
+                        "quote_reserve_skip_event",
+                        lambda: self.store.save_event(
+                            self.session_id,
+                            "quote_reserve_skip",
+                            {
+                                "pair": pair,
+                                "price": order['price'],
+                                "volume": order['volume'],
+                                "requested_notional_usd": round(order_notional, 2),
+                                "available_buying_power_usd": round(max(available_buying_power, 0.0), 2),
+                                "min_quote_reserve_usd": round(min_quote_reserve, 2),
+                            },
+                        ),
+                    )
+                    continue
                 self._place_order(
                     pair=pair,
                     side='buy',
                     price=order['price'],
                     volume=order['volume']
                 )
+                committed_buy_notional += order_notional
 
         # Place sell orders
         for order in required_orders['sell']:
@@ -577,12 +768,15 @@ class KrakenGridTrader:
                 print(f"[DRY RUN] Would place {side} order: {volume:.8f} {base} @ ${price:,.2f}")
                 return
 
-            response = self.seren.add_order(
-                pair=pair,
-                order_type='limit',
-                side=side,
-                volume=volume,
-                price=price
+            response = self._call_with_timeout(
+                'add_order',
+                lambda: self.seren.add_order(
+                    pair=pair,
+                    order_type='limit',
+                    side=side,
+                    volume=volume,
+                    price=price
+                ),
             )
 
             if 'result' in response and 'txid' in response['result']:
@@ -735,7 +929,8 @@ class KrakenGridTrader:
             try:
                 # Cancel all open orders
                 print("Cancelling all open orders...")
-                self.seren.cancel_all_orders()
+                self._call_with_timeout('cancel_all_orders', self.seren.cancel_all_orders)
+                self.active_orders.clear()
                 print("✓ All orders cancelled")
 
             except Exception as e:

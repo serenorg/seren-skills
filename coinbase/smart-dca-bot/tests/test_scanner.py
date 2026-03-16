@@ -1,6 +1,29 @@
 from __future__ import annotations
 
-from scanner import OpportunityScanner
+import importlib.util
+from pathlib import Path
+import sys
+
+
+_SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
+
+
+def _load_local_module(module_name: str):
+    script_dir = str(_SCRIPT_DIR)
+    sys.path[:] = [script_dir, *[path for path in sys.path if path != script_dir]]
+    sys.modules.pop(module_name, None)
+    spec = importlib.util.spec_from_file_location(
+        f"{Path(__file__).stem}_{module_name}",
+        _SCRIPT_DIR / f"{module_name}.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+OpportunityScanner = _load_local_module("scanner").OpportunityScanner
 
 
 def test_scanner_emits_all_signal_types() -> None:

@@ -105,6 +105,8 @@ IMPORTANT_DISCLAIMER = """IMPORTANT DISCLAIMERS — READ BEFORE USING
 TRADE_EXECUTION_NOTICE = (
     "⚠️ This trade executes directly on Coinbase. SerenAI does not custody your funds."
 )
+LIVE_SAFETY_VERSION = "2026-03-16.kraken-coinbase-live-safety-v1"
+LIVE_SAFETY_STATE_PATH = Path("state/live_safety_state.json")
 
 
 class ConfigError(RuntimeError):
@@ -113,6 +115,14 @@ class ConfigError(RuntimeError):
 
 class PolicyError(RuntimeError):
     """Raised when policy guards block execution."""
+
+
+class LiveRiskError(RuntimeError):
+    """Raised when live risk controls block or halt execution."""
+
+
+class LiveSafetyTimeout(TimeoutError):
+    """Raised when a live run exceeds the configured timeout."""
 
 
 _shutdown_requested = False
@@ -166,6 +176,11 @@ def _default_config() -> dict[str, Any]:
             "market_scan_assets": ["BTC-USD", "ETH-USD", "SOL-USD", "DOT-USD", "AVAX-USD"],
             "loop_interval_seconds": 60,
             "cancel_pending_on_shutdown": True,
+            "cancel_on_error": True,
+            "api_timeout_seconds": 30,
+            "run_timeout_seconds": 90,
+            "min_cash_reserve_usd": 0.0,
+            "max_live_drawdown_pct": 0.0,
         },
         "seren": {
             "auto_register_key": True,
@@ -385,6 +400,141 @@ def _base_asset(product_id: str) -> str:
     return _normalize_product_id(product_id).split("-", 1)[0]
 
 
+def _tracked_pairs_for_live_risk(config: dict[str, Any]) -> list[str]:
+    pairs: set[str] = set()
+    inputs = config.get("inputs", {})
+    asset = str(inputs.get("asset", "")).strip()
+    if asset:
+        pairs.add(_normalize_product_id(asset))
+
+    for key in config.get("portfolio", {}).get("allocations", {}):
+        text = str(key).strip()
+        if text:
+            pairs.add(_normalize_product_id(text))
+
+    for key in config.get("scanner", {}).get("base_allocations", {}):
+        text = str(key).strip()
+        if text:
+            pairs.add(_normalize_product_id(text))
+
+    for pair in config.get("runtime", {}).get("market_scan_assets", []):
+        text = str(pair).strip()
+        if text:
+            pairs.add(_normalize_product_id(text))
+
+    return sorted(pairs)
+
+
+def _quote_cash_balance_usd(balances: dict[str, float]) -> float:
+    return _float(balances.get("USD"), 0.0) + _float(balances.get("USDC"), 0.0)
+
+
+def _compute_live_risk(
+    *,
+    config: dict[str, Any],
+    client: CoinbaseClient | None,
+    live_state: dict[str, Any],
+) -> dict[str, Any]:
+    if client is None:
+        return {
+            "runtime_version": LIVE_SAFETY_VERSION,
+            "quote_balance_usd": 0.0,
+            "current_equity_usd": 0.0,
+            "peak_equity_usd": 0.0,
+            "drawdown_usd": 0.0,
+            "drawdown_pct": 0.0,
+            "tracked_pairs": [],
+        }
+
+    balances = {str(key).upper(): _float(value) for key, value in client.get_balance().items()}
+    tracked_pairs = _tracked_pairs_for_live_risk(config)
+    prices: dict[str, float] = {}
+    for pair in tracked_pairs:
+        try:
+            prices[pair] = _float(get_market_snapshot(client, pair).get("price", 0.0))
+        except Exception:  # noqa: BLE001
+            continue
+
+    holdings_value = sum(
+        PortfolioManager._lookup_balance(balances, pair) * _float(prices.get(pair), 0.0)
+        for pair in tracked_pairs
+    )
+    quote_balance = _quote_cash_balance_usd(balances)
+    current_equity = quote_balance + holdings_value
+    prior_peak = _float(live_state.get("peak_equity_usd"), current_equity)
+    peak_equity = max(prior_peak, current_equity)
+    drawdown_usd = max(peak_equity - current_equity, 0.0)
+    drawdown_pct = (drawdown_usd / peak_equity * 100.0) if peak_equity > 0 else 0.0
+    return {
+        "runtime_version": LIVE_SAFETY_VERSION,
+        "quote_balance_usd": round(quote_balance, 2),
+        "current_equity_usd": round(current_equity, 2),
+        "peak_equity_usd": round(peak_equity, 2),
+        "drawdown_usd": round(drawdown_usd, 2),
+        "drawdown_pct": round(drawdown_pct, 4),
+        "tracked_pairs": tracked_pairs,
+    }
+
+
+def _planned_notional_usd(config: dict[str, Any], mode: str) -> float:
+    inputs = config.get("inputs", {})
+    if mode == "portfolio":
+        return _float(inputs.get("total_dca_amount_usd", inputs.get("dca_amount_usd", 0.0)))
+    return _float(inputs.get("dca_amount_usd", 0.0))
+
+
+def _enforce_live_safety(
+    *,
+    config: dict[str, Any],
+    client: CoinbaseClient | None,
+    mode: str,
+) -> dict[str, Any]:
+    live_state = _load_live_safety_state()
+    live_risk = _compute_live_risk(config=config, client=client, live_state=live_state)
+    _persist_live_safety_state(live_risk)
+
+    runtime = config.get("runtime", {})
+    min_cash_reserve = _float(runtime.get("min_cash_reserve_usd", 0.0))
+    planned_notional = _planned_notional_usd(config, mode)
+    if min_cash_reserve > 0 and live_risk["quote_balance_usd"] - planned_notional < min_cash_reserve:
+        raise LiveRiskError(
+            "live cash reserve would be breached: "
+            f"quote_balance={live_risk['quote_balance_usd']:.2f} "
+            f"- planned_notional={planned_notional:.2f} < reserve={min_cash_reserve:.2f}"
+        )
+
+    max_drawdown_pct = _float(runtime.get("max_live_drawdown_pct", 0.0))
+    if max_drawdown_pct > 0 and live_risk["drawdown_pct"] > max_drawdown_pct:
+        raise LiveRiskError(
+            f"live drawdown {live_risk['drawdown_pct']:.2f}% exceeds cap {max_drawdown_pct:.2f}%"
+        )
+
+    return live_risk
+
+
+def _cancel_orders_on_error(
+    *,
+    config: dict[str, Any],
+    client: CoinbaseClient | None,
+    execution_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if client is None or not bool(config.get("runtime", {}).get("cancel_on_error", True)):
+        return []
+
+    cancelled: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_order_id in execution_context.get("order_ids", []):
+        order_id = str(raw_order_id).strip()
+        if not order_id or order_id in seen or order_id == "dry-run":
+            continue
+        seen.add(order_id)
+        try:
+            cancelled.append({"order_id": order_id, "result": client.cancel_order(order_id)})
+        except Exception as exc:  # noqa: BLE001
+            cancelled.append({"order_id": order_id, "error": str(exc)})
+    return cancelled
+
+
 def show_disclaimer_if_first_run(*, accept_risk_disclaimer: bool) -> bool:
     if DISCLAIMER_ACK_PATH.exists():
         return False
@@ -413,7 +563,53 @@ def build_coinbase_client(config: dict[str, Any]) -> CoinbaseClient | None:
     return CoinbaseClient(
         credentials=CoinbaseCredentials(api_key=api_key, api_secret=api_secret),
         base_url=os.getenv("COINBASE_API_BASE_URL", "https://api.coinbase.com"),
+        timeout_seconds=int(runtime.get("api_timeout_seconds", 30)),
     )
+
+
+def _load_live_safety_state() -> dict[str, Any]:
+    try:
+        payload = json.loads(LIVE_SAFETY_STATE_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        payload = {}
+    except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.setdefault("runtime_version", LIVE_SAFETY_VERSION)
+    return payload
+
+
+def _persist_live_safety_state(payload: dict[str, Any]) -> dict[str, Any]:
+    state = dict(payload)
+    state["runtime_version"] = LIVE_SAFETY_VERSION
+    state["updated_at"] = _now().isoformat()
+    LIVE_SAFETY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LIVE_SAFETY_STATE_PATH.write_text(
+        json.dumps(state, sort_keys=True, indent=2),
+        encoding="utf-8",
+    )
+    return state
+
+
+def _run_with_timeout(label: str, timeout_seconds: float, fn):
+    timeout = float(timeout_seconds)
+    if timeout <= 0 or not hasattr(signal, "SIGALRM"):
+        return fn()
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _handle_timeout(signum: int, frame: Any) -> None:  # pragma: no cover
+        del signum, frame
+        raise LiveSafetyTimeout(f"{label} timed out after {timeout:.2f}s")
+
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.setitimer(signal.ITIMER_REAL, timeout)
+    try:
+        return fn()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def ensure_seren_api_key(config: dict[str, Any]) -> str:
@@ -700,6 +896,7 @@ def execute_order(
     decision_order_type: str,
     limit_price: float | None,
     execution_price_hint: float,
+    execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     print(TRADE_EXECUTION_NOTICE)
     if dry_run or client is None:
@@ -724,6 +921,8 @@ def execute_order(
             price=f"{limit_price:.8f}",
         )
         txid = payload.get("txid", [""])[0] if isinstance(payload.get("txid"), list) else ""
+        if execution_context is not None and txid:
+            execution_context.setdefault("order_ids", []).append(txid)
         return {
             "status": "pending",
             "order_id": txid,
@@ -744,6 +943,8 @@ def execute_order(
         volume=payload["volume"],
     )
     txid = result.get("txid", [""])[0] if isinstance(result.get("txid"), list) else ""
+    if execution_context is not None and txid:
+        execution_context.setdefault("order_ids", []).append(txid)
     return {
         "status": "ok",
         "order_id": txid,
@@ -766,6 +967,7 @@ def execute_decision_order(
     limit_price: float | None,
     execution_price_hint: float,
     decision_slices: list[float] | None = None,
+    execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not decision_slices or len(decision_slices) <= 1:
         return execute_order(
@@ -776,6 +978,7 @@ def execute_decision_order(
             decision_order_type=decision_order_type,
             limit_price=limit_price,
             execution_price_hint=execution_price_hint,
+            execution_context=execution_context,
         )
 
     positive_slices = [float(value) for value in decision_slices if float(value) > 0]
@@ -789,6 +992,7 @@ def execute_decision_order(
             decision_order_type=decision_order_type,
             limit_price=limit_price,
             execution_price_hint=execution_price_hint,
+            execution_context=execution_context,
         )
 
     child_orders: list[dict[str, Any]] = []
@@ -805,6 +1009,7 @@ def execute_decision_order(
                 decision_order_type=decision_order_type,
                 limit_price=limit_price,
                 execution_price_hint=execution_price_hint,
+                execution_context=execution_context,
             )
         )
 
@@ -890,6 +1095,7 @@ def _portfolio_mode(
     tracker: PositionTracker,
     logger: AuditLogger,
     session_id: str,
+    execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     inputs = config["inputs"]
     total_amount = _float(inputs.get("total_dca_amount_usd", inputs.get("dca_amount_usd", 0.0)))
@@ -993,6 +1199,7 @@ def _portfolio_mode(
             limit_price=decision.limit_price,
             execution_price_hint=_float(snap["price"]),
             decision_slices=decision.slices,
+            execution_context=execution_context,
         )
         execution_id = str(uuid.uuid4())
         executed_notional = _float(executed.get("executed_notional_usd", 0.0))
@@ -1088,6 +1295,7 @@ def _single_asset_mode(
     tracker: PositionTracker,
     logger: AuditLogger,
     session_id: str,
+    execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     inputs = config["inputs"]
     requested_pair = _normalize_product_id(str(inputs.get("asset", "BTC-USD")).upper())
@@ -1143,6 +1351,7 @@ def _single_asset_mode(
         limit_price=decision.limit_price,
         execution_price_hint=_float(snapshot["price"]),
         decision_slices=decision.slices,
+        execution_context=execution_context,
     )
 
     execution_id = str(uuid.uuid4())
@@ -1268,6 +1477,7 @@ def _opportunity_scanner_mode(
     tracker: PositionTracker,
     logger: AuditLogger,
     session_id: str,
+    execution_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scanner_cfg = config.get("scanner", {})
     portfolio_allocations = config.get("portfolio", {}).get("allocations", {})
@@ -1422,6 +1632,7 @@ def _opportunity_scanner_mode(
             limit_price=decision.limit_price,
             execution_price_hint=_float(snap["price"]),
             decision_slices=decision.slices,
+            execution_context=execution_context,
         )
 
         execution_id = str(uuid.uuid4())
@@ -1605,13 +1816,43 @@ def run_once(
             "mode": mode,
             "dry_run": dry_run,
             "serendb_enabled": store.enabled,
+            "runtime_version": LIVE_SAFETY_VERSION,
         },
     )
 
+    client: CoinbaseClient | None = None
+    live_risk: dict[str, Any] | None = None
+    execution_context: dict[str, Any] = {"order_ids": []}
+
     try:
         client = build_coinbase_client(config)
-        if mode == "single_asset":
-            payload = _single_asset_mode(
+        if (not dry_run) and client is not None:
+            live_risk = _enforce_live_safety(config=config, client=client, mode=mode)
+
+        def _execute_mode() -> dict[str, Any]:
+            if mode == "single_asset":
+                return _single_asset_mode(
+                    config=config,
+                    client=client,
+                    dry_run=dry_run,
+                    store=store,
+                    tracker=tracker,
+                    logger=logger,
+                    session_id=session_id,
+                    execution_context=execution_context,
+                )
+            if mode == "portfolio":
+                return _portfolio_mode(
+                    config=config,
+                    client=client,
+                    dry_run=dry_run,
+                    store=store,
+                    tracker=tracker,
+                    logger=logger,
+                    session_id=session_id,
+                    execution_context=execution_context,
+                )
+            return _opportunity_scanner_mode(
                 config=config,
                 client=client,
                 dry_run=dry_run,
@@ -1619,27 +1860,19 @@ def run_once(
                 tracker=tracker,
                 logger=logger,
                 session_id=session_id,
+                execution_context=execution_context,
             )
-        elif mode == "portfolio":
-            payload = _portfolio_mode(
-                config=config,
-                client=client,
-                dry_run=dry_run,
-                store=store,
-                tracker=tracker,
-                logger=logger,
-                session_id=session_id,
+
+        if (not dry_run) and client is not None:
+            payload = _run_with_timeout(
+                "run_once_execution",
+                _float(config.get("runtime", {}).get("run_timeout_seconds", 90.0), 90.0),
+                _execute_mode,
             )
+            live_risk = _enforce_live_safety(config=config, client=client, mode=mode)
+            payload["live_risk"] = live_risk
         else:
-            payload = _opportunity_scanner_mode(
-                config=config,
-                client=client,
-                dry_run=dry_run,
-                store=store,
-                tracker=tracker,
-                logger=logger,
-                session_id=session_id,
-            )
+            payload = _execute_mode()
 
         executed_notional = 0.0
         if isinstance(payload.get("execution"), dict):
@@ -1676,14 +1909,25 @@ def run_once(
             "mode": mode,
             "session_id": session_id,
             "seren_api_key_present": bool(seren_api_key),
-            "pending_order_ids": _collect_order_ids(payload),
+            "pending_order_ids": sorted(
+                {
+                    *[oid for oid in _collect_order_ids(payload) if oid],
+                    *[str(oid).strip() for oid in execution_context.get("order_ids", []) if str(oid).strip()],
+                }
+            ),
             "payload": payload,
+            "runtime_version": LIVE_SAFETY_VERSION,
             "disclaimer": IMPORTANT_DISCLAIMER,
         }
         logger.log_event("run_completed", {"session_id": session_id, "mode": mode, "status": "ok"})
         return result
 
-    except (ConfigError, PolicyError, CoinbaseAPIError) as exc:
+    except (ConfigError, PolicyError, CoinbaseAPIError, LiveRiskError, LiveSafetyTimeout) as exc:
+        cancelled_on_error = _cancel_orders_on_error(
+            config=config,
+            client=client,
+            execution_context=execution_context,
+        )
         logger.log_error("run_once", str(exc), {"session_id": session_id, "mode": mode})
         persist_local_run(
             session_id=session_id,
@@ -1691,7 +1935,12 @@ def run_once(
             status="error",
             target_notional_usd=_float(config["inputs"].get("dca_amount_usd", 0.0)),
             executed_notional_usd=0.0,
-            details={"error": str(exc)},
+            details={
+                "error": str(exc),
+                "cancelled_on_error": cancelled_on_error,
+                "live_risk": live_risk,
+                "runtime_version": LIVE_SAFETY_VERSION,
+            },
         )
         store.close_session(
             session_id=session_id,
@@ -1702,10 +1951,17 @@ def run_once(
         return {
             "status": "error",
             "skill": SKILL_NAME,
-            "error_code": "runtime_error",
+            "error_code": (
+                "live_safety_error"
+                if isinstance(exc, (LiveRiskError, LiveSafetyTimeout))
+                else "runtime_error"
+            ),
             "message": str(exc),
             "mode": mode,
             "session_id": session_id,
+            "cancelled_on_error": cancelled_on_error,
+            "live_risk": live_risk,
+            "runtime_version": LIVE_SAFETY_VERSION,
             "disclaimer": IMPORTANT_DISCLAIMER,
         }
     finally:

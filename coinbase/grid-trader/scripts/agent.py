@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 Coinbase Grid Trading Bot - Automated grid trading on Coinbase Exchange via Seren Gateway
 
@@ -13,10 +15,12 @@ Usage:
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 
@@ -27,6 +31,18 @@ from logger import GridTraderLogger
 from serendb_store import SerenDBStore
 import pair_selector
 from urllib.request import Request, urlopen
+
+
+LIVE_SAFETY_VERSION = "2026-03-16.kraken-coinbase-live-safety-v1"
+LIVE_RISK_STATE_PATH = Path("state/live_risk.json")
+
+
+class LiveRiskError(RuntimeError):
+    """Raised when live risk controls halt execution."""
+
+
+class LiveSafetyTimeout(TimeoutError):
+    """Raised when a live operation exceeds the configured timeout."""
 
 
 def _get_seren_api_key() -> str | None:
@@ -108,6 +124,8 @@ class CoinbaseGridTrader:
         self.tracker: PositionTracker = None
         self.running = False
         self.active_orders: Dict[str, Dict] = {}  # order_id -> {side, price, size}
+        self.live_risk_state = self._load_live_risk_state()
+        self._cycle_deadline_at: Optional[float] = None
 
         try:
             self.store = _build_store_from_env()
@@ -164,6 +182,7 @@ class CoinbaseGridTrader:
                     "campaign_name": campaign_name,
                     "trading_pair": trading_pair,
                     "dry_run": self.is_dry_run,
+                    "runtime_version": LIVE_SAFETY_VERSION,
                 },
             ),
         )
@@ -178,7 +197,146 @@ class CoinbaseGridTrader:
             if field not in config:
                 raise ValueError(f"Missing required config field: {field}")
 
+        execution = config.setdefault('execution', {})
+        execution.setdefault('cancel_on_error', True)
+        execution.setdefault('operation_timeout_seconds', 30)
+        execution.setdefault('cycle_timeout_seconds', 90)
+        risk = config.setdefault('risk_management', {})
+        risk.setdefault('min_quote_reserve_usd', 0.0)
+        risk.setdefault('max_live_drawdown_pct', 0.0)
+
         return config
+
+    def _load_live_risk_state(self) -> Dict[str, Any]:
+        try:
+            payload = json.loads(LIVE_RISK_STATE_PATH.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            payload = {}
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload.setdefault('runtime_version', LIVE_SAFETY_VERSION)
+        return payload
+
+    def _persist_live_risk_state(self, payload: Dict[str, Any]) -> None:
+        state = dict(payload)
+        state['runtime_version'] = LIVE_SAFETY_VERSION
+        state['updated_at'] = datetime.utcnow().isoformat()
+        LIVE_RISK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LIVE_RISK_STATE_PATH.write_text(
+            json.dumps(state, sort_keys=True, indent=2),
+            encoding='utf-8',
+        )
+        self.live_risk_state = state
+
+    def _operation_timeout_seconds(self) -> float:
+        return float(self.config.get('execution', {}).get('operation_timeout_seconds', 30))
+
+    def _cycle_timeout_seconds(self) -> float:
+        return float(self.config.get('execution', {}).get('cycle_timeout_seconds', 90))
+
+    def _cancel_on_error(self) -> bool:
+        return bool(self.config.get('execution', {}).get('cancel_on_error', True))
+
+    def _call_with_timeout(self, label: str, fn, timeout_seconds: Optional[float] = None):
+        timeout = float(timeout_seconds or self._operation_timeout_seconds())
+        if self._cycle_deadline_at is not None:
+            remaining = self._cycle_deadline_at - time.monotonic()
+            if remaining <= 0:
+                raise LiveSafetyTimeout(f"{label} exceeded cycle timeout")
+            timeout = min(timeout, remaining)
+        if timeout <= 0 or not hasattr(signal, 'SIGALRM'):
+            return fn()
+
+        previous_handler = signal.getsignal(signal.SIGALRM)
+
+        def _handle_timeout(signum, frame):  # noqa: ANN001,ARG001
+            raise LiveSafetyTimeout(f"{label} timed out after {timeout:.2f}s")
+
+        signal.signal(signal.SIGALRM, _handle_timeout)
+        signal.setitimer(signal.ITIMER_REAL, timeout)
+        try:
+            return fn()
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+
+    def _build_live_risk(self, reference_price: float, base_balance: float, quote_balance: float) -> Dict[str, Any]:
+        current_equity = (base_balance * reference_price) + quote_balance
+        prior_peak = float(self.live_risk_state.get('peak_equity_usd', current_equity))
+        peak_equity = max(prior_peak, current_equity)
+        drawdown_usd = max(peak_equity - current_equity, 0.0)
+        drawdown_pct = (drawdown_usd / peak_equity * 100.0) if peak_equity > 0 else 0.0
+        return {
+            'peak_equity_usd': round(peak_equity, 2),
+            'current_equity_usd': round(current_equity, 2),
+            'drawdown_usd': round(drawdown_usd, 2),
+            'drawdown_pct': round(drawdown_pct, 4),
+            'quote_balance_usd': round(quote_balance, 2),
+            'base_balance': round(base_balance, 8),
+        }
+
+    def _enforce_live_risk(self, reference_price: float, base_balance: float, quote_balance: float) -> Dict[str, Any]:
+        live_risk = self._build_live_risk(reference_price, base_balance, quote_balance)
+        self._persist_live_risk_state(live_risk)
+        max_drawdown_pct = float(self.config.get('risk_management', {}).get('max_live_drawdown_pct', 0.0))
+        if (not self.is_dry_run) and max_drawdown_pct > 0 and live_risk['drawdown_pct'] > max_drawdown_pct:
+            raise LiveRiskError(
+                f"live drawdown {live_risk['drawdown_pct']:.2f}% exceeds cap {max_drawdown_pct:.2f}%"
+            )
+        return live_risk
+
+    def _halt_live_trading(self, reason: str, details: Dict[str, Any]) -> None:
+        self.running = False
+        if details:
+            self.logger.log_error(
+                operation=reason,
+                error_type=str(details.get('error_type', reason)),
+                error_message=str(details.get('error_message', reason)),
+                context=details,
+            )
+        self._store_call(
+            f"{reason}_event",
+            lambda: self.store.save_event(
+                self.session_id,
+                reason,
+                {
+                    'runtime_version': LIVE_SAFETY_VERSION,
+                    **details,
+                },
+            ),
+        )
+
+        if self.is_dry_run or not self._cancel_on_error():
+            return
+
+        try:
+            cancelled = self._call_with_timeout(
+                'cancel_all_orders',
+                lambda: self.seren.cancel_all_orders(self.config['trading_pair']),
+            )
+            self.active_orders.clear()
+            self._store_call(
+                f"{reason}_cancelled_orders_event",
+                lambda: self.store.save_event(
+                    self.session_id,
+                    f"{reason}_cancelled_orders",
+                    {'cancelled_orders': cancelled},
+                ),
+            )
+        except Exception as cancel_exc:  # noqa: BLE001
+            self._store_call(
+                f"{reason}_cancel_error_event",
+                lambda: self.store.save_event(
+                    self.session_id,
+                    f"{reason}_cancel_error",
+                    {
+                        'error_type': type(cancel_exc).__name__,
+                        'error_message': str(cancel_exc),
+                    },
+                ),
+            )
 
     def _init_grid(self):
         """Initialize GridManager and PositionTracker from config"""
@@ -376,6 +534,7 @@ class CoinbaseGridTrader:
                     "product_id": product_id,
                     "scan_interval_seconds": scan_interval,
                     "stop_loss_bankroll": stop_loss,
+                    "runtime_version": LIVE_SAFETY_VERSION,
                 },
             ),
         )
@@ -396,8 +555,12 @@ class CoinbaseGridTrader:
         base_currency = pair_selector.get_base_currency(product_id)
 
         try:
+            self._cycle_deadline_at = time.monotonic() + self._cycle_timeout_seconds()
             # 1. Fetch open orders from Coinbase
-            open_orders_list = self.seren.get_open_orders(product_id)
+            open_orders_list = self._call_with_timeout(
+                'get_open_orders',
+                lambda: self.seren.get_open_orders(product_id),
+            )
             current_open = {o['id']: o for o in open_orders_list}
 
             # 2. Detect fills
@@ -406,11 +569,18 @@ class CoinbaseGridTrader:
                 self._process_fill(order_id)
 
             # 3. Update balances and check stop-loss
-            base_bal = self.seren.get_account_balance(base_currency)
-            usd_bal = self.seren.get_account_balance('USD')
+            base_bal = self._call_with_timeout(
+                'get_account_balance_base',
+                lambda: self.seren.get_account_balance(base_currency),
+            )
+            usd_bal = self._call_with_timeout(
+                'get_account_balance_usd',
+                lambda: self.seren.get_account_balance('USD'),
+            )
             self.tracker.update_balances(base_bal, usd_bal)
 
             reference_price = self.grid.get_reference_price()
+            live_risk = self._enforce_live_risk(reference_price, base_bal, usd_bal)
             if self.tracker.should_stop_loss(reference_price, stop_loss):
                 portfolio_value = self.tracker.get_current_value(reference_price)
                 print(f"\n⚠ STOP LOSS TRIGGERED at ${portfolio_value:,.2f}")
@@ -424,6 +594,7 @@ class CoinbaseGridTrader:
                             "reference_price": reference_price,
                             "portfolio_value": portfolio_value,
                             "stop_loss_bankroll": stop_loss,
+                            "live_risk": live_risk,
                         },
                     ),
                 )
@@ -433,7 +604,7 @@ class CoinbaseGridTrader:
             # 4. Place missing grid orders
             required = self.grid.get_required_orders(reference_price)
             open_prices = {float(o['price']) for o in current_open.values()}
-            self._place_grid_orders(required, open_prices, product_id)
+            self._place_grid_orders(required, open_prices, product_id, usd_bal, current_open)
 
             # 5. Log position snapshot
             self.logger.log_position_update(
@@ -468,34 +639,67 @@ class CoinbaseGridTrader:
         except Exception as exc:
             err = str(exc)
             print(f"ERROR in trading cycle: {err}")
-            self.logger.log_error(
-                operation='trading_cycle',
-                error_type=type(exc).__name__,
-                error_message=err
+            self._halt_live_trading(
+                'trading_cycle_error',
+                {
+                    "error_type": type(exc).__name__,
+                    "error_message": err,
+                    "product_id": product_id,
+                },
             )
-            self._store_call(
-                "trading_cycle_error_event",
-                lambda: self.store.save_event(
-                    self.session_id,
-                    "trading_cycle_error",
-                    {
-                        "error_type": type(exc).__name__,
-                        "error_message": err,
-                    },
-                ),
-            )
+        finally:
+            self._cycle_deadline_at = None
 
-    def _place_grid_orders(self, required: Dict, open_prices: set, product_id: str):
+    def _place_grid_orders(
+        self,
+        required: Dict,
+        open_prices: set,
+        product_id: str,
+        usd_balance: float,
+        current_open: Dict[str, Dict[str, Any]],
+    ):
         """Place buy and sell orders not already open"""
+        min_quote_reserve = float(self.config.get('risk_management', {}).get('min_quote_reserve_usd', 0.0))
+        committed_buy_notional = 0.0
+        for order in current_open.values():
+            if str(order.get('side', '')).lower() == 'buy':
+                committed_buy_notional += float(order.get('price', 0.0)) * float(order.get('size', 0.0))
+
         for side in ('buy', 'sell'):
             for order in required[side]:
                 if order['price'] not in open_prices:
+                    order_notional = float(order['price']) * float(order['size'])
+                    if side == 'buy':
+                        available_buying_power = usd_balance - committed_buy_notional - min_quote_reserve
+                        if (not self.is_dry_run) and order_notional > max(available_buying_power, 0.0):
+                            print(
+                                f"Skipping buy @ ${order['price']:,.2f}: "
+                                f"quote reserve ${min_quote_reserve:,.2f} would be breached"
+                            )
+                            self._store_call(
+                                "quote_reserve_skip_event",
+                                lambda: self.store.save_event(
+                                    self.session_id,
+                                    "quote_reserve_skip",
+                                    {
+                                        "product_id": product_id,
+                                        "price": order['price'],
+                                        "size": order['size'],
+                                        "requested_notional_usd": round(order_notional, 2),
+                                        "available_buying_power_usd": round(max(available_buying_power, 0.0), 2),
+                                        "min_quote_reserve_usd": round(min_quote_reserve, 2),
+                                    },
+                                ),
+                            )
+                            continue
                     self._place_order(
                         product_id=product_id,
                         side=side,
                         price=order['price'],
                         size=order['size']
                     )
+                    if side == 'buy':
+                        committed_buy_notional += order_notional
 
     def _place_order(self, product_id: str, side: str, price: float, size: float):
         """Place a single limit order"""
@@ -505,12 +709,15 @@ class CoinbaseGridTrader:
             return
 
         try:
-            response = self.seren.place_limit_order(
-                side=side,
-                product_id=product_id,
-                price=price,
-                size=size,
-                post_only=True
+            response = self._call_with_timeout(
+                'place_limit_order',
+                lambda: self.seren.place_limit_order(
+                    side=side,
+                    product_id=product_id,
+                    price=price,
+                    size=size,
+                    post_only=True
+                ),
             )
             order_id = response['id']
             order_details = {'side': side, 'price': price, 'size': size}
@@ -638,7 +845,11 @@ class CoinbaseGridTrader:
         if not self.is_dry_run:
             try:
                 print("Cancelling all open orders...")
-                cancelled = self.seren.cancel_all_orders(product_id)
+                cancelled = self._call_with_timeout(
+                    'cancel_all_orders',
+                    lambda: self.seren.cancel_all_orders(product_id),
+                )
+                self.active_orders.clear()
                 print(f"✓ Cancelled {cancelled} orders")
             except Exception as exc:
                 print(f"ERROR cancelling orders: {exc}")

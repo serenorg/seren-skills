@@ -19,10 +19,15 @@
   "risk_management": {
     "stop_loss_bankroll": 800.0,
     "max_position_size": 0.1,
-    "max_open_orders": 40
+    "max_open_orders": 40,
+    "min_quote_reserve_usd": 100.0,
+    "max_live_drawdown_pct": 15.0
   },
   "execution": {
     "dry_run": true,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "cancel_on_error": true,
+    "operation_timeout_seconds": 30,
+    "cycle_timeout_seconds": 90
   }
 }
