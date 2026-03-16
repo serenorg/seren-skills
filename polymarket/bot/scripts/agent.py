@@ -34,20 +34,6 @@ import kelly
 class TradingAgent:
     """Autonomous Polymarket trading agent"""
 
-    @staticmethod
-    def _parse_optional_bool(value: Optional[str]) -> Optional[bool]:
-        if value is None:
-            return None
-        normalized = str(value).strip().lower()
-        if normalized in {'1', 'true', 'yes', 'y', 'on'}:
-            return True
-        if normalized in {'0', 'false', 'no', 'n', 'off'}:
-            return False
-        raise ValueError(
-            "SEREN_DESKTOP_PUBLISHER_AUTH must be one of "
-            "true/false/1/0/yes/no/on/off"
-        )
-
     def __init__(self, config_path: str, dry_run: bool = False):
         """
         Initialize trading agent
@@ -69,12 +55,9 @@ class TradingAgent:
         self.seren = SerenClient()
 
         print("Initializing Polymarket client...")
-        desktop_auth = self._parse_optional_bool(
-            os.getenv('SEREN_DESKTOP_PUBLISHER_AUTH')
-        )
         self.polymarket = PolymarketClient(
             self.seren,
-            desktop_publisher_auth=desktop_auth,
+            dry_run=dry_run,
         )
 
         # Initialize SerenDB storage
@@ -104,7 +87,6 @@ class TradingAgent:
         self.min_liquidity = float(self.config.get('min_liquidity', 100.0))
 
         print(f"✓ Agent initialized (Dry-run: {dry_run})")
-        print(f"  Auth mode: {self.polymarket.auth_mode}")
         print(f"  Bankroll: ${self.bankroll:.2f}")
         print(f"  Mispricing threshold: {self.mispricing_threshold * 100:.1f}%")
         print(f"  Max Kelly fraction: {self.max_kelly_fraction * 100:.1f}%")
@@ -168,7 +150,7 @@ class TradingAgent:
             return markets
         except Exception as e:
             print(f"  ⚠️  Market scanning failed: {e}")
-            print(f"     This may indicate polymarket-data publisher is unavailable")
+            print(f"     Check polymarket-data publisher availability")
             return []
 
     def rank_candidates(self, markets: List[Dict], limit: int) -> List[Dict]:

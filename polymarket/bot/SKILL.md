@@ -174,11 +174,9 @@ This skill helps users set up and manage an autonomous trading agent that:
   - Response includes: market IDs, questions, token IDs, prices, liquidity
   - Verified working with 100+ markets returned
 
-- `polymarket-trading` - Polymarket CLOB trading API
-  - Place/cancel orders with server-side EIP-712 signing
-  - Query positions, open orders, balances
-  - Desktop mode: uses keychain-backed publisher credentials
-  - Legacy mode: requires Polymarket L2 credentials (API key, passphrase, secret, address)
+- Trading uses `py-clob-client` (via `DirectClobTrader` from `_shared/polymarket_live.py`)
+  - Local EIP-712 signing — no publisher intermediary
+  - Requires: `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_PASSPHRASE`, `POLY_SECRET`
 
 - `perplexity` - Perplexity AI research (via OpenRouter)
   - Model: `sonar` for fast research
@@ -854,7 +852,7 @@ def calculate_position_size(fair_value, market_price, bankroll, max_kelly=0.06):
 - ✅ AI research via `perplexity` publisher (Perplexity AI integration)
 - ✅ Fair value estimation via `seren-models` publisher (Claude Sonnet 4.5)
 - ✅ Kelly Criterion position sizing
-- ✅ Order placement via sidecar-first trading publisher path (`polymarket-trading` with legacy fallback)
+- ✅ Order placement via `py-clob-client` (`DirectClobTrader` with local EIP-712 signing)
 - ✅ Position tracking with unrealized P&L calculation
 - ✅ Comprehensive JSONL logging (trades, scans, positions)
 
@@ -867,7 +865,7 @@ def calculate_position_size(fair_value, market_price, bankroll, max_kelly=0.06):
 
 **Seren Publishers Used:**
 - `polymarket-data` - Real-time market data (prices, liquidity, volumes)
-- `polymarket-trading` - Order placement with server-side signing
+- `py-clob-client` - Order placement with local EIP-712 signing (via `DirectClobTrader`)
 - `perplexity` - AI-powered market research
 - `seren-models` - LLM inference (Claude, GPT, Gemini, etc.)
 - `seren-cron` - Autonomous job scheduling

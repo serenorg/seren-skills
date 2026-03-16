@@ -1,5 +1,5 @@
 """
-Unit tests for PolymarketClient auth mode and trading publisher fallback behavior.
+Unit tests for PolymarketClient initialization and trading guard behavior.
 """
 
 import sys
@@ -19,58 +19,27 @@ def _mock_seren():
     return client
 
 
-class TestPolymarketClientAuthMode:
-    def test_defaults_to_desktop_mode_without_poly_credentials(self):
+class TestPolymarketClientInit:
+    def test_dry_run_skips_trader_init(self):
         seren = _mock_seren()
-        client = PolymarketClient(
-            seren_client=seren,
-            poly_api_key=None,
-            poly_passphrase=None,
-            poly_secret=None,
-            poly_address=None,
-        )
-        assert client.desktop_publisher_auth is True
-        assert client.auth_mode == 'desktop_publisher_auth'
-        assert client._get_auth_headers() == {}
+        client = PolymarketClient(seren_client=seren, dry_run=True)
+        assert client._trader is None
 
-    def test_legacy_header_mode_when_credentials_present(self):
+    def test_trading_without_credentials_raises(self):
         seren = _mock_seren()
-        client = PolymarketClient(
-            seren_client=seren,
-            poly_api_key='k',
-            poly_passphrase='p',
-            poly_secret='s',
-            poly_address='0xabc',
-        )
-        assert client.desktop_publisher_auth is False
-        assert client.auth_mode == 'direct_polymarket_headers'
-        assert client._get_auth_headers()['POLY_API_KEY'] == 'k'
+        client = PolymarketClient(seren_client=seren, dry_run=True)
+        with pytest.raises(RuntimeError, match=r"py-clob-client credentials"):
+            client.place_order(token_id="t", side="BUY", size=1.0, price=0.5)
 
-    def test_forced_legacy_mode_requires_credentials(self):
+    def test_get_markets_uses_polymarket_data_publisher(self):
         seren = _mock_seren()
-        with pytest.raises(ValueError, match=r"Polymarket credentials required"):
-            PolymarketClient(
-                seren_client=seren,
-                desktop_publisher_auth=False,
-            )
+        seren.call_publisher.return_value = {"body": []}
+        client = PolymarketClient(seren_client=seren, dry_run=True)
+        client.get_markets(limit=5)
+        call_kwargs = seren.call_publisher.call_args.kwargs
+        assert call_kwargs["publisher"] == "polymarket-data"
 
-
-class TestPolymarketClientTradingFallback:
-    def test_raises_on_404_without_fallback(self):
+    def test_get_balance_returns_zero_without_trader(self):
         seren = _mock_seren()
-        seren.call_publisher.side_effect = Exception("Publisher call failed: 404 - not found")
-        client = PolymarketClient(seren_client=seren)
-
-        with pytest.raises(Exception, match=r"404"):
-            client._call_trading(method='GET', path='/positions')
-        assert seren.call_publisher.call_count == 1
-        first_call = seren.call_publisher.call_args_list[0].kwargs
-        assert first_call['publisher'] == 'polymarket-trading'
-
-    def test_desktop_auth_unauthorized_raises_helpful_error(self):
-        seren = _mock_seren()
-        seren.call_publisher.side_effect = Exception("Publisher call failed: 401 - unauthorized")
-        client = PolymarketClient(seren_client=seren)
-
-        with pytest.raises(Exception, match=r"desktop publisher authentication failed"):
-            client._call_trading(method='GET', path='/positions')
+        client = PolymarketClient(seren_client=seren, dry_run=True)
+        assert client.get_balance() == 0.0

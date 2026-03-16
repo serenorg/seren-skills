@@ -1,12 +1,12 @@
 # Polymarket Trading Bot Dependencies
 #
-# This skill uses Seren publishers for all Polymarket operations:
-# - polymarket-data: Market data (prices, volume, liquidity)
-# - polymarket-trading: Trading operations
+# Trading uses py-clob-client for local EIP-712 signing via DirectClobTrader.
+# Market discovery uses the polymarket-data Seren publisher.
 
 # Core dependencies
 requests>=2.31.0
 python-dotenv>=1.0.0
+py-clob-client>=0.34.6
 
 # Date handling
 python-dateutil>=2.8.2

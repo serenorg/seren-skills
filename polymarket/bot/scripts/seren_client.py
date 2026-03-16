@@ -2,7 +2,7 @@
 Seren Client - HTTP client for calling Seren MCP publishers
 
 Handles authentication and routing to Seren publishers:
-- polymarket-trading (trading)
+- polymarket-data (market discovery)
 - perplexity (AI-powered research)
 - seren-models (LLM inference)
 - seren-cron (job scheduling)

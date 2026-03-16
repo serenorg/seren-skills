@@ -36,7 +36,7 @@
 - ✅ Dry-run mode
 - ✅ Configuration validation
 - ✅ Market scanning via polymarket-data publisher
-- ✅ Order placement via sidecar-first trading publisher path (legacy fallback included)
+- ✅ Order placement via py-clob-client (DirectClobTrader with local EIP-712 signing)
 
 ### Legal & Compliance
 - ✅ Geographic restriction warnings (US ban)
@@ -55,34 +55,31 @@
 **Status:** Fully implemented
 
 **What was added:**
-- Integration with polymarket-data publisher via Seren MCP
+- Market discovery via polymarket-data Seren publisher
 - Fetches active markets with liquidity filtering (min $100)
 - Extracts market data (question, token_id, price, volume, liquidity)
 - Error handling for API failures
 
 **Implementation:**
-- `get_markets()` in scripts/polymarket_client.py calls polymarket-data publisher
+- `get_markets()` in scripts/polymarket_client.py calls polymarket-data Seren publisher
 - `scan_markets()` in scripts/agent.py wraps with error handling
 - Filters markets by liquidity to focus on tradeable opportunities
 
 ---
 
 #### 2. Order Placement ✅ **COMPLETED**
-**Status:** Fully implemented with sidecar-first publisher routing and legacy fallback
+**Status:** Fully implemented via `py-clob-client` (`DirectClobTrader`)
 
 **What was added:**
-- Order placement via sidecar slug (`polymarket-trading`)
-- EIP-712 signing handled server-side by the publisher
-- Simplified client-side code (no cryptography needed)
-- Supports desktop keychain auth by default, legacy `POLY_*` headers as fallback
+
+- Order placement via `DirectClobTrader` from `_shared/polymarket_live.py`
+- Local EIP-712 signing via `py-clob-client` — no publisher intermediary
+- Requires `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_PASSPHRASE`, `POLY_SECRET`
 
 **Implementation:**
-- `place_order()` routes through `PolymarketClient._call_trading()` publisher fallback chain
-- Publisher handles all EIP-712 signing, nonce management, and submission
-- Desktop mode uses configured publisher credentials; legacy mode passes `POLY_*` headers
-- No client-side private key or signing library required
 
-**Note:** Polymarket trading publishers abstract away cryptographic complexity
+- `place_order()` calls `DirectClobTrader.create_order()` for local signing and submission
+- Same approach used by all other Polymarket skills in this repo
 
 ---
 
@@ -254,8 +251,9 @@
 ## 📋 Next Steps to Complete Implementation
 
 ### Phase 1: Get Basic Trading Working
-1. **Implement market scanning** (integrate polymarket-data or public API)
-2. **Implement EIP-712 signing** (use web3.py or py-clob-client)
+
+1. **Market scanning** — implemented via polymarket-data publisher
+2. **Order placement** — implemented via py-clob-client (DirectClobTrader)
 3. **Test end-to-end in dry-run**
 4. **Test with real API in paper trading mode**
 
@@ -284,11 +282,7 @@ The polymarket-data publisher exists. Need to:
 4. Parse response into market dicts with required fields
 
 ### For EIP-712 Signing
-The py-clob-client package may already handle this:
-1. Review py-clob-client documentation
-2. Use their order signing utilities
-3. Replace simplified `place_order()` with proper signing
-4. Test with small amounts first
+EIP-712 signing is now handled by `py-clob-client` via `DirectClobTrader`. No additional work needed.
 
 ### For Testing
 1. Create `.env` with real API keys (for testing only)
@@ -310,9 +304,9 @@ The py-clob-client package may already handle this:
 
 **Integration:** 40% ⚠️
 - Seren API client: ✅
-- Polymarket client: 🟡 (needs signing)
-- Market data: ❌
-- Balance checking: ❌
+- Polymarket client: ✅ (py-clob-client via DirectClobTrader)
+- Market data: ✅ (polymarket-data publisher)
+- Balance checking: ✅ (py-clob-client)
 
 **Production Ready:** 30% ❌
 - Error handling: 🟡 (basic)
