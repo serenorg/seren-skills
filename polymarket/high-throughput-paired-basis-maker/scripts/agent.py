@@ -48,7 +48,7 @@ DISCLAIMER = (
 SEREN_POLYMARKET_PUBLISHER_PREFIX = "https://api.serendb.com/publishers/"
 SEREN_POLYMARKET_DATA_PUBLISHER_PREFIX = f"{SEREN_POLYMARKET_PUBLISHER_PREFIX}polymarket-data/"
 POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
-SEREN_PREDICTIONS_PUBLISHER = "seren-polymarket-predictions"
+SEREN_PREDICTIONS_PUBLISHER = "seren-polymarket-intelligence"
 SEREN_PREDICTIONS_URL_PREFIX = (
     f"https://api.serendb.com/publishers/{SEREN_PREDICTIONS_PUBLISHER}"
 )
@@ -1196,7 +1196,7 @@ def run_backtest(
                         "Estimated cost: ~$0.20 per backtest run."
                     ),
                     "action": 'Set "predictions_enabled": true in your config.json backtest section.',
-                    "publisher": "seren-polymarket-predictions",
+                    "publisher": "seren-polymarket-intelligence",
                     "estimated_cost_usd": 0.20,
                     "endpoints_used": [
                         "GET /api/polymarket/pairs/suggested ($0.10)",
