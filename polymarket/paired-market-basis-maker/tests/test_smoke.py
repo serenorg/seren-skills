@@ -213,6 +213,7 @@ def test_live_trade_mode_uses_live_pair_loader_and_executor(monkeypatch) -> None
             "orders_submitted": [{"id": "PAIR-ORDER-1"}, {"id": "PAIR-ORDER-2"}],
             "open_order_ids": ["PAIR-ORDER-1", "PAIR-ORDER-2"],
             "updated_leg_exposure": {"LIVE-PAIR-1A": 7.5, "LIVE-PAIR-1B": -7.5},
+            "live_risk": {"peak_equity_usd": 1000.0, "current_equity_usd": 965.0, "drawdown_pct": 3.5},
         }
 
     monkeypatch.setattr(module, "DirectClobTrader", FakeTrader)
@@ -270,9 +271,14 @@ def test_live_trade_mode_uses_live_pair_loader_and_executor(monkeypatch) -> None
     assert result["status"] == "ok"
     assert result["mode"] == "live"
     assert result["market_source"] == "live-seren-publisher"
-    assert result["state"] == {"leg_exposure": {"LIVE-PAIR-1A": 7.5, "LIVE-PAIR-1B": -7.5}}
+    assert result["state"] == {
+        "leg_exposure": {"LIVE-PAIR-1A": 7.5, "LIVE-PAIR-1B": -7.5},
+        "live_risk": {"peak_equity_usd": 1000.0, "current_equity_usd": 965.0, "drawdown_pct": 3.5},
+    }
     assert result["strategy_summary"]["orders_submitted"] == 2
     assert result["strategy_summary"]["open_orders"] == 2
+    assert result["strategy_summary"]["current_equity_usd"] == 965.0
+    assert result["strategy_summary"]["drawdown_pct"] == 3.5
     assert load_calls and load_calls[0]["pairs_max"] == 1
     assert execute_calls and execute_calls[0]["client_name"] == "paired-market-basis-maker"
     assert execute_calls[0]["pair_trades"][0]["market_id"] == "LIVE-PAIR-1A"

@@ -1687,16 +1687,38 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
         "disclaimer": DISCLAIMER,
     }
     if mode == "live" and live_trader is not None:
+        prior_live_risk = config.get("state", {}).get("live_risk", {})
+        execution_settings = live_settings_from_execution(
+            {
+                **execution,
+                "prior_peak_equity_usd": _safe_float(
+                    prior_live_risk.get("peak_equity_usd"),
+                    0.0,
+                ),
+            }
+        )
         live_execution = execute_pair_trades(
             trader=live_trader,
             pair_trades=trades,
             markets=markets,
-            execution_settings=live_settings_from_execution(execution),
+            execution_settings=execution_settings,
         )
         payload["live_execution"] = live_execution
-        payload["state"] = {"leg_exposure": live_execution.get("updated_leg_exposure", {})}
+        payload["state"] = {
+            "leg_exposure": live_execution.get("updated_leg_exposure", {}),
+            "live_risk": live_execution.get("live_risk", {}),
+        }
         payload["strategy_summary"]["orders_submitted"] = len(live_execution.get("orders_submitted", []))
         payload["strategy_summary"]["open_orders"] = len(live_execution.get("open_order_ids", []))
+        if isinstance(live_execution.get("live_risk"), dict):
+            payload["strategy_summary"]["current_equity_usd"] = _safe_float(
+                live_execution["live_risk"].get("current_equity_usd"),
+                0.0,
+            )
+            payload["strategy_summary"]["drawdown_pct"] = _safe_float(
+                live_execution["live_risk"].get("drawdown_pct"),
+                0.0,
+            )
         covered_tokens = {
             _safe_str(o.get("token_id"), "")
             for o in live_execution.get("orders_submitted", [])
@@ -1711,6 +1733,10 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
         if unwind_sells:
             payload["live_execution"]["held_inventory_unwinds"] = unwind_sells
             payload["strategy_summary"]["held_inventory_sells"] = len(unwind_sells)
+        if live_execution.get("status") == "error":
+            payload["status"] = "error"
+            payload["error_code"] = live_execution.get("error_code")
+            payload["message"] = live_execution.get("message")
     return payload
 
 
@@ -1751,7 +1777,7 @@ def main() -> int:
 
     trade = run_trade(config=config, markets_file=args.markets_file, yes_live=args.yes_live)
     ok = trade.get("status") == "ok"
-    if ok and isinstance(trade.get("state"), dict):
+    if isinstance(trade.get("state"), dict):
         try:
             _persist_runtime_state(args.config, config, trade["state"])
         except Exception as exc:  # pragma: no cover - defensive runtime path

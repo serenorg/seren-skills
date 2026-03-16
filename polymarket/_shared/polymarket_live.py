@@ -5,6 +5,7 @@ import math
 import os
 import select
 import shlex
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -22,9 +23,11 @@ SEREN_API_BASE = f"https://{SEREN_POLYMARKET_PUBLISHER_HOST}"
 SEREN_POLYMARKET_DATA_URL_PREFIX = (
     f"{SEREN_API_BASE}{SEREN_PUBLISHERS_PREFIX}{SEREN_POLYMARKET_DATA_PUBLISHER}"
 )
+POLYMARKET_DATA_API_BASE_URL = "https://data-api.polymarket.com"
 POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_CHAIN_ID = 137
+LIVE_SAFETY_VERSION = "2026-03-16.polymarket-live-safety-v1"
 
 
 def maybe_load_dotenv(skill_root: Path) -> None:
@@ -56,6 +59,8 @@ def maybe_load_dotenv(skill_root: Path) -> None:
 
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
+        if isinstance(value, str):
+            value = value.replace("$", "").replace(",", "").strip()
         return float(value)
     except (TypeError, ValueError):
         return default
@@ -279,6 +284,80 @@ def positions_by_key(raw_positions: Any) -> dict[str, float]:
             if key:
                 out[key] = size
     return out
+
+
+def extract_cash_balance_usd(raw_balance: Any) -> float:
+    if isinstance(raw_balance, dict):
+        for key in (
+            "available",
+            "available_balance",
+            "balance",
+            "cash",
+            "amount",
+            "value",
+        ):
+            value = raw_balance.get(key)
+            if value is not None:
+                parsed = safe_float(value, float("nan"))
+                if not math.isnan(parsed):
+                    return max(0.0, parsed)
+        for value in raw_balance.values():
+            parsed = extract_cash_balance_usd(value)
+            if parsed > 0.0:
+                return parsed
+    if isinstance(raw_balance, list):
+        for item in raw_balance:
+            parsed = extract_cash_balance_usd(item)
+            if parsed > 0.0:
+                return parsed
+    return 0.0
+
+
+def total_notional(exposure_by_key: dict[str, float]) -> float:
+    return round(sum(max(0.0, safe_float(value, 0.0)) for value in exposure_by_key.values()), 4)
+
+
+def _alarm_timeout_supported() -> bool:
+    return hasattr(signal, "setitimer") and hasattr(signal, "SIGALRM")
+
+
+def _call_with_timeout(
+    operation_name: str,
+    func: Any,
+    *,
+    timeout_seconds: float,
+    retry_attempts: int,
+) -> Any:
+    attempts = max(0, retry_attempts) + 1
+    last_error: Exception | None = None
+
+    def _timeout_handler(signum: int, frame: Any) -> None:
+        del signum, frame
+        raise TimeoutError(f"{operation_name} timed out after {timeout_seconds:.2f}s")
+
+    for attempt in range(attempts):
+        previous_handler = None
+        armed_timeout = False
+        try:
+            if timeout_seconds > 0 and _alarm_timeout_supported():
+                previous_handler = signal.getsignal(signal.SIGALRM)
+                signal.signal(signal.SIGALRM, _timeout_handler)
+                signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+                armed_timeout = True
+            return func()
+        except TimeoutError as exc:
+            last_error = exc
+            if attempt + 1 >= attempts:
+                break
+        finally:
+            if armed_timeout:
+                signal.setitimer(signal.ITIMER_REAL, 0.0)
+            if previous_handler is not None:
+                signal.signal(signal.SIGALRM, previous_handler)
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"{operation_name} failed without an explicit error.")
 
 
 def _read_mcp_exact(fd: int, size: int, timeout_seconds: float) -> bytes:
@@ -810,6 +889,15 @@ class LiveExecutionSettings:
     poll_attempts: int = 2
     poll_interval_seconds: float = 1.5
     cancel_before_requote: bool = True
+    cancel_on_error: bool = True
+    cycle_timeout_seconds: float = 45.0
+    operation_timeout_seconds: float = 10.0
+    operation_retry_attempts: int = 1
+    min_cash_reserve_usd: float = 0.0
+    max_live_drawdown_usd: float = 0.0
+    max_live_drawdown_pct: float = 0.0
+    prior_peak_equity_usd: float = 0.0
+    runtime_version: str = LIVE_SAFETY_VERSION
 
 
 class PolymarketPublisherTrader:
@@ -1015,7 +1103,7 @@ class DirectClobTrader:
             chain_id=chain_id,
             creds=creds,
         )
-        self.address = self._client.get_address()
+        self.address = safe_str(self._client.get_address(), "").lower()
 
     def create_order(
         self,
@@ -1050,9 +1138,35 @@ class DirectClobTrader:
 
     def get_positions(self) -> Any:
         try:
-            return self._client.get_balance_allowance()
+            if not self.address:
+                return []
+            query = urlencode({"user": self.address})
+            request = Request(
+                f"{POLYMARKET_DATA_API_BASE_URL}/positions?{query}",
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": f"{self.client_name}/{LIVE_SAFETY_VERSION}",
+                },
+            )
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                text = response.read().decode("utf-8")
+            if not text:
+                return []
+            payload = json.loads(text)
+            return payload if isinstance(payload, (dict, list)) else []
         except Exception:
             return []
+
+    def get_cash_balance(self) -> float:
+        try:
+            from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+
+            payload = self._client.get_balance_allowance(
+                BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            )
+            return extract_cash_balance_usd(payload)
+        except Exception as exc:
+            raise RuntimeError(f"Unable to fetch collateral balance: {exc}") from exc
 
 
 def inject_held_position_markets(
@@ -1164,7 +1278,152 @@ def live_settings_from_execution(execution: dict[str, Any]) -> LiveExecutionSett
         poll_attempts=max(1, safe_int(execution.get("poll_attempts"), 2)),
         poll_interval_seconds=max(0.0, safe_float(execution.get("poll_interval_seconds"), 1.5)),
         cancel_before_requote=bool(execution.get("cancel_before_requote", True)),
+        cancel_on_error=bool(execution.get("cancel_on_error", True)),
+        cycle_timeout_seconds=max(0.0, safe_float(execution.get("cycle_timeout_seconds"), 45.0)),
+        operation_timeout_seconds=max(0.0, safe_float(execution.get("operation_timeout_seconds"), 10.0)),
+        operation_retry_attempts=max(0, safe_int(execution.get("operation_retry_attempts"), 1)),
+        min_cash_reserve_usd=max(0.0, safe_float(execution.get("min_cash_reserve_usd"), 0.0)),
+        max_live_drawdown_usd=max(0.0, safe_float(execution.get("max_live_drawdown_usd"), 0.0)),
+        max_live_drawdown_pct=max(0.0, safe_float(execution.get("max_live_drawdown_pct"), 0.0)),
+        prior_peak_equity_usd=max(0.0, safe_float(execution.get("prior_peak_equity_usd"), 0.0)),
     )
+
+
+def _check_cycle_deadline(
+    *,
+    started_at: float,
+    execution_settings: LiveExecutionSettings,
+    stage: str,
+) -> None:
+    timeout_seconds = execution_settings.cycle_timeout_seconds
+    if timeout_seconds <= 0:
+        return
+    elapsed = time.monotonic() - started_at
+    if elapsed > timeout_seconds:
+        raise TimeoutError(
+            f"live_cycle_timeout: exceeded {timeout_seconds:.2f}s during {stage}"
+        )
+
+
+def _invoke_trader_call(
+    operation_name: str,
+    func: Any,
+    execution_settings: LiveExecutionSettings,
+) -> Any:
+    return _call_with_timeout(
+        operation_name,
+        func,
+        timeout_seconds=execution_settings.operation_timeout_seconds,
+        retry_attempts=execution_settings.operation_retry_attempts,
+    )
+
+
+def _capture_live_risk(
+    *,
+    trader: Any,
+    exposure_by_key: dict[str, float],
+    execution_settings: LiveExecutionSettings,
+) -> dict[str, Any]:
+    requires_cash = (
+        execution_settings.min_cash_reserve_usd > 0.0
+        or execution_settings.max_live_drawdown_usd > 0.0
+        or execution_settings.max_live_drawdown_pct > 0.0
+        or execution_settings.prior_peak_equity_usd > 0.0
+    )
+    cash_balance_usd = 0.0
+    cash_balance_error = ""
+
+    if hasattr(trader, "get_cash_balance"):
+        try:
+            cash_balance_usd = max(0.0, safe_float(trader.get_cash_balance(), 0.0))
+        except Exception as exc:
+            cash_balance_error = str(exc)
+    elif requires_cash:
+        cash_balance_error = "live_cash_balance_unsupported"
+
+    inventory_notional_usd = total_notional(exposure_by_key)
+    current_equity_usd = round(cash_balance_usd + inventory_notional_usd, 4)
+    peak_equity_usd = round(
+        max(current_equity_usd, execution_settings.prior_peak_equity_usd),
+        4,
+    )
+    drawdown_usd = round(max(0.0, peak_equity_usd - current_equity_usd), 4)
+    drawdown_pct = round(
+        ((drawdown_usd / peak_equity_usd) * 100.0) if peak_equity_usd > 0 else 0.0,
+        4,
+    )
+    state = {
+        "runtime_version": execution_settings.runtime_version,
+        "cash_balance_usd": round(cash_balance_usd, 4),
+        "inventory_notional_usd": round(inventory_notional_usd, 4),
+        "current_equity_usd": current_equity_usd,
+        "peak_equity_usd": peak_equity_usd,
+        "drawdown_usd": drawdown_usd,
+        "drawdown_pct": drawdown_pct,
+    }
+
+    if requires_cash and cash_balance_error:
+        return {
+            "status": "error",
+            "error_code": "live_cash_balance_unavailable",
+            "message": cash_balance_error,
+            "state": state,
+        }
+    if (
+        execution_settings.max_live_drawdown_usd > 0.0
+        and drawdown_usd >= execution_settings.max_live_drawdown_usd
+    ) or (
+        execution_settings.max_live_drawdown_pct > 0.0
+        and drawdown_pct >= execution_settings.max_live_drawdown_pct
+    ):
+        return {
+            "status": "error",
+            "error_code": "live_drawdown_limit_breached",
+            "message": "Live drawdown limit breached. Trading halted and outstanding orders were cancelled.",
+            "state": state,
+        }
+    return {"status": "ok", "state": state}
+
+
+def _live_failure_payload(
+    *,
+    trader: Any,
+    execution_settings: LiveExecutionSettings,
+    error_code: str,
+    message: str,
+    cancel_response: Any,
+    orders_submitted: list[dict[str, Any]],
+    order_skips: list[dict[str, Any]],
+    live_risk: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    cleanup_cancel_all = None
+    cleanup_error = ""
+    if execution_settings.cancel_on_error:
+        try:
+            cleanup_cancel_all = _call_with_timeout(
+                "cancel_all_cleanup",
+                trader.cancel_all,
+                timeout_seconds=max(1.0, execution_settings.operation_timeout_seconds),
+                retry_attempts=0,
+            )
+        except Exception as exc:
+            cleanup_error = str(exc)
+    payload = {
+        "status": "error",
+        "error_code": error_code,
+        "message": message,
+        "cancel_all": cancel_response,
+        "orders_submitted": orders_submitted,
+        "order_skips": order_skips,
+        "runtime_version": execution_settings.runtime_version,
+    }
+    if cleanup_cancel_all is not None:
+        payload["cleanup_cancel_all"] = cleanup_cancel_all
+    if cleanup_error:
+        payload["cleanup_error"] = cleanup_error
+    if live_risk is not None:
+        payload["live_risk"] = live_risk
+    return payload
 
 
 def execute_single_market_quotes(
@@ -1179,108 +1438,236 @@ def execute_single_market_quotes(
         for market in markets
         if isinstance(market, dict)
     }
-    raw_positions = trader.get_positions()
-    position_sizes = positions_by_key(raw_positions)
-    cancel_response = None
-    if execution_settings.cancel_before_requote:
-        cancel_response = trader.cancel_all()
-
+    started_at = time.monotonic()
     placements: list[dict[str, Any]] = []
     skips: list[dict[str, Any]] = []
-
-    for quote in quotes:
-        market = market_by_id.get(safe_str(quote.get("market_id"), ""))
-        if not market:
-            skips.append({"market_id": safe_str(quote.get("market_id"), ""), "reason": "missing_live_market"})
-            continue
-        token_id = safe_str(market.get("token_id"), safe_str(market.get("market_id"), ""))
-        tick_size = safe_str(market.get("tick_size"), "0.01")
-        neg_risk = bool(market.get("neg_risk", False))
-        fee_rate_bps = fetch_fee_rate_bps(token_id)
-        fallback_notional = max(0.0, safe_float(quote.get("quote_notional_usd"), 0.0))
-        bid_notional = max(0.0, safe_float(quote.get("bid_notional_usd"), fallback_notional))
-        ask_notional = max(0.0, safe_float(quote.get("ask_notional_usd"), fallback_notional))
-        if bid_notional <= 0.0 and ask_notional <= 0.0:
-            skips.append({"market_id": market["market_id"], "reason": "zero_quote_notional"})
-            continue
-
-        bid_price = snap_price(safe_float(quote.get("bid_price"), 0.0), tick_size, "BUY")
-        ask_price = snap_price(safe_float(quote.get("ask_price"), 0.0), tick_size, "SELL")
-
-        if bid_price > 0.0 and bid_notional > 0.0:
-            bid_size = bid_notional / max(bid_price, 1e-9)
-            response = trader.create_order(
-                token_id=token_id,
-                side="BUY",
-                price=bid_price,
-                size=bid_size,
-                tick_size=tick_size,
-                neg_risk=neg_risk,
-                fee_rate_bps=fee_rate_bps,
-            )
-            placements.append(
-                {
-                    "market_id": market["market_id"],
-                    "token_id": token_id,
-                    "side": "BUY",
-                    "price": bid_price,
-                    "size": round(bid_size, 6),
-                    "response": response,
-                }
+    cancel_response = None
+    live_risk_state: dict[str, Any] | None = None
+    try:
+        _check_cycle_deadline(
+            started_at=started_at,
+            execution_settings=execution_settings,
+            stage="initial_positions",
+        )
+        raw_positions = _invoke_trader_call(
+            "get_positions_initial",
+            trader.get_positions,
+            execution_settings,
+        )
+        position_sizes = positions_by_key(raw_positions)
+        if execution_settings.cancel_before_requote:
+            cancel_response = _invoke_trader_call(
+                "cancel_all_before_requote",
+                trader.cancel_all,
+                execution_settings,
             )
 
-        available_shares = max(0.0, position_sizes.get(token_id, 0.0))
-        sell_notional = min(ask_notional, available_shares * max(ask_price, 0.0))
-        if ask_price > 0.0 and sell_notional > 0.0:
-            ask_size = sell_notional / max(ask_price, 1e-9)
-            response = trader.create_order(
-                token_id=token_id,
-                side="SELL",
-                price=ask_price,
-                size=ask_size,
-                tick_size=tick_size,
-                neg_risk=neg_risk,
-                fee_rate_bps=fee_rate_bps,
-            )
-            placements.append(
-                {
-                    "market_id": market["market_id"],
-                    "token_id": token_id,
-                    "side": "SELL",
-                    "price": ask_price,
-                    "size": round(ask_size, 6),
-                    "response": response,
-                }
-            )
-        else:
-            skips.append(
-                {
-                    "market_id": market["market_id"],
-                    "reason": "insufficient_inventory_for_sell",
-                    "available_shares": round(available_shares, 6),
-                }
+        live_risk = _capture_live_risk(
+            trader=trader,
+            exposure_by_key=single_market_inventory_notional(
+                raw_positions=raw_positions,
+                markets=markets,
+            ),
+            execution_settings=execution_settings,
+        )
+        live_risk_state = live_risk.get("state")
+        if live_risk.get("status") != "ok":
+            return _live_failure_payload(
+                trader=trader,
+                execution_settings=execution_settings,
+                error_code=safe_str(live_risk.get("error_code"), "live_risk_guard_blocked"),
+                message=safe_str(live_risk.get("message"), "Live risk guard blocked execution."),
+                cancel_response=cancel_response,
+                orders_submitted=placements,
+                order_skips=skips,
+                live_risk=live_risk_state,
             )
 
-    latest_orders: Any = []
-    latest_positions: Any = raw_positions
-    for _ in range(execution_settings.poll_attempts):
-        if execution_settings.poll_interval_seconds > 0:
-            time.sleep(execution_settings.poll_interval_seconds)
-        latest_orders = trader.get_orders()
-        latest_positions = trader.get_positions()
+        available_cash_usd = max(
+            0.0,
+            safe_float((live_risk_state or {}).get("cash_balance_usd"), 0.0),
+        )
 
-    return {
-        "cancel_all": cancel_response,
-        "orders_submitted": placements,
-        "order_skips": skips,
-        "open_orders": latest_orders,
-        "open_order_ids": active_order_ids(latest_orders),
-        "positions": latest_positions,
-        "updated_inventory": single_market_inventory_notional(
+        for quote in quotes:
+            market_id = safe_str(quote.get("market_id"), "")
+            _check_cycle_deadline(
+                started_at=started_at,
+                execution_settings=execution_settings,
+                stage=f"quote:{market_id or 'unknown'}",
+            )
+            market = market_by_id.get(market_id)
+            if not market:
+                skips.append({"market_id": market_id, "reason": "missing_live_market"})
+                continue
+            token_id = safe_str(market.get("token_id"), safe_str(market.get("market_id"), ""))
+            tick_size = safe_str(market.get("tick_size"), "0.01")
+            neg_risk = bool(market.get("neg_risk", False))
+            fee_rate_bps = fetch_fee_rate_bps(token_id)
+            fallback_notional = max(0.0, safe_float(quote.get("quote_notional_usd"), 0.0))
+            bid_notional = max(0.0, safe_float(quote.get("bid_notional_usd"), fallback_notional))
+            ask_notional = max(0.0, safe_float(quote.get("ask_notional_usd"), fallback_notional))
+            if bid_notional <= 0.0 and ask_notional <= 0.0:
+                skips.append({"market_id": market["market_id"], "reason": "zero_quote_notional"})
+                continue
+
+            bid_price = snap_price(safe_float(quote.get("bid_price"), 0.0), tick_size, "BUY")
+            ask_price = snap_price(safe_float(quote.get("ask_price"), 0.0), tick_size, "SELL")
+
+            if bid_price > 0.0 and bid_notional > 0.0:
+                remaining_cash_usd = available_cash_usd - bid_notional
+                if (
+                    execution_settings.min_cash_reserve_usd > 0.0
+                    and remaining_cash_usd < execution_settings.min_cash_reserve_usd
+                ):
+                    skips.append(
+                        {
+                            "market_id": market["market_id"],
+                            "reason": "cash_reserve_guard",
+                            "available_cash_usd": round(available_cash_usd, 4),
+                            "requested_notional_usd": round(bid_notional, 4),
+                            "min_cash_reserve_usd": round(execution_settings.min_cash_reserve_usd, 4),
+                        }
+                    )
+                else:
+                    bid_size = bid_notional / max(bid_price, 1e-9)
+                    response = _invoke_trader_call(
+                        f"create_order_buy:{market['market_id']}",
+                        lambda: trader.create_order(
+                            token_id=token_id,
+                            side="BUY",
+                            price=bid_price,
+                            size=bid_size,
+                            tick_size=tick_size,
+                            neg_risk=neg_risk,
+                            fee_rate_bps=fee_rate_bps,
+                        ),
+                        execution_settings,
+                    )
+                    placements.append(
+                        {
+                            "market_id": market["market_id"],
+                            "token_id": token_id,
+                            "side": "BUY",
+                            "price": bid_price,
+                            "size": round(bid_size, 6),
+                            "response": response,
+                        }
+                    )
+                    available_cash_usd = max(0.0, remaining_cash_usd)
+
+            available_shares = max(0.0, position_sizes.get(token_id, 0.0))
+            sell_notional = min(ask_notional, available_shares * max(ask_price, 0.0))
+            if ask_price > 0.0 and sell_notional > 0.0:
+                ask_size = sell_notional / max(ask_price, 1e-9)
+                response = _invoke_trader_call(
+                    f"create_order_sell:{market['market_id']}",
+                    lambda: trader.create_order(
+                        token_id=token_id,
+                        side="SELL",
+                        price=ask_price,
+                        size=ask_size,
+                        tick_size=tick_size,
+                        neg_risk=neg_risk,
+                        fee_rate_bps=fee_rate_bps,
+                    ),
+                    execution_settings,
+                )
+                placements.append(
+                    {
+                        "market_id": market["market_id"],
+                        "token_id": token_id,
+                        "side": "SELL",
+                        "price": ask_price,
+                        "size": round(ask_size, 6),
+                        "response": response,
+                    }
+                )
+            else:
+                skips.append(
+                    {
+                        "market_id": market["market_id"],
+                        "reason": "insufficient_inventory_for_sell",
+                        "available_shares": round(available_shares, 6),
+                    }
+                )
+
+        latest_orders: Any = []
+        latest_positions: Any = raw_positions
+        for poll_idx in range(execution_settings.poll_attempts):
+            if execution_settings.poll_interval_seconds > 0:
+                time.sleep(execution_settings.poll_interval_seconds)
+            _check_cycle_deadline(
+                started_at=started_at,
+                execution_settings=execution_settings,
+                stage=f"poll:{poll_idx + 1}",
+            )
+            latest_orders = _invoke_trader_call(
+                "get_orders_poll",
+                trader.get_orders,
+                execution_settings,
+            )
+            latest_positions = _invoke_trader_call(
+                "get_positions_poll",
+                trader.get_positions,
+                execution_settings,
+            )
+
+        updated_inventory = single_market_inventory_notional(
             raw_positions=latest_positions,
             markets=markets,
-        ),
-    }
+        )
+        final_risk = _capture_live_risk(
+            trader=trader,
+            exposure_by_key=updated_inventory,
+            execution_settings=execution_settings,
+        )
+        live_risk_state = final_risk.get("state")
+        if final_risk.get("status") != "ok":
+            return _live_failure_payload(
+                trader=trader,
+                execution_settings=execution_settings,
+                error_code=safe_str(final_risk.get("error_code"), "live_risk_guard_blocked"),
+                message=safe_str(final_risk.get("message"), "Live risk guard blocked execution."),
+                cancel_response=cancel_response,
+                orders_submitted=placements,
+                order_skips=skips,
+                live_risk=live_risk_state,
+            )
+
+        return {
+            "status": "ok",
+            "cancel_all": cancel_response,
+            "orders_submitted": placements,
+            "order_skips": skips,
+            "open_orders": latest_orders,
+            "open_order_ids": active_order_ids(latest_orders),
+            "positions": latest_positions,
+            "updated_inventory": updated_inventory,
+            "live_risk": live_risk_state,
+            "runtime_version": execution_settings.runtime_version,
+        }
+    except TimeoutError as exc:
+        return _live_failure_payload(
+            trader=trader,
+            execution_settings=execution_settings,
+            error_code="live_operation_timeout",
+            message=str(exc),
+            cancel_response=cancel_response,
+            orders_submitted=placements,
+            order_skips=skips,
+            live_risk=live_risk_state,
+        )
+    except Exception as exc:
+        return _live_failure_payload(
+            trader=trader,
+            execution_settings=execution_settings,
+            error_code="live_operation_failed",
+            message=str(exc),
+            cancel_response=cancel_response,
+            orders_submitted=placements,
+            order_skips=skips,
+            live_risk=live_risk_state,
+        )
 
 
 def execute_pair_trades(
@@ -1295,120 +1682,242 @@ def execute_pair_trades(
         for market in markets
         if isinstance(market, dict)
     }
-    raw_positions = trader.get_positions()
-    position_sizes = positions_by_key(raw_positions)
-    cancel_response = None
-    if execution_settings.cancel_before_requote:
-        cancel_response = trader.cancel_all()
-
+    started_at = time.monotonic()
     placements: list[dict[str, Any]] = []
     skips: list[dict[str, Any]] = []
-
-    for trade in pair_trades:
-        market = market_by_id.get(safe_str(trade.get("market_id"), ""))
-        if not market:
-            skips.append({"market_id": safe_str(trade.get("market_id"), ""), "reason": "missing_live_pair"})
-            continue
-        pair_market_id = safe_str(market.get("pair_market_id"), "")
-        legs = trade.get("legs")
-        if not isinstance(legs, list) or len(legs) != 2:
-            skips.append({"market_id": market["market_id"], "reason": "invalid_pair_legs"})
-            continue
-
-        leg_specs: list[dict[str, Any]] = []
-        skip_reason = ""
-        for leg in legs:
-            if not isinstance(leg, dict):
-                skip_reason = "invalid_leg"
-                break
-            market_id = safe_str(leg.get("market_id"), "")
-            side = safe_str(leg.get("side"), "").upper()
-            if market_id == safe_str(market.get("market_id"), ""):
-                token_id = safe_str(market.get("token_id"), market_id)
-                price = safe_float(
-                    market.get("best_bid") if side == "BUY" else market.get("best_ask"),
-                    0.0,
-                )
-                tick_size = safe_str(market.get("tick_size"), "0.01")
-                neg_risk = bool(market.get("neg_risk", False))
-            elif market_id == pair_market_id:
-                token_id = safe_str(market.get("pair_token_id"), market_id)
-                price = safe_float(
-                    market.get("pair_best_bid") if side == "BUY" else market.get("pair_best_ask"),
-                    0.0,
-                )
-                tick_size = safe_str(market.get("pair_tick_size"), "0.01")
-                neg_risk = bool(market.get("pair_neg_risk", False))
-            else:
-                skip_reason = "unknown_leg_market"
-                break
-
-            if price <= 0.0:
-                skip_reason = "invalid_leg_price"
-                break
-
-            notional = max(0.0, safe_float(leg.get("notional_usd"), 0.0))
-            size = notional / max(price, 1e-9)
-            if side == "SELL":
-                available_shares = max(0.0, position_sizes.get(token_id, 0.0))
-                if available_shares + 1e-9 < size:
-                    skip_reason = "insufficient_inventory_for_pair_sell"
-                    break
-            leg_specs.append(
-                {
-                    "market_id": market_id,
-                    "token_id": token_id,
-                    "side": side,
-                    "price": snap_price(price, tick_size, side),
-                    "size": size,
-                    "tick_size": tick_size,
-                    "neg_risk": neg_risk,
-                }
+    cancel_response = None
+    live_risk_state: dict[str, Any] | None = None
+    try:
+        _check_cycle_deadline(
+            started_at=started_at,
+            execution_settings=execution_settings,
+            stage="initial_positions",
+        )
+        raw_positions = _invoke_trader_call(
+            "get_positions_initial",
+            trader.get_positions,
+            execution_settings,
+        )
+        position_sizes = positions_by_key(raw_positions)
+        if execution_settings.cancel_before_requote:
+            cancel_response = _invoke_trader_call(
+                "cancel_all_before_requote",
+                trader.cancel_all,
+                execution_settings,
             )
 
-        if skip_reason:
-            skips.append(
-                {
+        live_risk = _capture_live_risk(
+            trader=trader,
+            exposure_by_key=pair_leg_exposure_notional(
+                raw_positions=raw_positions,
+                markets=markets,
+            ),
+            execution_settings=execution_settings,
+        )
+        live_risk_state = live_risk.get("state")
+        if live_risk.get("status") != "ok":
+            return _live_failure_payload(
+                trader=trader,
+                execution_settings=execution_settings,
+                error_code=safe_str(live_risk.get("error_code"), "live_risk_guard_blocked"),
+                message=safe_str(live_risk.get("message"), "Live risk guard blocked execution."),
+                cancel_response=cancel_response,
+                orders_submitted=placements,
+                order_skips=skips,
+                live_risk=live_risk_state,
+            )
+
+        available_cash_usd = max(
+            0.0,
+            safe_float((live_risk_state or {}).get("cash_balance_usd"), 0.0),
+        )
+
+        for trade in pair_trades:
+            market_id = safe_str(trade.get("market_id"), "")
+            _check_cycle_deadline(
+                started_at=started_at,
+                execution_settings=execution_settings,
+                stage=f"pair:{market_id or 'unknown'}",
+            )
+            market = market_by_id.get(market_id)
+            if not market:
+                skips.append({"market_id": market_id, "reason": "missing_live_pair"})
+                continue
+            pair_market_id = safe_str(market.get("pair_market_id"), "")
+            legs = trade.get("legs")
+            if not isinstance(legs, list) or len(legs) != 2:
+                skips.append({"market_id": market["market_id"], "reason": "invalid_pair_legs"})
+                continue
+
+            leg_specs: list[dict[str, Any]] = []
+            skip_reason = ""
+            buy_notional_usd = 0.0
+            for leg in legs:
+                if not isinstance(leg, dict):
+                    skip_reason = "invalid_leg"
+                    break
+                leg_market_id = safe_str(leg.get("market_id"), "")
+                side = safe_str(leg.get("side"), "").upper()
+                if leg_market_id == safe_str(market.get("market_id"), ""):
+                    token_id = safe_str(market.get("token_id"), leg_market_id)
+                    price = safe_float(
+                        market.get("best_bid") if side == "BUY" else market.get("best_ask"),
+                        0.0,
+                    )
+                    tick_size = safe_str(market.get("tick_size"), "0.01")
+                    neg_risk = bool(market.get("neg_risk", False))
+                elif leg_market_id == pair_market_id:
+                    token_id = safe_str(market.get("pair_token_id"), leg_market_id)
+                    price = safe_float(
+                        market.get("pair_best_bid") if side == "BUY" else market.get("pair_best_ask"),
+                        0.0,
+                    )
+                    tick_size = safe_str(market.get("pair_tick_size"), "0.01")
+                    neg_risk = bool(market.get("pair_neg_risk", False))
+                else:
+                    skip_reason = "unknown_leg_market"
+                    break
+
+                if price <= 0.0:
+                    skip_reason = "invalid_leg_price"
+                    break
+
+                notional = max(0.0, safe_float(leg.get("notional_usd"), 0.0))
+                size = notional / max(price, 1e-9)
+                if side == "SELL":
+                    available_shares = max(0.0, position_sizes.get(token_id, 0.0))
+                    if available_shares + 1e-9 < size:
+                        skip_reason = "insufficient_inventory_for_pair_sell"
+                        break
+                else:
+                    buy_notional_usd += notional
+                leg_specs.append(
+                    {
+                        "market_id": leg_market_id,
+                        "token_id": token_id,
+                        "side": side,
+                        "price": snap_price(price, tick_size, side),
+                        "size": size,
+                        "tick_size": tick_size,
+                        "neg_risk": neg_risk,
+                        "notional_usd": round(notional, 4),
+                    }
+                )
+
+            if not skip_reason and (
+                execution_settings.min_cash_reserve_usd > 0.0
+                and (available_cash_usd - buy_notional_usd) < execution_settings.min_cash_reserve_usd
+            ):
+                skip_reason = "cash_reserve_guard"
+
+            if skip_reason:
+                skip_payload = {
                     "market_id": market["market_id"],
                     "pair_market_id": pair_market_id,
                     "reason": skip_reason,
                 }
+                if skip_reason == "cash_reserve_guard":
+                    skip_payload["available_cash_usd"] = round(available_cash_usd, 4)
+                    skip_payload["requested_buy_notional_usd"] = round(buy_notional_usd, 4)
+                    skip_payload["min_cash_reserve_usd"] = round(execution_settings.min_cash_reserve_usd, 4)
+                skips.append(skip_payload)
+                continue
+
+            for leg_spec in leg_specs:
+                fee_rate_bps = fetch_fee_rate_bps(leg_spec["token_id"])
+                response = _invoke_trader_call(
+                    f"create_order_{leg_spec['side'].lower()}:{leg_spec['market_id']}",
+                    lambda leg_spec=leg_spec, fee_rate_bps=fee_rate_bps: trader.create_order(
+                        token_id=leg_spec["token_id"],
+                        side=leg_spec["side"],
+                        price=leg_spec["price"],
+                        size=leg_spec["size"],
+                        tick_size=leg_spec["tick_size"],
+                        neg_risk=leg_spec["neg_risk"],
+                        fee_rate_bps=fee_rate_bps,
+                    ),
+                    execution_settings,
+                )
+                placements.append({**leg_spec, "response": response})
+            available_cash_usd = max(0.0, available_cash_usd - buy_notional_usd)
+
+        latest_orders: Any = []
+        latest_positions: Any = raw_positions
+        for poll_idx in range(execution_settings.poll_attempts):
+            if execution_settings.poll_interval_seconds > 0:
+                time.sleep(execution_settings.poll_interval_seconds)
+            _check_cycle_deadline(
+                started_at=started_at,
+                execution_settings=execution_settings,
+                stage=f"poll:{poll_idx + 1}",
             )
-            continue
-
-        for leg_spec in leg_specs:
-            fee_rate_bps = fetch_fee_rate_bps(leg_spec["token_id"])
-            response = trader.create_order(
-                token_id=leg_spec["token_id"],
-                side=leg_spec["side"],
-                price=leg_spec["price"],
-                size=leg_spec["size"],
-                tick_size=leg_spec["tick_size"],
-                neg_risk=leg_spec["neg_risk"],
-                fee_rate_bps=fee_rate_bps,
+            latest_orders = _invoke_trader_call(
+                "get_orders_poll",
+                trader.get_orders,
+                execution_settings,
             )
-            placements.append({**leg_spec, "response": response})
+            latest_positions = _invoke_trader_call(
+                "get_positions_poll",
+                trader.get_positions,
+                execution_settings,
+            )
 
-    latest_orders: Any = []
-    latest_positions: Any = raw_positions
-    for _ in range(execution_settings.poll_attempts):
-        if execution_settings.poll_interval_seconds > 0:
-            time.sleep(execution_settings.poll_interval_seconds)
-        latest_orders = trader.get_orders()
-        latest_positions = trader.get_positions()
-
-    return {
-        "cancel_all": cancel_response,
-        "orders_submitted": placements,
-        "order_skips": skips,
-        "open_orders": latest_orders,
-        "open_order_ids": active_order_ids(latest_orders),
-        "positions": latest_positions,
-        "updated_leg_exposure": pair_leg_exposure_notional(
+        updated_leg_exposure = pair_leg_exposure_notional(
             raw_positions=latest_positions,
             markets=markets,
-        ),
-    }
+        )
+        final_risk = _capture_live_risk(
+            trader=trader,
+            exposure_by_key=updated_leg_exposure,
+            execution_settings=execution_settings,
+        )
+        live_risk_state = final_risk.get("state")
+        if final_risk.get("status") != "ok":
+            return _live_failure_payload(
+                trader=trader,
+                execution_settings=execution_settings,
+                error_code=safe_str(final_risk.get("error_code"), "live_risk_guard_blocked"),
+                message=safe_str(final_risk.get("message"), "Live risk guard blocked execution."),
+                cancel_response=cancel_response,
+                orders_submitted=placements,
+                order_skips=skips,
+                live_risk=live_risk_state,
+            )
+
+        return {
+            "status": "ok",
+            "cancel_all": cancel_response,
+            "orders_submitted": placements,
+            "order_skips": skips,
+            "open_orders": latest_orders,
+            "open_order_ids": active_order_ids(latest_orders),
+            "positions": latest_positions,
+            "updated_leg_exposure": updated_leg_exposure,
+            "live_risk": live_risk_state,
+            "runtime_version": execution_settings.runtime_version,
+        }
+    except TimeoutError as exc:
+        return _live_failure_payload(
+            trader=trader,
+            execution_settings=execution_settings,
+            error_code="live_operation_timeout",
+            message=str(exc),
+            cancel_response=cancel_response,
+            orders_submitted=placements,
+            order_skips=skips,
+            live_risk=live_risk_state,
+        )
+    except Exception as exc:
+        return _live_failure_payload(
+            trader=trader,
+            execution_settings=execution_settings,
+            error_code="live_operation_failed",
+            message=str(exc),
+            cancel_response=cancel_response,
+            orders_submitted=placements,
+            order_skips=skips,
+            live_risk=live_risk_state,
+        )
 
 
 def sell_held_inventory(
