@@ -39,7 +39,7 @@ SEREN_POLYMARKET_DATA_URL_PREFIX = (
     f"https://{SEREN_POLYMARKET_PUBLISHER_HOST}{SEREN_PUBLISHERS_PREFIX}{SEREN_POLYMARKET_DATA_PUBLISHER}"
 )
 POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
-SEREN_PREDICTIONS_PUBLISHER = "seren-polymarket-predictions"
+SEREN_PREDICTIONS_PUBLISHER = "seren-polymarket-intelligence"
 SEREN_PREDICTIONS_URL_PREFIX = (
     f"https://api.serendb.com/publishers/{SEREN_PREDICTIONS_PUBLISHER}"
 )
@@ -1765,7 +1765,7 @@ def run_backtest(
                         "quote skew. Estimated cost: ~$0.30 per backtest run."
                     ),
                     "action": 'Set "predictions_enabled": true in your config.json backtest section.',
-                    "publisher": "seren-polymarket-predictions",
+                    "publisher": "seren-polymarket-intelligence",
                     "estimated_cost_usd": 0.30,
                     "endpoints_used": [
                         "POST /api/oracle/divergence/batch ($0.15)",
