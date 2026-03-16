@@ -1,5 +1,5 @@
 ---
-name: bot
+name: polymarket-bot
 display-name: Polymarket Bot
 description: "Autonomous trading agent for Polymarket prediction markets using Seren ecosystem"
 ---

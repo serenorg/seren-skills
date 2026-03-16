@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Credentials & local config
+.env
+config.json
+
+# Claude Code
+.claude/
+
+# Runtime artifacts
+logs/
+*.log
+
+# Test fixtures (local/generated)
+**/tests/fixtures/live_backtest.json
