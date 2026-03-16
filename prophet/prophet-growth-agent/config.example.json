@@ -1,0 +1,14 @@
+{
+  "connectors": [
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "command": "status",
+    "json_output": false,
+    "recent_window_days": 7,
+    "reminder_enabled": true,
+    "weekly_target_markets": 3
+  },
+  "skill": "prophet-growth-agent"
+}

@@ -1,0 +1,29 @@
+{
+  "status": "error",
+  "skill": "prophet-growth-agent",
+  "error_code": "connector_failure",
+  "connector": "storage",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "storage": {
+      "connect": {
+        "status": "error",
+        "connector": "storage",
+        "action": "connect",
+        "error_code": "connector_failure"
+      },
+      "query": {
+        "status": "error",
+        "connector": "storage",
+        "action": "query",
+        "error_code": "connector_failure"
+      },
+      "upsert": {
+        "status": "error",
+        "connector": "storage",
+        "action": "upsert",
+        "error_code": "connector_failure"
+      }
+    }
+  }
+}

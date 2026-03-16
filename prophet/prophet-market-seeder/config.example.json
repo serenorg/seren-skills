@@ -1,0 +1,15 @@
+{
+  "connectors": [
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "candidate_limit": 12,
+    "command": "run",
+    "json_output": false,
+    "referral_code": "AGENTACCESS",
+    "strict_mode": true,
+    "submit_limit": 3
+  },
+  "skill": "prophet-market-seeder"
+}

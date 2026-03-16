@@ -1,0 +1,32 @@
+{
+  "status": "ok",
+  "skill": "prophet-growth-agent",
+  "workflow_step_count": 8,
+  "dry_run": true,
+  "inputs": {
+    "command": "status",
+    "json_output": false,
+    "recent_window_days": 7,
+    "reminder_enabled": true,
+    "weekly_target_markets": 3
+  },
+  "connectors": {
+    "storage": {
+      "connect": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "connect"
+      },
+      "query": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "query"
+      },
+      "upsert": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "upsert"
+      }
+    }
+  }
+}

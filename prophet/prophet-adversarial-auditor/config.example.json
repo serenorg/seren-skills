@@ -1,0 +1,14 @@
+{
+  "connectors": [
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "command": "run",
+    "include_loss_hypotheses": true,
+    "json_output": false,
+    "lookback_days": 30,
+    "severity_threshold": "medium"
+  },
+  "skill": "prophet-adversarial-auditor"
+}

@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "skill": "prophet-growth-agent",
+  "dry_run": true,
+  "blocked_action": "live_execution"
+}

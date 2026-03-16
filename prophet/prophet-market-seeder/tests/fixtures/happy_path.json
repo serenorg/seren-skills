@@ -1,0 +1,33 @@
+{
+  "status": "ok",
+  "skill": "prophet-market-seeder",
+  "workflow_step_count": 11,
+  "dry_run": true,
+  "inputs": {
+    "candidate_limit": 12,
+    "command": "run",
+    "json_output": false,
+    "referral_code": "AGENTACCESS",
+    "strict_mode": true,
+    "submit_limit": 3
+  },
+  "connectors": {
+    "storage": {
+      "connect": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "connect"
+      },
+      "query": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "query"
+      },
+      "upsert": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "upsert"
+      }
+    }
+  }
+}
