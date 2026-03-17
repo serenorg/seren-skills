@@ -40,10 +40,12 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 
 The runtime now auto-bootstraps Prophet storage on first run:
 
-1. Resolves or creates the Seren project `prophet-market-seeder`.
+1. Resolves or creates the Seren project `prophet`.
 2. Resolves or creates the Seren database `prophet`.
 3. Applies the `prophet_market_seeder` schema and required tables.
 4. Validates the Prophet session token against the live `ViewerWalletBalance` GraphQL query.
+
+If `SEREN_API_KEY` is missing, the runtime does not pause for DB setup questions. It fails immediately with a setup message that points the user to `https://docs.serendb.com/skills.md`.
 
 ## Minimal Run
 

@@ -64,6 +64,7 @@ state:
 policies:
   dry_run_default: true
   idempotency_required: true
+  auto_provision: true
 workflow:
   steps:
     - id: normalize_request

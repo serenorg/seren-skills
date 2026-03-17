@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "agent.py"
+SCHEMA_PATH = Path(__file__).resolve().parents[1] / "serendb_schema.sql"
 
 
 def _read_fixture(name: str) -> dict:
@@ -137,7 +138,7 @@ def test_ensure_storage_bootstraps_schema_when_seren_resources_are_missing(monke
         {
             "storage": {
                 "auto_bootstrap": True,
-                "project_name": "prophet-market-seeder",
+                "project_name": "prophet",
                 "database_name": "prophet",
                 "schema_name": "prophet_market_seeder",
                 "region": "aws-us-east-2",
@@ -147,7 +148,38 @@ def test_ensure_storage_bootstraps_schema_when_seren_resources_are_missing(monke
     )
 
     assert result["status"] == "ok"
+    assert result["project_name"] == "prophet"
+    assert result["auto_provisioned"] is True
     assert result["created_project"] is True
     assert result["created_database"] is True
     assert result["statements_executed"] >= 6
     assert any("CREATE SCHEMA IF NOT EXISTS prophet_market_seeder" in stmt for stmt in executed)
+
+
+def test_storage_bootstrap_sql_reads_checked_in_schema_file() -> None:
+    agent = _load_agent_module()
+
+    statements = agent.storage_bootstrap_sql("prophet_market_seeder")
+
+    assert SCHEMA_PATH.exists()
+    assert any("CREATE TABLE IF NOT EXISTS prophet_market_seeder.sessions" in stmt for stmt in statements)
+    assert any("CREATE TABLE IF NOT EXISTS prophet_market_seeder.artifacts" in stmt for stmt in statements)
+
+
+def test_setup_without_seren_api_key_points_user_to_docs(monkeypatch) -> None:
+    agent = _load_agent_module()
+    monkeypatch.delenv("SEREN_API_KEY", raising=False)
+
+    result = agent.run_once(
+        {
+            "dry_run": True,
+            "inputs": {"command": "setup", "strict_mode": True},
+            "secrets": {"PROPHET_SESSION_TOKEN": "privy-jwt"},
+            "storage": {"auto_bootstrap": True},
+        },
+        dry_run=True,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_code"] == "missing_seren_api_key"
+    assert result["details"]["docs_url"] == "https://docs.serendb.com/skills.md"
