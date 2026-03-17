@@ -29,3 +29,29 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 9. `submit_candidates` uses `transform.submit_market_batch`
 10. `persist_run` uses `connector.storage.upsert`
 11. `render_summary` uses `transform.render_report`
+
+## Auth Contract
+
+- Prophet backend requests must include `Authorization: Bearer <PROPHET_SESSION_TOKEN>`.
+- The correct token source is `localStorage["privy:token"]` from an authenticated `app.prophetmarket.ai` browser session.
+- The `privy-session` cookie by itself is not sufficient for authenticated GraphQL access.
+
+## First-Run Setup
+
+The runtime now auto-bootstraps Prophet storage on first run:
+
+1. Resolves or creates the Seren project `prophet-market-seeder`.
+2. Resolves or creates the Seren database `prophet`.
+3. Applies the `prophet_market_seeder` schema and required tables.
+4. Validates the Prophet session token against the live `ViewerWalletBalance` GraphQL query.
+
+## Minimal Run
+
+```bash
+cd prophet/prophet-market-seeder
+python3 -m pip install -r requirements.txt
+cp config.example.json config.json
+export SEREN_API_KEY=...
+export PROPHET_SESSION_TOKEN='eyJ...'
+python3 scripts/agent.py --config config.json
+```
