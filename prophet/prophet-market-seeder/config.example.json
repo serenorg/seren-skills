@@ -3,6 +3,13 @@
     "storage"
   ],
   "dry_run": true,
+  "storage": {
+    "auto_bootstrap": true,
+    "project_name": "prophet-market-seeder",
+    "database_name": "prophet",
+    "schema_name": "prophet_market_seeder",
+    "region": "aws-us-east-2"
+  },
   "inputs": {
     "candidate_limit": 12,
     "command": "run",
