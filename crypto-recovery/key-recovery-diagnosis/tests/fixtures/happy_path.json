@@ -1,0 +1,14 @@
+{
+  "status": "ok",
+  "skill": "key-recovery-diagnosis",
+  "workflow_step_count": 5,
+  "dry_run": true,
+  "inputs": {
+    "share_report": false,
+    "technical_mode": false
+  },
+  "handoff": {
+    "mode": "manual_email",
+    "intake_email": "hello@serendb.com"
+  }
+}

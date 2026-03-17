@@ -1,0 +1,6 @@
+{
+  "status": "error",
+  "skill": "key-recovery-diagnosis",
+  "error_code": "manual_handoff_blocked",
+  "message": "Manual sponsor handoff was requested without recorded consent."
+}

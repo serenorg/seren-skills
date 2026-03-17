@@ -1,0 +1,8 @@
+# btcrecover install notes:
+# BTCRecover is installed from its upstream checkout rather than PyPI.
+# Official install flow:
+#   git clone https://github.com/3rdIteration/btcrecover.git
+#   cd btcrecover
+#   python3 -m pip install -r requirements.txt
+# Optional:
+#   python3 run-all-tests.py -vv

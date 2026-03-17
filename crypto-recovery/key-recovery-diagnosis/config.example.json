@@ -1,0 +1,40 @@
+{
+  "skill": "key-recovery-diagnosis",
+  "dry_run": true,
+  "inputs": {
+    "share_report": false,
+    "technical_mode": false,
+    "allow_local_btcrecover": false,
+    "allow_local_hashcat": false,
+    "user_confirmed_understands_risk": false
+  },
+  "btcrecover": {
+    "repo_path": "",
+    "python_bin": "python3",
+    "timeout_seconds": 300,
+    "request": {
+      "mode": "wallet-password",
+      "wallet_file": "",
+      "tokenlist_file": "",
+      "passwordlist_file": ""
+    }
+  },
+  "hashcat": {
+    "binary_path": "hashcat",
+    "timeout_seconds": 300,
+    "request": {
+      "mode": "wallet-password",
+      "hash_mode": "",
+      "hash_file": "",
+      "attack_mode": 0,
+      "wordlist_file": "",
+      "rule_file": "",
+      "mask": "",
+      "session": "key-recovery-diagnosis"
+    }
+  },
+  "sponsor": {
+    "booking_url": "SPONSOR_BOOKING_URL",
+    "intake_email": "hello@serendb.com"
+  }
+}

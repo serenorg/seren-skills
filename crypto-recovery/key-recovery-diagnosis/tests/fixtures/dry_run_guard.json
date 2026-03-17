@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "skill": "key-recovery-diagnosis",
+  "dry_run": true,
+  "blocked_action": "live_execution"
+}

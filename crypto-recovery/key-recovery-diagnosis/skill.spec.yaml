@@ -1,0 +1,53 @@
+skill: key-recovery-diagnosis
+description: Diagnose crypto wallet access-loss scenarios, classify self-recovery feasibility, guide safe local recovery attempts for simple cases, and prepare sponsor handoff summaries for expert-only cases.
+triggers:
+  - i lost access to my crypto wallet
+  - i forgot my wallet password
+  - i am missing seed words
+  - can i recover my wallet
+  - my hardware wallet is locked
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  share_report:
+    type: boolean
+    description: Whether the user consents to sharing a non-sensitive diagnostic summary with the sponsor.
+    default: false
+  technical_mode:
+    type: boolean
+    description: Whether to default to the hands-on local recovery flow for technical users.
+    default: false
+workflow:
+  steps:
+    - id: intake
+      use: transform.collect_case_facts
+    - id: classify
+      use: transform.classify_recovery_scenario
+      with:
+        from_step: intake
+    - id: route
+      use: transform.route_recovery_plan
+      with:
+        from_step: classify
+        technical_mode: "{technical_mode}"
+    - id: sponsor_handoff
+      use: transform.prepare_manual_handoff_instructions
+      with:
+        body_from: route
+    - id: final_safety
+      use: transform.append_safety_notices
+      with:
+        from_step: sponsor_handoff
+tests:
+  quick:
+    - validates_recovery_triage_spec
+    - validates_manual_sponsor_handoff
+  smoke:
+    - happy_path_diagnosis_renders
+    - manual_handoff_fixture_renders
+publish:
+  org: crypto-recovery
+  slug: key-recovery-diagnosis
+metadata:
+  category: recovery
