@@ -15,12 +15,14 @@ from typing import Any, Dict, List, Optional
 
 DEFAULT_DRY_RUN = True
 DEFAULT_COMMAND = "run"
-DEFAULT_PROJECT_NAME = "prophet-market-seeder"
+DEFAULT_PROJECT_NAME = "prophet"
 DEFAULT_DATABASE_NAME = "prophet"
 DEFAULT_SCHEMA_NAME = "prophet_market_seeder"
 DEFAULT_REGION = "aws-us-east-2"
 DEFAULT_PROPHET_BASE_URL = "https://app.prophetmarket.ai"
+SEREN_SKILLS_DOCS_URL = "https://docs.serendb.com/skills.md"
 AVAILABLE_CONNECTORS = ["storage"]
+SCHEMA_PATH = Path(__file__).resolve().parents[1] / "serendb_schema.sql"
 VIEWER_WALLET_BALANCE_QUERY = """
 query ViewerWalletBalance {
   viewer {
@@ -317,53 +319,14 @@ def resolve_or_create_serendb_target(
 
 
 def storage_bootstrap_sql(schema_name: str) -> List[str]:
-    prefix = f"{schema_name}."
-    return [
-        f"CREATE SCHEMA IF NOT EXISTS {schema_name}",
-        f"""CREATE TABLE IF NOT EXISTS {prefix}sessions (
-            session_id TEXT PRIMARY KEY,
-            referral_code TEXT NOT NULL,
-            command TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )""",
-        f"""CREATE TABLE IF NOT EXISTS {prefix}runs (
-            run_id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            status TEXT NOT NULL,
-            dry_run BOOLEAN NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )""",
-        f"""CREATE TABLE IF NOT EXISTS {prefix}events (
-            event_id BIGSERIAL PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            payload JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )""",
-        f"""CREATE TABLE IF NOT EXISTS {prefix}market_candidates (
-            candidate_id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            score DOUBLE PRECISION,
-            payload JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )""",
-        f"""CREATE TABLE IF NOT EXISTS {prefix}market_submissions (
-            submission_id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            candidate_id TEXT,
-            status TEXT NOT NULL,
-            payload JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )""",
-        f"""CREATE TABLE IF NOT EXISTS {prefix}artifacts (
-            artifact_id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            artifact_type TEXT NOT NULL,
-            payload JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )""",
-    ]
+    if not SCHEMA_PATH.exists():
+        raise SerenBootstrapError(f"Schema file not found: {SCHEMA_PATH}")
+    raw = SCHEMA_PATH.read_text(encoding="utf-8")
+    rendered = raw.replace("{{schema_name}}", schema_name)
+    statements = [part.strip() for part in rendered.split(";") if part.strip()]
+    if not statements:
+        raise SerenBootstrapError(f"Schema file is empty: {SCHEMA_PATH}")
+    return statements
 
 
 def psycopg_connect(dsn: str):  # pragma: no cover - exercised via tests with monkeypatch
@@ -404,7 +367,9 @@ def ensure_storage(config: dict) -> dict:
     target: Optional[SerenDbTarget] = None
     if not connection_string:
         if not api_key:
-            raise SerenBootstrapError("SEREN_API_KEY is required to auto-bootstrap Prophet storage")
+            raise SerenBootstrapError(
+                f"SEREN_API_KEY is required to auto-provision Prophet storage. Create an account at {SEREN_SKILLS_DOCS_URL}."
+            )
         target = resolve_or_create_serendb_target(
             api_key,
             project_name=project_name,
@@ -420,6 +385,7 @@ def ensure_storage(config: dict) -> dict:
         "database_name": database_name,
         "project_name": project_name,
         "statements_executed": executed,
+        "auto_provisioned": True,
     }
     if target:
         result.update(
@@ -477,12 +443,9 @@ def run_once(config: dict, dry_run: bool) -> dict:
         auth = validate_prophet_access(config)
     except ProphetSkillError as exc:
         if strict_mode or command != "setup":
-            return _error_result(
-                str(exc),
-                error_code="auth_or_bootstrap_failed",
-                dry_run=dry_run,
-                command=command,
-            )
+            error_code = "missing_seren_api_key" if SEREN_SKILLS_DOCS_URL in str(exc) else "auth_or_bootstrap_failed"
+            details = {"docs_url": SEREN_SKILLS_DOCS_URL} if error_code == "missing_seren_api_key" else None
+            return _error_result(str(exc), error_code=error_code, dry_run=dry_run, command=command, details=details)
         storage = {"status": "skipped", "reason": "setup_non_strict"}
         auth = {
             "status": "warning",
