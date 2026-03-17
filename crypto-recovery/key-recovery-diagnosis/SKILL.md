@@ -171,6 +171,18 @@ Do not attempt Gmail publisher delivery or any automatic email send. The user sh
 
 The sponsor is Tom France's white-glove recovery service. Initial feasibility review is free. The service is referral-oriented and trust-network based.
 
+## Disclaimer
+
+Important disclaimers. Show or enforce these before any local recovery attempt and keep them visible in sponsor-routed cases.
+
+1. This skill is software guidance only. It is not legal, financial, tax, cybersecurity, or forensic advice.
+2. No outcome is guaranteed. Some wallets are unrecoverable even when the facts sound promising.
+3. Local recovery attempts can make the situation worse if used incorrectly, including device wipe, lockout, corrupted files, or additional loss of access.
+4. Never paste or transmit a seed phrase, private key, wallet password, passphrase, or full wallet file in chat, in config, or to the sponsor.
+5. Sponsor handoff is an introduction, not a promise of recovery, pricing, or engagement.
+6. This skill is provided as-is. You are responsible for what you run locally and for securing your own devices, files, and credentials.
+7. If the case involves theft, extortion, sanctions, exchange account controls, or legal process, treat it as a legal/compliance matter rather than a key-recovery workflow.
+
 ## Anti-Scam Warnings
 
 Display this at the end of every diagnosis:

@@ -997,6 +997,18 @@ def anti_scam_lines() -> list[str]:
     ]
 
 
+def disclaimer_lines() -> list[str]:
+    return [
+        "Disclaimer:",
+        "1. This skill is software guidance only and not legal, financial, tax, cybersecurity, or forensic advice.",
+        "2. No recovery outcome is guaranteed, and some wallets are unrecoverable.",
+        "3. Local recovery attempts can worsen the situation, including lockout, device wipe, or corrupted files.",
+        "4. Never share a seed phrase, private key, password, passphrase, or full wallet file in chat or with the sponsor.",
+        "5. Sponsor handoff is an introduction only and not a promise of recovery, pricing, or engagement.",
+        "6. This skill is provided as-is, and you are responsible for any local commands you choose to run.",
+    ]
+
+
 def print_result(
     *,
     answers: Answers,
@@ -1069,6 +1081,9 @@ def print_result(
         print("Local hashcat execution:")
         print(f"- Status: {hashcat_result['status']}")
         print(f"- Return code: {hashcat_result.get('returncode', 'n/a')}")
+    print()
+    for line in disclaimer_lines():
+        print(line)
     print()
     for line in anti_scam_lines():
         print(line)

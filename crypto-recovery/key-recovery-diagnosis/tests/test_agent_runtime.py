@@ -273,3 +273,13 @@ def test_maybe_send_report_requires_consent() -> None:
 
     assert result["status"] == "blocked"
     assert "share_report" in result["reason"]
+
+
+def test_disclaimer_lines_cover_core_risks() -> None:
+    lines = MODULE.disclaimer_lines()
+
+    assert lines[0] == "Disclaimer:"
+    joined = " ".join(lines).lower()
+    assert "not legal, financial, tax" in joined
+    assert "no recovery outcome is guaranteed" in joined
+    assert "never share a seed phrase" in joined
