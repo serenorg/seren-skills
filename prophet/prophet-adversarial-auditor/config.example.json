@@ -3,12 +3,20 @@
     "storage"
   ],
   "dry_run": true,
+  "storage": {
+    "auto_bootstrap": true,
+    "project_name": "prophet",
+    "database_name": "prophet",
+    "schema_name": "prophet_adversarial_auditor",
+    "region": "aws-us-east-2"
+  },
   "inputs": {
     "command": "run",
     "include_loss_hypotheses": true,
     "json_output": false,
     "lookback_days": 30,
-    "severity_threshold": "medium"
+    "severity_threshold": "medium",
+    "strict_mode": true
   },
   "skill": "prophet-adversarial-auditor"
 }

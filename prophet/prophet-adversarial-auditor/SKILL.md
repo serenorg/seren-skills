@@ -19,11 +19,40 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 ## Workflow Summary
 
 1. `normalize_request` uses `transform.normalize_request`
-2. `connect_storage` uses `connector.storage.connect`
-3. `load_run_history` uses `connector.storage.query`
-4. `replay_recent_runs` uses `transform.replay_recent_runs`
-5. `detect_findings` uses `transform.detect_audit_findings`
-6. `analyze_loss_scenarios` uses `transform.analyze_loss_hypotheses`
-7. `rank_findings` uses `transform.rank_findings`
-8. `persist_audit_outputs` uses `connector.storage.upsert`
-9. `render_summary` uses `transform.render_report`
+2. `validate_prophet_access` uses `transform.validate_prophet_access`
+3. `connect_storage` uses `connector.storage.connect`
+4. `load_run_history` uses `connector.storage.query`
+5. `replay_recent_runs` uses `transform.replay_recent_runs`
+6. `detect_findings` uses `transform.detect_audit_findings`
+7. `analyze_loss_scenarios` uses `transform.analyze_loss_hypotheses`
+8. `rank_findings` uses `transform.rank_findings`
+9. `persist_audit_outputs` uses `connector.storage.upsert`
+10. `render_summary` uses `transform.render_report`
+
+## Auth Contract
+
+- Prophet backend requests must include `Authorization: Bearer <PROPHET_SESSION_TOKEN>`.
+- The correct token source is `localStorage["privy:token"]` from an authenticated `app.prophetmarket.ai` browser session.
+- The `privy-session` cookie by itself is not sufficient for authenticated GraphQL access.
+
+## First-Run Setup
+
+The runtime now auto-bootstraps Prophet storage on first run:
+
+1. Resolves or creates the Seren project `prophet`.
+2. Resolves or creates the Seren database `prophet`.
+3. Applies the `prophet_adversarial_auditor` schema and required tables.
+4. Validates the Prophet session token against the live `ViewerWalletBalance` GraphQL query.
+
+If `SEREN_API_KEY` is missing, the runtime does not pause for DB setup questions. It fails immediately with a setup message that points the user to `https://docs.serendb.com/skills.md`.
+
+## Minimal Run
+
+```bash
+cd prophet/prophet-adversarial-auditor
+python3 -m pip install -r requirements.txt
+cp config.example.json config.json
+export SEREN_API_KEY=...
+export PROPHET_SESSION_TOKEN='eyJ...'
+python3 scripts/agent.py --config config.json
+```

@@ -19,10 +19,39 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 ## Workflow Summary
 
 1. `normalize_request` uses `transform.normalize_request`
-2. `connect_storage` uses `connector.storage.connect`
-3. `load_recent_activity` uses `connector.storage.query`
-4. `compute_progress` uses `transform.compute_repeat_creation_progress`
-5. `generate_checkin_actions` uses `transform.generate_checkin_actions`
-6. `compose_reminder_copy` uses `transform.compose_reminder_copy`
-7. `persist_growth_outputs` uses `connector.storage.upsert`
-8. `render_summary` uses `transform.render_report`
+2. `validate_prophet_access` uses `transform.validate_prophet_access`
+3. `connect_storage` uses `connector.storage.connect`
+4. `load_recent_activity` uses `connector.storage.query`
+5. `compute_progress` uses `transform.compute_repeat_creation_progress`
+6. `generate_checkin_actions` uses `transform.generate_checkin_actions`
+7. `compose_reminder_copy` uses `transform.compose_reminder_copy`
+8. `persist_growth_outputs` uses `connector.storage.upsert`
+9. `render_summary` uses `transform.render_report`
+
+## Auth Contract
+
+- Prophet backend requests must include `Authorization: Bearer <PROPHET_SESSION_TOKEN>`.
+- The correct token source is `localStorage["privy:token"]` from an authenticated `app.prophetmarket.ai` browser session.
+- The `privy-session` cookie by itself is not sufficient for authenticated GraphQL access.
+
+## First-Run Setup
+
+The runtime now auto-bootstraps Prophet storage on first run:
+
+1. Resolves or creates the Seren project `prophet`.
+2. Resolves or creates the Seren database `prophet`.
+3. Applies the `prophet_growth_agent` schema and required tables.
+4. Validates the Prophet session token against the live `ViewerWalletBalance` GraphQL query.
+
+If `SEREN_API_KEY` is missing, the runtime does not pause for DB setup questions. It fails immediately with a setup message that points the user to `https://docs.serendb.com/skills.md`.
+
+## Minimal Run
+
+```bash
+cd prophet/prophet-growth-agent
+python3 -m pip install -r requirements.txt
+cp config.example.json config.json
+export SEREN_API_KEY=...
+export PROPHET_SESSION_TOKEN='eyJ...'
+python3 scripts/agent.py --config config.json
+```

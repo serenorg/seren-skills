@@ -39,6 +39,10 @@ inputs:
     type: boolean
     description: Include plausible economic leakage and loss scenarios in the report.
     default: true
+  strict_mode:
+    type: boolean
+    description: Block the run if Prophet auth or storage bootstrap guardrails fail.
+    default: true
 secrets:
   - SEREN_API_KEY
   - PROPHET_SESSION_TOKEN
@@ -62,6 +66,7 @@ state:
 policies:
   dry_run_default: true
   idempotency_required: true
+  auto_provision: true
 workflow:
   steps:
     - id: normalize_request
@@ -70,10 +75,14 @@ workflow:
         command: "{command}"
         json_output: "{json_output}"
         severity_threshold: "{severity_threshold}"
+    - id: validate_prophet_access
+      use: transform.validate_prophet_access
+      with:
+        from_step: normalize_request
     - id: connect_storage
       use: connector.storage.connect
       with:
-        from_step: normalize_request
+        from_step: validate_prophet_access
     - id: load_run_history
       use: connector.storage.query
       with:

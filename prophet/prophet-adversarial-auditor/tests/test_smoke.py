@@ -1,14 +1,29 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "agent.py"
+SCHEMA_PATH = Path(__file__).resolve().parents[1] / "serendb_schema.sql"
 
 
 def _read_fixture(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
+
+
+def _load_agent_module():
+    spec = importlib.util.spec_from_file_location("prophet_adversarial_auditor_agent", SCRIPT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_happy_path_fixture_is_successful() -> None:
@@ -34,3 +49,116 @@ def test_dry_run_fixture_blocks_live_execution() -> None:
     assert payload["dry_run"] is True
     assert payload["blocked_action"] == "live_execution"
 
+
+def test_validate_prophet_access_requires_bearer_token_header(monkeypatch) -> None:
+    agent = _load_agent_module()
+    captured = {}
+
+    class DummyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "data": {
+                        "viewer": {
+                            "walletBalance": {
+                                "availableCents": 0,
+                                "totalCents": 0,
+                                "safeAddress": "0xabc",
+                                "safeDeployed": False,
+                            }
+                        }
+                    }
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout=30):
+        captured["authorization"] = request.get_header("Authorization")
+        return DummyResponse()
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", fake_urlopen)
+    result = agent.validate_prophet_access({"secrets": {"PROPHET_SESSION_TOKEN": "privy-jwt"}})
+
+    assert captured["authorization"] == "Bearer privy-jwt"
+    assert result["status"] == "ok"
+    assert result["required_header"] == "Authorization: Bearer <PROPHET_SESSION_TOKEN>"
+
+
+def test_ensure_storage_bootstraps_schema_when_seren_resources_are_missing(monkeypatch) -> None:
+    agent = _load_agent_module()
+    executed = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, statement):
+            executed.append(statement)
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            executed.append("COMMIT")
+
+    monkeypatch.setattr(
+        agent,
+        "resolve_or_create_serendb_target",
+        lambda api_key, project_name, database_name, region: SimpleNamespace(
+            project_id="proj_123",
+            branch_id="branch_123",
+            branch_name="main",
+            database_name=database_name,
+            connection_string="postgresql://example/prophet",
+            project_name=project_name,
+            created_project=True,
+            created_database=True,
+        ),
+    )
+    monkeypatch.setattr(agent, "psycopg_connect", lambda dsn: FakeConnection())
+
+    result = agent.ensure_storage(
+        {
+            "storage": {
+                "auto_bootstrap": True,
+                "project_name": "prophet",
+                "database_name": "prophet",
+                "schema_name": "prophet_adversarial_auditor",
+                "region": "aws-us-east-2",
+            },
+            "secrets": {"SEREN_API_KEY": "sb_test"},
+        }
+    )
+
+    assert result["status"] == "ok"
+    assert result["project_name"] == "prophet"
+    assert result["auto_provisioned"] is True
+    assert result["created_project"] is True
+    assert result["created_database"] is True
+    assert result["statements_executed"] >= 6
+    assert any("CREATE SCHEMA IF NOT EXISTS prophet_adversarial_auditor" in stmt for stmt in executed)
+
+
+def test_storage_bootstrap_sql_reads_checked_in_schema_file() -> None:
+    agent = _load_agent_module()
+
+    statements = agent.storage_bootstrap_sql("prophet_adversarial_auditor")
+
+    assert SCHEMA_PATH.exists()
+    assert any("CREATE TABLE IF NOT EXISTS prophet_adversarial_auditor.audit_findings" in stmt for stmt in statements)
+    assert any("CREATE TABLE IF NOT EXISTS prophet_adversarial_auditor.loss_hypotheses" in stmt for stmt in statements)
