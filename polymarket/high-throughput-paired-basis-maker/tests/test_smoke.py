@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import sys
@@ -155,3 +156,92 @@ def test_trade_mode_fetches_live_pairs_when_config_markets_is_empty(monkeypatch)
     assert result["pair_trades"][0]["market_id"] == "LIVE-HT-1A"
     assert result["pair_trades"][0]["pair_market_id"] == "LIVE-HT-1B"
     assert any("/publishers/polymarket-data/markets?" in url for url in fetched_urls)
+
+
+def test_backtest_optimizer_selects_targeted_pair_subset_and_tuned_config(monkeypatch) -> None:
+    module = _load_agent_module()
+    now_ts = int(time.time())
+    config = {
+        "strategy": {"bankroll_usd": 1000, "pairs_max": 3, "basis_entry_bps": 35, "base_pair_notional_usd": 600},
+        "backtest": {"days": 90, "min_events": 1, "telemetry_path": "", "optimization": {"target_return_pct": 25.0}},
+    }
+    markets = [
+        {"market_id": "M0", "pair_market_id": "P0", "question": "A", "pair_question": "B", "history": [], "pair_history": [], "rebate_bps": 2.3},
+        {"market_id": "M1", "pair_market_id": "P1", "question": "C", "pair_question": "D", "history": [], "pair_history": [], "rebate_bps": 2.3},
+        {"market_id": "M2", "pair_market_id": "P2", "question": "E", "pair_question": "F", "history": [], "pair_history": [], "rebate_bps": 2.3},
+    ]
+
+    def fake_load_backtest_markets(p, bt, start_ts, end_ts):
+        return markets, "synthetic"
+
+    def fake_simulate_pair(market, p, bt, allocated_capital=0.0):
+        aggressive = p.base_pair_notional_usd > 650 and p.basis_entry_bps < 30
+        pnl = 140.0 if aggressive and market["market_id"] in {"M0", "M1"} else (8.0 if market["market_id"] in {"M0", "M1"} else -2.0)
+        return {
+            "market_id": market["market_id"],
+            "pair_market_id": market["pair_market_id"],
+            "considered_points": 10,
+            "quoted_points": 6,
+            "traded_points": 6,
+            "skipped_points": 0,
+            "fill_events": 1,
+            "filled_notional_usd": 100.0,
+            "pnl_usd": pnl,
+            "event_pnls": [pnl],
+            "orderbook_mode": "synthetic",
+            "telemetry": [],
+        }
+
+    monkeypatch.setattr(module, "_load_backtest_markets", fake_load_backtest_markets)
+    monkeypatch.setattr(module, "_simulate_pair", fake_simulate_pair)
+    monkeypatch.setattr(module, "write_telemetry_records", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "_fetch_predictions_pair_signals", lambda backtest_params: {})
+
+    output = module.run_backtest(config, None)
+
+    assert output["status"] == "ok"
+    assert output["results"]["return_pct"] >= 25.0
+    assert output["optimization_summary"]["target_met"] is True
+    assert output["config_updates"]["strategy"]["base_pair_notional_usd"] > 600
+    assert [target["market_id"] for target in output["optimization_summary"]["target_pairs"]] == ["M0", "M1"]
+
+
+def test_main_applies_backtest_config_updates_before_trade(monkeypatch, tmp_path: Path) -> None:
+    module = _load_agent_module()
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"execution": {"require_positive_backtest": True}, "strategy": {"basis_entry_bps": 35}}), encoding="utf-8")
+    seen: dict[str, float] = {}
+
+    monkeypatch.setattr(
+        module,
+        "parse_args",
+        lambda: argparse.Namespace(
+            config=str(config_path),
+            run_type="trade",
+            markets_file=None,
+            backtest_file=None,
+            backtest_days=None,
+            allow_negative_backtest=False,
+            yes_live=False,
+        ),
+    )
+    monkeypatch.setattr(module, "load_config", lambda path: json.loads(config_path.read_text(encoding="utf-8")))
+    monkeypatch.setattr(
+        module,
+        "run_backtest",
+        lambda config, backtest_days, backtest_file=None: {
+            "status": "ok",
+            "results": {"return_pct": 30.0},
+            "config_updates": {"strategy": {"basis_entry_bps": 12.0}, "state": {"backtest_optimizer": {"target_met": True}}},
+        },
+    )
+    def fake_run_trade(config, markets_file, yes_live):
+        seen["basis_entry_bps"] = config["strategy"]["basis_entry_bps"]
+        return {"status": "ok"}
+
+    monkeypatch.setattr(module, "run_trade", fake_run_trade)
+
+    assert module.main() == 0
+    assert seen["basis_entry_bps"] == 12.0
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["strategy"]["basis_entry_bps"] == 12.0

@@ -103,6 +103,13 @@ class BacktestParams:
 
 
 @dataclass(frozen=True)
+class OptimizationParams:
+    enabled: bool = True
+    target_return_pct: float = 25.0
+    max_iterations: int = 8
+
+
+@dataclass(frozen=True)
 class OrderBookSnapshot:
     t: int
     best_bid: float
@@ -167,6 +174,22 @@ def load_json_file(path: Path) -> dict[str, Any]:
 
 def load_config(config_path: str) -> dict[str, Any]:
     return load_json_file(Path(config_path))
+
+
+def _clone_config(config: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(config))
+
+
+def _write_config(config_path: str, config: dict[str, Any]) -> None:
+    Path(config_path).write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+
+def _apply_config_updates_in_place(config: dict[str, Any], updates: dict[str, Any]) -> None:
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(config.get(key), dict):
+            config[key].update(value)
+        else:
+            config[key] = value
 
 
 def _persist_runtime_state(config_path: str, config: dict[str, Any], state: dict[str, Any]) -> None:
@@ -348,6 +371,18 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         predictions_score_boost=clamp(
             _safe_float(backtest.get("predictions_score_boost"), 0.3), 0.0, 1.0
         ),
+    )
+
+
+def to_optimization_params(config: dict[str, Any]) -> OptimizationParams:
+    backtest = config.get("backtest", {})
+    raw = backtest.get("optimization", {}) if isinstance(backtest, dict) else {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return OptimizationParams(
+        enabled=bool(raw.get("enabled", True)),
+        target_return_pct=_safe_float(raw.get("target_return_pct"), 25.0),
+        max_iterations=max(1, _safe_int(raw.get("max_iterations"), 8)),
     )
 
 
@@ -1600,6 +1635,376 @@ def _simulate_market_backtest(
     }
 
 
+def _market_target_descriptors(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "market_id": _safe_str(market.get("market_id"), "unknown"),
+            "question": _safe_str(market.get("question"), ""),
+        }
+        for market in markets
+    ]
+
+
+def _diff_section(original: dict[str, Any], updated: dict[str, Any]) -> dict[str, Any]:
+    diff: dict[str, Any] = {}
+    for key, value in updated.items():
+        if original.get(key) != value:
+            diff[key] = value
+    return diff
+
+
+def _rank_markets_for_optimization(markets: list[dict[str, Any]], result: dict[str, Any]) -> list[dict[str, Any]]:
+    pnl_by_market = {
+        _safe_str(row.get("market_id"), "unknown"): _safe_float(row.get("pnl_usd"), 0.0)
+        for row in result.get("markets", [])
+        if isinstance(row, dict)
+    }
+    return sorted(
+        markets,
+        key=lambda market: (
+            pnl_by_market.get(_safe_str(market.get("market_id"), "unknown"), float("-inf")),
+            _safe_float(market.get("rebate_bps"), 0.0),
+        ),
+        reverse=True,
+    )
+
+
+def _optimization_attempt_summary(
+    *,
+    name: str,
+    result: dict[str, Any],
+    strategy_updates: dict[str, Any],
+    backtest_updates: dict[str, Any],
+    targets: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": _safe_str(result.get("status"), "error"),
+        "return_pct": round(_safe_float(result.get("results", {}).get("return_pct"), 0.0), 4),
+        "total_pnl_usd": round(_safe_float(result.get("results", {}).get("total_pnl_usd"), 0.0), 4),
+        "target_market_count": len(targets),
+        "target_market_ids": [target["market_id"] for target in targets],
+        "strategy_updates": strategy_updates,
+        "backtest_updates": backtest_updates,
+    }
+
+
+def _is_better_backtest_result(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+    if candidate.get("status") != "ok":
+        return False
+    if current.get("status") != "ok":
+        return True
+    candidate_return = _safe_float(candidate.get("results", {}).get("return_pct"), float("-inf"))
+    current_return = _safe_float(current.get("results", {}).get("return_pct"), float("-inf"))
+    if candidate_return != current_return:
+        return candidate_return > current_return
+    candidate_pnl = _safe_float(candidate.get("results", {}).get("total_pnl_usd"), float("-inf"))
+    current_pnl = _safe_float(current.get("results", {}).get("total_pnl_usd"), float("-inf"))
+    return candidate_pnl > current_pnl
+
+
+def _maker_optimization_candidates(config: dict[str, Any], total_markets: int) -> list[dict[str, Any]]:
+    p = to_params(config)
+    bt = to_backtest_params(config)
+    base_markets = max(1, min(total_markets, p.markets_max))
+    focus_markets = max(1, min(total_markets, max(1, int(round(base_markets * 0.5)))))
+    broad_markets = max(1, min(total_markets, max(base_markets, int(round(total_markets * 0.75)))))
+    return [
+        {
+            "name": "focus-higher-participation",
+            "subset_size": focus_markets,
+            "strategy": {
+                "markets_max": focus_markets,
+                "base_order_notional_usd": round(p.base_order_notional_usd * 1.15, 4),
+                "max_total_notional_usd": round(p.max_total_notional_usd * 1.1, 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.15, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "focus-tighter-spread",
+            "subset_size": focus_markets,
+            "strategy": {
+                "markets_max": focus_markets,
+                "min_spread_bps": round(max(5.0, p.min_spread_bps * 0.85), 4),
+                "max_spread_bps": round(max(p.min_spread_bps, p.max_spread_bps * 0.9), 4),
+                "base_order_notional_usd": round(p.base_order_notional_usd * 1.1, 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.1, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "high-conviction",
+            "subset_size": focus_markets,
+            "strategy": {
+                "markets_max": focus_markets,
+                "min_edge_bps": round(max(0.5, p.min_edge_bps * 0.75), 4),
+                "base_order_notional_usd": round(p.base_order_notional_usd * 1.25, 4),
+                "max_notional_per_market_usd": round(p.max_notional_per_market_usd * 1.2, 4),
+                "max_total_notional_usd": round(p.max_total_notional_usd * 1.15, 4),
+                "max_position_notional_usd": round(p.max_position_notional_usd * 1.15, 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.2, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "broader-scan",
+            "subset_size": broad_markets,
+            "strategy": {
+                "markets_max": broad_markets,
+                "min_spread_bps": round(max(5.0, p.min_spread_bps * 0.9), 4),
+                "base_order_notional_usd": round(p.base_order_notional_usd * 1.05, 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.05, 0.0, 1.0), 4)},
+        },
+    ]
+
+
+def _evaluate_backtest(
+    *,
+    config: dict[str, Any],
+    markets: list[dict[str, Any]],
+    source: str,
+    days: int,
+    start_ts: int,
+    end_ts: int,
+) -> dict[str, Any]:
+    strategy_params = to_params(config)
+    backtest_params = to_backtest_params(config)
+    market_summaries: list[dict[str, Any]] = []
+    equity_curve = [strategy_params.bankroll_usd]
+    total_considered = 0
+    total_quoted = 0
+    total_notional = 0.0
+    total_fill_events = 0
+    telemetry_records: list[dict[str, Any]] = []
+    orderbook_modes: set[str] = set()
+
+    selected_markets = markets[: strategy_params.markets_max]
+    capital_per_market = strategy_params.bankroll_usd / max(1, len(selected_markets))
+
+    for market in selected_markets:
+        summary = _simulate_market_backtest(
+            market=market,
+            strategy_params=strategy_params,
+            backtest_params=backtest_params,
+            allocated_capital=capital_per_market,
+        )
+        market_summaries.append(
+            {
+                "market_id": summary["market_id"],
+                "question": summary["question"],
+                "considered_points": summary["considered_points"],
+                "quoted_points": summary["quoted_points"],
+                "skipped_points": summary["skipped_points"],
+                "fill_events": summary["fill_events"],
+                "filled_notional_usd": summary["filled_notional_usd"],
+                "pnl_usd": summary["pnl_usd"],
+                "orderbook_mode": summary["orderbook_mode"],
+            }
+        )
+        total_considered += int(summary["considered_points"])
+        total_quoted += int(summary["quoted_points"])
+        total_notional += float(summary["filled_notional_usd"])
+        total_fill_events += int(summary["fill_events"])
+        telemetry_records.extend(summary["telemetry"])
+        orderbook_modes.add(_safe_str(summary.get("orderbook_mode"), "unknown"))
+
+        market_equity_curve = summary["equity_curve"]
+        if len(market_equity_curve) > len(equity_curve):
+            equity_curve.extend([equity_curve[-1]] * (len(market_equity_curve) - len(equity_curve)))
+        for idx, value in enumerate(market_equity_curve):
+            if idx < len(equity_curve):
+                equity_curve[idx] += value - capital_per_market
+
+    ending_equity = equity_curve[-1]
+    total_pnl = ending_equity - strategy_params.bankroll_usd
+    return_pct = (total_pnl / strategy_params.bankroll_usd) * 100.0
+    max_drawdown = _max_drawdown(equity_curve)
+    decision = "consider_live_guarded" if total_pnl > 0 else "paper_only_or_tune"
+    _write_telemetry_records(backtest_params.telemetry_path, telemetry_records)
+
+    return {
+        "status": "ok",
+        "skill": "polymarket-maker-rebate-bot",
+        "mode": "backtest",
+        "dry_run": True,
+        "predictions_intelligence": {
+            "enabled": backtest_params.predictions_enabled,
+            "markets_with_signals": sum(1 for m in selected_markets if m.get("prediction_signal")),
+            "skew_strength_bps": backtest_params.predictions_skew_strength_bps,
+            "score_boost": backtest_params.predictions_score_boost,
+            "note": (
+                "Seren Predictions intelligence active — costs SerenBucks per batch call."
+                if backtest_params.predictions_enabled
+                else "Disabled. Set predictions_enabled: true in config to activate (costs SerenBucks)."
+            ),
+        },
+        "backtest_summary": {
+            "days": days,
+            "source": source,
+            "start_utc": datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat(),
+            "end_utc": datetime.fromtimestamp(end_ts, tz=timezone.utc).isoformat(),
+            "markets_selected": len(market_summaries),
+            "considered_points": total_considered,
+            "quoted_points": total_quoted,
+            "fill_events": total_fill_events,
+            "orderbook_mode": ",".join(sorted(orderbook_modes)),
+            "quote_rate_pct": round(
+                (total_quoted / total_considered) * 100.0 if total_considered else 0.0,
+                4,
+            ),
+        },
+        "results": {
+            "starting_bankroll_usd": round(strategy_params.bankroll_usd, 4),
+            "ending_bankroll_usd": round(ending_equity, 4),
+            "total_pnl_usd": round(total_pnl, 4),
+            "return_pct": round(return_pct, 4),
+            "filled_notional_usd": round(total_notional, 4),
+            "events": total_fill_events,
+            "max_drawdown_usd": round(max_drawdown, 4),
+            "telemetry_path": backtest_params.telemetry_path or None,
+            "decision_hint": decision,
+            "disclaimer": "Backtests are estimates and do not guarantee future performance.",
+        },
+        "markets": sorted(market_summaries, key=lambda item: item["pnl_usd"], reverse=True),
+        **(
+            {
+                "predictions_upgrade_prompt": {
+                    "message": (
+                        "Improve your edge with Seren Predictions intelligence. "
+                        "Cross-platform consensus and divergence signals from Kalshi, Manifold, "
+                        "Metaculus, PredictIt, and Betfair can boost market selection and directional "
+                        "quote skew. Estimated cost: ~$0.30 per backtest run."
+                    ),
+                    "action": 'Set "predictions_enabled": true in your config.json backtest section.',
+                    "publisher": "seren-polymarket-intelligence",
+                    "estimated_cost_usd": 0.30,
+                    "endpoints_used": [
+                        "POST /api/oracle/divergence/batch ($0.15)",
+                        "POST /api/oracle/consensus/batch ($0.15)",
+                    ],
+                    "benefits": [
+                        "Boost mm_score for markets with cross-platform price divergence",
+                        "Add directional skew to quotes based on consensus vs Polymarket price",
+                        "Filter for markets where other platforms disagree — higher edge potential",
+                    ],
+                },
+            }
+            if not backtest_params.predictions_enabled
+            else {}
+        ),
+        "next_steps": [
+            "Review negative-PnL markets and edge assumptions.",
+            "Tune spread, participation, and risk caps before live mode.",
+            "Run quote mode only after backtest results are acceptable.",
+            *(
+                []
+                if backtest_params.predictions_enabled
+                else [
+                    "Enable Seren Predictions intelligence for better edge detection "
+                    "(set predictions_enabled: true in config).",
+                ]
+            ),
+        ],
+    }
+
+
+def _optimize_backtest(
+    *,
+    config: dict[str, Any],
+    markets: list[dict[str, Any]],
+    source: str,
+    days: int,
+    start_ts: int,
+    end_ts: int,
+) -> dict[str, Any]:
+    baseline = _evaluate_backtest(
+        config=config,
+        markets=markets,
+        source=source,
+        days=days,
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+    if baseline.get("status") != "ok":
+        return baseline
+
+    optimization = to_optimization_params(config)
+    ranked_markets = _rank_markets_for_optimization(markets, baseline)
+    best_result = baseline
+    best_config = _clone_config(config)
+    best_targets = _market_target_descriptors(ranked_markets[: to_params(config).markets_max])
+    attempts = [
+        _optimization_attempt_summary(
+            name="baseline",
+            result=baseline,
+            strategy_updates={},
+            backtest_updates={},
+            targets=best_targets,
+        )
+    ]
+
+    if optimization.enabled:
+        max_attempts = max(1, optimization.max_iterations)
+        for candidate in _maker_optimization_candidates(config, len(ranked_markets))[: max(0, max_attempts - 1)]:
+            if _safe_float(best_result.get("results", {}).get("return_pct"), 0.0) >= optimization.target_return_pct:
+                break
+            subset_size = max(1, min(len(ranked_markets), _safe_int(candidate.get("subset_size"), len(ranked_markets))))
+            candidate_markets = ranked_markets[:subset_size]
+            candidate_config = _clone_config(config)
+            candidate_config.setdefault("strategy", {}).update(candidate.get("strategy", {}))
+            candidate_config.setdefault("backtest", {}).update(candidate.get("backtest", {}))
+            candidate_result = _evaluate_backtest(
+                config=candidate_config,
+                markets=candidate_markets,
+                source=f"{source}|optimized:{candidate['name']}",
+                days=days,
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+            candidate_targets = _market_target_descriptors(candidate_markets[: to_params(candidate_config).markets_max])
+            attempts.append(
+                _optimization_attempt_summary(
+                    name=_safe_str(candidate.get("name"), "candidate"),
+                    result=candidate_result,
+                    strategy_updates=_diff_section(config.get("strategy", {}), candidate_config.get("strategy", {})),
+                    backtest_updates=_diff_section(config.get("backtest", {}), candidate_config.get("backtest", {})),
+                    targets=candidate_targets,
+                )
+            )
+            if _is_better_backtest_result(candidate_result, best_result):
+                best_result = candidate_result
+                best_config = candidate_config
+                best_targets = candidate_targets
+
+    strategy_updates = _diff_section(config.get("strategy", {}), best_config.get("strategy", {}))
+    backtest_updates = _diff_section(config.get("backtest", {}), best_config.get("backtest", {}))
+    best_return_pct = _safe_float(best_result.get("results", {}).get("return_pct"), 0.0)
+    optimization_state = {
+        "enabled": optimization.enabled,
+        "target_return_pct": round(optimization.target_return_pct, 4),
+        "target_met": best_return_pct >= optimization.target_return_pct,
+        "selected_attempt": next(
+            (attempt["name"] for attempt in attempts if attempt["return_pct"] == round(best_return_pct, 4)),
+            attempts[0]["name"],
+        ),
+        "best_return_pct": round(best_return_pct, 4),
+        "attempt_count": len(attempts),
+        "target_markets": best_targets,
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    best_result["optimization_summary"] = {
+        **optimization_state,
+        "attempts": attempts,
+        "strategy_updates": strategy_updates,
+        "backtest_updates": backtest_updates,
+    }
+    best_result["config_updates"] = {
+        "strategy": strategy_updates,
+        "backtest": backtest_updates,
+        "state": {"backtest_optimizer": optimization_state},
+    }
+    return best_result
+
+
 def run_backtest(
     config: dict[str, Any],
     backtest_file: str | None,
@@ -1657,148 +2062,14 @@ def run_backtest(
             "dry_run": True,
         }
 
-    market_summaries: list[dict[str, Any]] = []
-    equity_curve = [strategy_params.bankroll_usd]
-    total_considered = 0
-    total_quoted = 0
-    total_notional = 0.0
-    total_fill_events = 0
-    telemetry_records: list[dict[str, Any]] = []
-    orderbook_modes: set[str] = set()
-
-    selected_markets = markets[: strategy_params.markets_max]
-    num_markets = len(selected_markets)
-    capital_per_market = strategy_params.bankroll_usd / max(1, num_markets)
-
-    for market in selected_markets:
-        summary = _simulate_market_backtest(
-            market=market,
-            strategy_params=strategy_params,
-            backtest_params=backtest_params,
-            allocated_capital=capital_per_market,
-        )
-        market_summaries.append(
-            {
-                "market_id": summary["market_id"],
-                "question": summary["question"],
-                "considered_points": summary["considered_points"],
-                "quoted_points": summary["quoted_points"],
-                "skipped_points": summary["skipped_points"],
-                "fill_events": summary["fill_events"],
-                "filled_notional_usd": summary["filled_notional_usd"],
-                "pnl_usd": summary["pnl_usd"],
-                "orderbook_mode": summary["orderbook_mode"],
-            }
-        )
-        total_considered += int(summary["considered_points"])
-        total_quoted += int(summary["quoted_points"])
-        total_notional += float(summary["filled_notional_usd"])
-        total_fill_events += int(summary["fill_events"])
-        telemetry_records.extend(summary["telemetry"])
-        orderbook_modes.add(_safe_str(summary.get("orderbook_mode"), "unknown"))
-
-        market_equity_curve = summary["equity_curve"]
-        if len(market_equity_curve) > len(equity_curve):
-            equity_curve.extend([equity_curve[-1]] * (len(market_equity_curve) - len(equity_curve)))
-        for idx, value in enumerate(market_equity_curve):
-            if idx < len(equity_curve):
-                equity_curve[idx] += value - capital_per_market
-
-    ending_equity = equity_curve[-1]
-    total_pnl = ending_equity - strategy_params.bankroll_usd
-    return_pct = (total_pnl / strategy_params.bankroll_usd) * 100.0
-    max_drawdown = _max_drawdown(equity_curve)
-    decision = "consider_live_guarded" if total_pnl > 0 else "paper_only_or_tune"
-    _write_telemetry_records(backtest_params.telemetry_path, telemetry_records)
-
-    return {
-        "status": "ok",
-        "skill": "polymarket-maker-rebate-bot",
-        "mode": "backtest",
-        "dry_run": True,
-        "predictions_intelligence": {
-            "enabled": backtest_params.predictions_enabled,
-            "markets_with_signals": sum(
-                1 for m in selected_markets if m.get("prediction_signal")
-            ),
-            "skew_strength_bps": backtest_params.predictions_skew_strength_bps,
-            "score_boost": backtest_params.predictions_score_boost,
-            "note": (
-                "Seren Predictions intelligence active — costs SerenBucks per batch call."
-                if backtest_params.predictions_enabled
-                else "Disabled. Set predictions_enabled: true in config to activate (costs SerenBucks)."
-            ),
-        },
-        "backtest_summary": {
-            "days": days,
-            "source": source,
-            "start_utc": datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat(),
-            "end_utc": datetime.fromtimestamp(end_ts, tz=timezone.utc).isoformat(),
-            "markets_selected": len(market_summaries),
-            "considered_points": total_considered,
-            "quoted_points": total_quoted,
-            "fill_events": total_fill_events,
-            "orderbook_mode": ",".join(sorted(orderbook_modes)),
-            "quote_rate_pct": round(
-                (total_quoted / total_considered) * 100.0 if total_considered else 0.0,
-                4,
-            ),
-        },
-        "results": {
-            "starting_bankroll_usd": round(strategy_params.bankroll_usd, 4),
-            "ending_bankroll_usd": round(ending_equity, 4),
-            "total_pnl_usd": round(total_pnl, 4),
-            "return_pct": round(return_pct, 4),
-            "filled_notional_usd": round(total_notional, 4),
-            "events": total_fill_events,
-            "max_drawdown_usd": round(max_drawdown, 4),
-            "telemetry_path": backtest_params.telemetry_path or None,
-            "decision_hint": decision,
-            "disclaimer": (
-                "Backtests are estimates and do not guarantee future performance."
-            ),
-        },
-        "markets": sorted(market_summaries, key=lambda item: item["pnl_usd"], reverse=True),
-        **(
-            {
-                "predictions_upgrade_prompt": {
-                    "message": (
-                        "Improve your edge with Seren Predictions intelligence. "
-                        "Cross-platform consensus and divergence signals from Kalshi, Manifold, "
-                        "Metaculus, PredictIt, and Betfair can boost market selection and directional "
-                        "quote skew. Estimated cost: ~$0.30 per backtest run."
-                    ),
-                    "action": 'Set "predictions_enabled": true in your config.json backtest section.',
-                    "publisher": "seren-polymarket-intelligence",
-                    "estimated_cost_usd": 0.30,
-                    "endpoints_used": [
-                        "POST /api/oracle/divergence/batch ($0.15)",
-                        "POST /api/oracle/consensus/batch ($0.15)",
-                    ],
-                    "benefits": [
-                        "Boost mm_score for markets with cross-platform price divergence",
-                        "Add directional skew to quotes based on consensus vs Polymarket price",
-                        "Filter for markets where other platforms disagree — higher edge potential",
-                    ],
-                },
-            }
-            if not backtest_params.predictions_enabled
-            else {}
-        ),
-        "next_steps": [
-            "Review negative-PnL markets and edge assumptions.",
-            "Tune spread, participation, and risk caps before live mode.",
-            "Run quote mode only after backtest results are acceptable.",
-            *(
-                []
-                if backtest_params.predictions_enabled
-                else [
-                    "Enable Seren Predictions intelligence for better edge detection "
-                    "(set predictions_enabled: true in config).",
-                ]
-            ),
-        ],
-    }
+    return _optimize_backtest(
+        config=config,
+        markets=markets,
+        source=source,
+        days=days,
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
 
 
 def quote_market(
@@ -2049,6 +2320,12 @@ def main() -> int:
             backtest_file=args.backtest_file,
             backtest_days_override=args.backtest_days,
         )
+        if result.get("status") == "ok" and isinstance(result.get("config_updates"), dict):
+            _apply_config_updates_in_place(config, result["config_updates"])
+            try:
+                _write_config(args.config, config)
+            except Exception as exc:  # pragma: no cover - defensive runtime path
+                result["config_writeback_warning"] = str(exc)
     else:
         result = run_quote(config=config, markets_file=args.markets_file, yes_live=args.yes_live)
         if isinstance(result.get("state"), dict):

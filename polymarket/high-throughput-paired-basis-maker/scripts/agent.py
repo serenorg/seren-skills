@@ -115,6 +115,13 @@ class BacktestParams:
     predictions_score_boost: float = 0.3  # pair score boost for prediction-confirmed pairs
 
 
+@dataclass(frozen=True)
+class OptimizationParams:
+    enabled: bool = True
+    target_return_pct: float = 25.0
+    max_iterations: int = 8
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run paired-market basis maker strategy.")
     parser.add_argument("--config", default="config.json", help="Config file path.")
@@ -196,6 +203,22 @@ def load_config(config_path: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _clone_config(config: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(config))
+
+
+def _write_config(config_path: str, config: dict[str, Any]) -> None:
+    Path(config_path).write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+
+def _apply_config_updates_in_place(config: dict[str, Any], updates: dict[str, Any]) -> None:
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(config.get(key), dict):
+            config[key].update(value)
+        else:
+            config[key] = value
+
+
 def _persist_runtime_state(config_path: str, config: dict[str, Any], state: dict[str, Any]) -> None:
     if not isinstance(state, dict) or not state:
         return
@@ -270,6 +293,18 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
         history_fetch_workers=max(1, _safe_int(raw.get("history_fetch_workers"), 12)),
         predictions_enabled=bool(raw.get("predictions_enabled", False)),
         predictions_score_boost=_safe_float(raw.get("predictions_score_boost"), 0.3),
+    )
+
+
+def to_optimization_params(config: dict[str, Any]) -> OptimizationParams:
+    backtest_raw = config.get("backtest", {})
+    raw = backtest_raw.get("optimization", {}) if isinstance(backtest_raw, dict) else {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return OptimizationParams(
+        enabled=_safe_bool(raw.get("enabled"), True),
+        target_return_pct=_safe_float(raw.get("target_return_pct"), 25.0),
+        max_iterations=max(1, _safe_int(raw.get("max_iterations"), 8)),
     )
 
 
@@ -903,6 +938,143 @@ def _simulate_pair(market: dict[str, Any], p: StrategyParams, bt: BacktestParams
     }
 
 
+def _pair_target_descriptors(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "market_id": _safe_str(market.get("market_id"), "unknown"),
+            "pair_market_id": _safe_str(market.get("pair_market_id"), "unknown"),
+            "question": _safe_str(market.get("question"), ""),
+            "pair_question": _safe_str(market.get("pair_question"), ""),
+        }
+        for market in markets
+    ]
+
+
+def _diff_section(original: dict[str, Any], updated: dict[str, Any]) -> dict[str, Any]:
+    diff: dict[str, Any] = {}
+    for key, value in updated.items():
+        if original.get(key) != value:
+            diff[key] = value
+    return diff
+
+
+def _rank_pair_markets(markets: list[dict[str, Any]], result: dict[str, Any]) -> list[dict[str, Any]]:
+    pnl_by_pair: dict[tuple[str, str], float] = {}
+    for row in result.get("pairs", []):
+        if not isinstance(row, dict):
+            continue
+        key = (
+            _safe_str(row.get("market_id"), "unknown"),
+            _safe_str(row.get("pair_market_id"), "unknown"),
+        )
+        pnl_by_pair[key] = _safe_float(row.get("pnl_usd"), 0.0)
+    return sorted(
+        markets,
+        key=lambda market: (
+            pnl_by_pair.get(
+                (
+                    _safe_str(market.get("market_id"), "unknown"),
+                    _safe_str(market.get("pair_market_id"), "unknown"),
+                ),
+                float("-inf"),
+            ),
+            _safe_float(market.get("rebate_bps"), 0.0),
+        ),
+        reverse=True,
+    )
+
+
+def _optimization_attempt_summary(
+    *,
+    name: str,
+    result: dict[str, Any],
+    strategy_updates: dict[str, Any],
+    backtest_updates: dict[str, Any],
+    targets: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": _safe_str(result.get("status"), "error"),
+        "return_pct": round(_safe_float(result.get("results", {}).get("return_pct"), 0.0), 4),
+        "total_pnl_usd": round(_safe_float(result.get("results", {}).get("total_pnl_usd"), 0.0), 4),
+        "target_market_count": len(targets),
+        "target_market_ids": [target["market_id"] for target in targets],
+        "strategy_updates": strategy_updates,
+        "backtest_updates": backtest_updates,
+    }
+
+
+def _is_better_backtest_result(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+    if candidate.get("status") != "ok":
+        return False
+    if current.get("status") != "ok":
+        return True
+    candidate_return = _safe_float(candidate.get("results", {}).get("return_pct"), float("-inf"))
+    current_return = _safe_float(current.get("results", {}).get("return_pct"), float("-inf"))
+    if candidate_return != current_return:
+        return candidate_return > current_return
+    candidate_pnl = _safe_float(candidate.get("results", {}).get("total_pnl_usd"), float("-inf"))
+    current_pnl = _safe_float(current.get("results", {}).get("total_pnl_usd"), float("-inf"))
+    return candidate_pnl > current_pnl
+
+
+def _pair_optimization_candidates(config: dict[str, Any], total_markets: int) -> list[dict[str, Any]]:
+    p = to_strategy_params(config)
+    base_pairs = max(2, min(total_markets, p.pairs_max))
+    focus_pairs = max(2, min(total_markets, max(2, int(round(base_pairs * 0.6)))))
+    broad_pairs = max(2, min(total_markets, max(base_pairs, int(round(total_markets * 0.75)))))
+    return [
+        {
+            "name": "focus-lower-entry",
+            "subset_size": focus_pairs,
+            "strategy": {
+                "pairs_max": focus_pairs,
+                "basis_entry_bps": round(max(10.0, p.basis_entry_bps * 0.8), 4),
+                "expected_convergence_ratio": round(clamp(p.expected_convergence_ratio + 0.1, 0.0, 1.0), 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "focus-higher-capacity",
+            "subset_size": focus_pairs,
+            "strategy": {
+                "pairs_max": focus_pairs,
+                "basis_entry_bps": round(max(10.0, p.basis_entry_bps * 0.75), 4),
+                "min_edge_bps": round(max(0.5, p.min_edge_bps * 0.75), 4),
+                "expected_convergence_ratio": round(clamp(p.expected_convergence_ratio + 0.15, 0.0, 1.0), 4),
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 1.15, 4),
+                "max_notional_per_pair_usd": round(p.max_notional_per_pair_usd * 1.15, 4),
+                "max_total_notional_usd": round(p.max_total_notional_usd * 1.15, 4),
+                "max_leg_notional_usd": round(p.max_leg_notional_usd * 1.1, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "balanced-tighter-exit",
+            "subset_size": base_pairs,
+            "strategy": {
+                "pairs_max": base_pairs,
+                "basis_entry_bps": round(max(10.0, p.basis_entry_bps * 0.85), 4),
+                "basis_exit_bps": round(max(0.0, p.basis_exit_bps * 0.8), 4),
+                "expected_convergence_ratio": round(clamp(p.expected_convergence_ratio + 0.05, 0.0, 1.0), 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "broad-higher-capacity",
+            "subset_size": broad_pairs,
+            "strategy": {
+                "pairs_max": broad_pairs,
+                "basis_entry_bps": round(max(10.0, p.basis_entry_bps * 0.9), 4),
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 1.1, 4),
+                "max_total_notional_usd": round(p.max_total_notional_usd * 1.2, 4),
+                "max_leg_notional_usd": round(p.max_leg_notional_usd * 1.1, 4),
+            },
+            "backtest": {},
+        },
+    ]
+
+
 def _check_serenbucks_balance(api_key: str) -> float:
     """Check SerenBucks balance. Returns balance in USD or 0.0 on error."""
     try:
@@ -999,56 +1171,18 @@ def _fetch_predictions_pair_signals(
     return result
 
 
-def run_backtest(
+def _evaluate_backtest(
+    *,
     config: dict[str, Any],
-    backtest_days: int | None,
-    backtest_file: str | None = None,
+    markets: list[dict[str, Any]],
+    source: str,
+    days: int,
+    start_ts: int,
+    end_ts: int,
+    skill_name: str,
 ) -> dict[str, Any]:
     p = to_strategy_params(config)
     bt = to_backtest_params(config)
-    days = int(clamp(backtest_days if backtest_days is not None else bt.days, bt.days_min, bt.days_max))
-    configured_backtest_file = ""
-    if isinstance(config.get("backtest"), dict):
-        configured_backtest_file = _safe_str(config["backtest"].get("backtest_file"), "")
-    selected_backtest_file = backtest_file or configured_backtest_file or None
-
-    end_ts = int(time.time())
-    start_ts = end_ts - (days * 24 * 60 * 60)
-
-    try:
-        if selected_backtest_file:
-            markets, source = _load_backtest_markets(
-                p=p,
-                bt=bt,
-                start_ts=start_ts,
-                end_ts=end_ts,
-                backtest_file=selected_backtest_file,
-            )
-        else:
-            markets, source = _load_backtest_markets(
-                p=p,
-                bt=bt,
-                start_ts=start_ts,
-                end_ts=end_ts,
-            )
-    except Exception as exc:
-        return {
-            "status": "error",
-            "error_code": "backtest_data_load_failed",
-            "message": str(exc),
-            "disclaimer": DISCLAIMER,
-            "dry_run": True,
-        }
-
-    if not markets:
-        return {
-            "status": "error",
-            "error_code": "no_backtest_markets",
-            "message": "No paired historical markets were available for backtest.",
-            "disclaimer": DISCLAIMER,
-            "dry_run": True,
-        }
-
     summaries: list[dict[str, Any]] = []
     event_pnls: list[float] = []
     considered = 0
@@ -1058,8 +1192,7 @@ def run_backtest(
     total_notional = 0.0
     telemetry: list[dict[str, Any]] = []
     orderbook_modes: dict[str, int] = defaultdict(int)
-    num_pairs = len(markets)
-    capital_per_pair = p.bankroll_usd / max(1, num_pairs)
+    capital_per_pair = p.bankroll_usd / max(1, len(markets))
 
     for market in markets:
         result = _simulate_pair(market, p, bt, allocated_capital=capital_per_pair)
@@ -1095,7 +1228,6 @@ def run_backtest(
     total_pnl = equity - p.bankroll_usd
     total_return_pct = (total_pnl / p.bankroll_usd) * 100.0
     max_drawdown_usd, max_drawdown_pct = _max_drawdown_stats(equity_curve)
-    # UI-facing percentages should not report losses below -100% or drawdowns above 100%.
     display_total_return_pct = max(total_return_pct, -100.0)
     display_max_drawdown_pct = min(max_drawdown_pct, 100.0)
     events = len(event_pnls)
@@ -1127,15 +1259,13 @@ def run_backtest(
         }
 
     write_telemetry_records(bt.telemetry_path, telemetry)
-
-    # Fetch Seren Predictions pair intelligence (costs SerenBucks)
     predictions = _fetch_predictions_pair_signals(backtest_params=bt)
     predictions_pairs_count = len(predictions.get("suggested_pairs", []))
     predictions_correlations_count = len(predictions.get("correlations", []))
 
     return {
         "status": "ok",
-        "skill": "high-throughput-paired-basis-maker",
+        "skill": skill_name,
         "mode": "backtest",
         "dry_run": True,
         "predictions_intelligence": {
@@ -1217,6 +1347,168 @@ def run_backtest(
             else {}
         ),
     }
+
+
+def _optimize_backtest(
+    *,
+    config: dict[str, Any],
+    markets: list[dict[str, Any]],
+    source: str,
+    days: int,
+    start_ts: int,
+    end_ts: int,
+    skill_name: str,
+) -> dict[str, Any]:
+    baseline = _evaluate_backtest(
+        config=config,
+        markets=markets,
+        source=source,
+        days=days,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        skill_name=skill_name,
+    )
+    if baseline.get("status") != "ok":
+        return baseline
+
+    optimization = to_optimization_params(config)
+    ranked_markets = _rank_pair_markets(markets, baseline)
+    best_result = baseline
+    best_config = _clone_config(config)
+    best_targets = _pair_target_descriptors(ranked_markets)
+    attempts = [
+        _optimization_attempt_summary(
+            name="baseline",
+            result=baseline,
+            strategy_updates={},
+            backtest_updates={},
+            targets=best_targets,
+        )
+    ]
+
+    if optimization.enabled:
+        max_attempts = max(1, optimization.max_iterations)
+        for candidate in _pair_optimization_candidates(config, len(ranked_markets))[: max(0, max_attempts - 1)]:
+            if _safe_float(best_result.get("results", {}).get("return_pct"), 0.0) >= optimization.target_return_pct:
+                break
+            subset_size = max(2, min(len(ranked_markets), _safe_int(candidate.get("subset_size"), len(ranked_markets))))
+            candidate_markets = ranked_markets[:subset_size]
+            candidate_config = _clone_config(config)
+            candidate_config.setdefault("strategy", {}).update(candidate.get("strategy", {}))
+            candidate_config.setdefault("backtest", {}).update(candidate.get("backtest", {}))
+            candidate_result = _evaluate_backtest(
+                config=candidate_config,
+                markets=candidate_markets,
+                source=f"{source}|optimized:{candidate['name']}",
+                days=days,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                skill_name=skill_name,
+            )
+            candidate_targets = _pair_target_descriptors(candidate_markets)
+            attempts.append(
+                _optimization_attempt_summary(
+                    name=_safe_str(candidate.get("name"), "candidate"),
+                    result=candidate_result,
+                    strategy_updates=_diff_section(config.get("strategy", {}), candidate_config.get("strategy", {})),
+                    backtest_updates=_diff_section(config.get("backtest", {}), candidate_config.get("backtest", {})),
+                    targets=candidate_targets,
+                )
+            )
+            if _is_better_backtest_result(candidate_result, best_result):
+                best_result = candidate_result
+                best_config = candidate_config
+                best_targets = candidate_targets
+
+    strategy_updates = _diff_section(config.get("strategy", {}), best_config.get("strategy", {}))
+    backtest_updates = _diff_section(config.get("backtest", {}), best_config.get("backtest", {}))
+    best_return_pct = _safe_float(best_result.get("results", {}).get("return_pct"), 0.0)
+    optimization_state = {
+        "enabled": optimization.enabled,
+        "target_return_pct": round(optimization.target_return_pct, 4),
+        "target_met": best_return_pct >= optimization.target_return_pct,
+        "selected_attempt": next(
+            (attempt["name"] for attempt in attempts if attempt["return_pct"] == round(best_return_pct, 4)),
+            attempts[0]["name"],
+        ),
+        "best_return_pct": round(best_return_pct, 4),
+        "attempt_count": len(attempts),
+        "target_pairs": best_targets,
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    best_result["optimization_summary"] = {
+        **optimization_state,
+        "attempts": attempts,
+        "strategy_updates": strategy_updates,
+        "backtest_updates": backtest_updates,
+    }
+    best_result["config_updates"] = {
+        "strategy": strategy_updates,
+        "backtest": backtest_updates,
+        "state": {"backtest_optimizer": optimization_state},
+    }
+    return best_result
+
+
+def run_backtest(
+    config: dict[str, Any],
+    backtest_days: int | None,
+    backtest_file: str | None = None,
+) -> dict[str, Any]:
+    p = to_strategy_params(config)
+    bt = to_backtest_params(config)
+    days = int(clamp(backtest_days if backtest_days is not None else bt.days, bt.days_min, bt.days_max))
+    configured_backtest_file = ""
+    if isinstance(config.get("backtest"), dict):
+        configured_backtest_file = _safe_str(config["backtest"].get("backtest_file"), "")
+    selected_backtest_file = backtest_file or configured_backtest_file or None
+
+    end_ts = int(time.time())
+    start_ts = end_ts - (days * 24 * 60 * 60)
+
+    try:
+        if selected_backtest_file:
+            markets, source = _load_backtest_markets(
+                p=p,
+                bt=bt,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                backtest_file=selected_backtest_file,
+            )
+        else:
+            markets, source = _load_backtest_markets(
+                p=p,
+                bt=bt,
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error_code": "backtest_data_load_failed",
+            "message": str(exc),
+            "disclaimer": DISCLAIMER,
+            "dry_run": True,
+        }
+
+    if not markets:
+        return {
+            "status": "error",
+            "error_code": "no_backtest_markets",
+            "message": "No paired historical markets were available for backtest.",
+            "disclaimer": DISCLAIMER,
+            "dry_run": True,
+        }
+
+    return _optimize_backtest(
+        config=config,
+        markets=markets,
+        source=source,
+        days=days,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        skill_name="high-throughput-paired-basis-maker",
+    )
 
 
 def _extract_live_mid_price(payload: dict[str, Any]) -> float:
@@ -1695,6 +1987,13 @@ def main() -> int:
     if backtest.get("status") != "ok":
         print(json.dumps(backtest, sort_keys=True))
         return 1
+
+    if isinstance(backtest.get("config_updates"), dict):
+        _apply_config_updates_in_place(config, backtest["config_updates"])
+        try:
+            _write_config(args.config, config)
+        except Exception as exc:  # pragma: no cover - defensive runtime path
+            backtest["config_writeback_warning"] = str(exc)
 
     if args.run_type == "backtest":
         print(json.dumps(backtest, sort_keys=True))

@@ -38,6 +38,11 @@
     "history_interval": "max",
     "history_fidelity_minutes": 60,
     "history_fetch_workers": 4,
+    "optimization": {
+      "enabled": true,
+      "target_return_pct": 25.0,
+      "max_iterations": 8
+    },
     "gamma_markets_url": "https://api.serendb.com/publishers/polymarket-data/markets",
     "clob_history_url": "https://clob.polymarket.com/prices-history"
   },

@@ -102,7 +102,9 @@ def test_config_example_runs_stateful_backtest_and_reports_replay_metrics(monkey
     assert output["results"]["starting_bankroll_usd"] == 1000
     assert output["results"]["fill_events"] > 0
     assert output["backtest_summary"]["quoted_points"] > 0
-    assert sum(output["backtest_summary"]["orderbook_modes"].values()) == len(synthetic_markets)
+    assert sum(output["backtest_summary"]["orderbook_modes"].values()) == len(
+        output["optimization_summary"]["target_pairs"]
+    )
     assert output["results"]["return_pct"] >= -100.0
     assert output["pairs"][0]["orderbook_mode"] in output["backtest_summary"]["orderbook_modes"]
 

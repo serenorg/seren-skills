@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import math
@@ -262,6 +263,46 @@ def test_spread_decay_reduces_filled_notional_when_spread_widens(tmp_path: Path)
     assert narrow_output["status"] == "ok"
     assert wide_output["status"] == "ok"
     assert wide_output["results"]["filled_notional_usd"] < narrow_output["results"]["filled_notional_usd"]
+
+
+def test_main_persists_backtest_optimizer_updates_to_config(monkeypatch, tmp_path: Path) -> None:
+    agent = _load_agent_module()
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"strategy": {"markets_max": 12}, "backtest": {}}), encoding="utf-8")
+
+    monkeypatch.setattr(
+        agent,
+        "parse_args",
+        lambda: argparse.Namespace(
+            config=str(config_path),
+            run_type="backtest",
+            markets_file=None,
+            backtest_file=None,
+            backtest_days=None,
+            yes_live=False,
+        ),
+    )
+    monkeypatch.setattr(
+        agent,
+        "run_backtest",
+        lambda config, backtest_file, backtest_days_override: {
+            "status": "ok",
+            "config_updates": {
+                "strategy": {"markets_max": 4},
+                "state": {
+                    "backtest_optimizer": {
+                        "target_met": True,
+                        "target_markets": [{"market_id": "MKT-1", "question": "Synthetic market"}],
+                    }
+                },
+            },
+        },
+    )
+
+    assert agent.main() == 0
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["strategy"]["markets_max"] == 4
+    assert persisted["state"]["backtest_optimizer"]["target_met"] is True
 
 
 def test_backtest_requires_orderbook_history_when_configured(tmp_path: Path) -> None:
