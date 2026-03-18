@@ -75,10 +75,12 @@ def test_config_example_runs_stateful_backtest_and_reports_replay_metrics(monkey
 
     defaults = module.to_strategy_params({})
     backtest_defaults = module.to_backtest_params({})
+    optimization_defaults = module.to_optimization_params({})
     assert defaults.bankroll_usd == payload["strategy"]["bankroll_usd"] == 1000
     assert backtest_defaults.bankroll_usd == payload["backtest"]["bankroll_usd"] == 100
     assert defaults.base_pair_notional_usd == payload["strategy"]["base_pair_notional_usd"]
     assert backtest_defaults.participation_rate == payload["backtest"]["participation_rate"]
+    assert optimization_defaults.max_iterations == payload["backtest"]["optimization"]["max_iterations"] == 15
 
     primary, pair = _synthetic_pair_series()
     synthetic_markets = [

@@ -325,6 +325,7 @@ def test_config_example_uses_seren_polymarket_publisher_urls() -> None:
     payload = json.loads(CONFIG_EXAMPLE_PATH.read_text(encoding="utf-8"))
     backtest = payload.get("backtest", {})
     assert agent.to_backtest_params({}).bankroll_usd == backtest.get("bankroll_usd") == 100
+    assert agent.to_optimization_params({}).max_iterations == backtest["optimization"]["max_iterations"] == 15
     assert backtest.get("gamma_markets_url", "").startswith(
         "https://api.serendb.com/publishers/polymarket-data/"
     )

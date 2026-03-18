@@ -127,7 +127,7 @@ class BacktestParams:
 class OptimizationParams:
     enabled: bool = True
     target_return_pct: float = 25.0
-    max_iterations: int = 8
+    max_iterations: int = 15
 
 
 def parse_args() -> argparse.Namespace:
@@ -314,7 +314,7 @@ def to_optimization_params(config: dict[str, Any]) -> OptimizationParams:
     return OptimizationParams(
         enabled=_safe_bool(raw.get("enabled"), True),
         target_return_pct=_safe_float(raw.get("target_return_pct"), 25.0),
-        max_iterations=max(1, _safe_int(raw.get("max_iterations"), 8)),
+        max_iterations=max(1, _safe_int(raw.get("max_iterations"), 15)),
     )
 
 

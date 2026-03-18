@@ -35,7 +35,7 @@
     "optimization": {
       "enabled": true,
       "target_return_pct": 25.0,
-      "max_iterations": 8
+      "max_iterations": 15
     },
     "predictions_enabled": false,
     "predictions_skew_strength_bps": 15,
