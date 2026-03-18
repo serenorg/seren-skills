@@ -11,7 +11,7 @@ import sys
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import pstdev
@@ -85,6 +85,7 @@ class StrategyParams:
 
 @dataclass(frozen=True)
 class BacktestParams:
+    bankroll_usd: float = 100.0
     days: int = 270
     days_min: int = 90
     days_max: int = 540
@@ -261,6 +262,7 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
     days_max = max(days_min, _safe_int(range_raw.get("max"), 540))
     days = int(clamp(_safe_int(raw.get("days"), 270), days_min, days_max))
     return BacktestParams(
+        bankroll_usd=max(1.0, _safe_float(raw.get("bankroll_usd"), 100.0)),
         days=days,
         days_min=days_min,
         days_max=days_max,
@@ -310,7 +312,7 @@ def to_optimization_params(config: dict[str, Any]) -> OptimizationParams:
 
 def _to_pair_replay_params(p: StrategyParams, bt: BacktestParams) -> PairReplayParams:
     return PairReplayParams(
-        bankroll_usd=p.bankroll_usd,
+        bankroll_usd=bt.bankroll_usd,
         min_seconds_to_resolution=p.min_seconds_to_resolution,
         min_edge_bps=p.min_edge_bps,
         maker_rebate_bps=p.maker_rebate_bps,
@@ -1183,6 +1185,7 @@ def _evaluate_backtest(
 ) -> dict[str, Any]:
     p = to_strategy_params(config)
     bt = to_backtest_params(config)
+    p = replace(p, bankroll_usd=bt.bankroll_usd)
     summaries: list[dict[str, Any]] = []
     event_pnls: list[float] = []
     considered = 0

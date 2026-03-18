@@ -72,10 +72,12 @@ def test_dry_run_fixture_blocks_live_execution() -> None:
 def test_config_example_runs_stateful_backtest_and_reports_replay_metrics(monkeypatch) -> None:
     module = _load_agent_module()
     payload = json.loads(CONFIG_EXAMPLE_PATH.read_text(encoding="utf-8"))
+    payload["backtest"]["min_events"] = 1
 
     defaults = module.to_strategy_params({})
     backtest_defaults = module.to_backtest_params({})
     assert defaults.bankroll_usd == payload["strategy"]["bankroll_usd"] == 1000
+    assert backtest_defaults.bankroll_usd == payload["backtest"]["bankroll_usd"] == 100
     assert defaults.base_pair_notional_usd == payload["strategy"]["base_pair_notional_usd"]
     assert backtest_defaults.participation_rate == payload["backtest"]["participation_rate"]
 
@@ -100,7 +102,7 @@ def test_config_example_runs_stateful_backtest_and_reports_replay_metrics(monkey
 
     output = module.run_backtest(payload, None)
     assert output["status"] == "ok"
-    assert output["results"]["starting_bankroll_usd"] == 1000
+    assert output["results"]["starting_bankroll_usd"] == 100
     assert output["results"]["fill_events"] > 0
     assert output["backtest_summary"]["quoted_points"] > 0
     assert sum(output["backtest_summary"]["orderbook_modes"].values()) == len(synthetic_markets)
@@ -163,7 +165,13 @@ def test_backtest_optimizer_selects_targeted_pair_subset_and_tuned_config(monkey
     now_ts = int(time.time())
     config = {
         "strategy": {"bankroll_usd": 1000, "pairs_max": 3, "basis_entry_bps": 35, "base_pair_notional_usd": 600},
-        "backtest": {"days": 90, "min_events": 1, "telemetry_path": "", "optimization": {"target_return_pct": 25.0}},
+        "backtest": {
+            "bankroll_usd": 100,
+            "days": 90,
+            "min_events": 1,
+            "telemetry_path": "",
+            "optimization": {"target_return_pct": 25.0},
+        },
     }
     markets = [
         {"market_id": "M0", "pair_market_id": "P0", "question": "A", "pair_question": "B", "history": [], "pair_history": [], "rebate_bps": 2.3},

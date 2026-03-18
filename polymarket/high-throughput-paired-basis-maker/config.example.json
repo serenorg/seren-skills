@@ -16,6 +16,7 @@
     "max_live_drawdown_pct": 15
   },
   "backtest": {
+    "bankroll_usd": 100,
     "days": 270,
     "days_range": {
       "min": 90,
