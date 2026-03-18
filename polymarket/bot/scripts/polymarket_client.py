@@ -10,10 +10,13 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-# Add _shared to path for DirectClobTrader / fetch_book
-SHARED_DIR = Path(__file__).resolve().parents[2] / "_shared"
-if str(SHARED_DIR) not in sys.path:
-    sys.path.insert(0, str(SHARED_DIR))
+# Try local bundled copy first (installed skills), then shared directory (dev repo)
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_SHARED_DIR = Path(__file__).resolve().parents[2] / "_shared"
+for _candidate in (_SCRIPT_DIR, _SHARED_DIR):
+    if (_candidate / "polymarket_live.py").exists() and str(_candidate) not in sys.path:
+        sys.path.insert(0, str(_candidate))
+        break
 
 from seren_client import SerenClient
 
