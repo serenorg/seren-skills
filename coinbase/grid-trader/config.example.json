@@ -1,6 +1,12 @@
 {
   "campaign_name": "BTC_Grid_2026",
   "trading_pair": "BTC-USD",
+  "backtest": {
+    "auto_optimize_on_invoke": true,
+    "bankroll_usd": 100.0,
+    "target_pnl_pct": 25.0,
+    "horizon_days": 30
+  },
   "strategy": {
     "bankroll": 1000.0,
     "grid_levels": 20,

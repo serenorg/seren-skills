@@ -1,5 +1,11 @@
 {
   "campaign_name": "Grid_2026",
+  "backtest": {
+    "auto_optimize_on_invoke": true,
+    "bankroll_usd": 100.0,
+    "target_pnl_pct": 25.0,
+    "horizon_days": 30
+  },
 
   "_comment_pair": "Use 'trading_pair' for a fixed pair, or 'pairs' to let the bot auto-select the best one.",
   "pairs": ["XBTUSD", "ETHUSD", "SOLUSD", "ADAUSD", "DOTUSD"],

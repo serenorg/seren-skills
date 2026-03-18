@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from self_learning import ensure_champion, run_label_update
+from backtest_optimizer import optimize_scan_config
 from seren_client import SerenClient
 from serendb_bootstrap import resolve_dsn
 from serendb_storage import SerenDBStorage
@@ -1475,24 +1476,42 @@ def main() -> None:
     engine.ensure_schema()
 
     mode = args.mode or config.get("mode", "paper-sim")
+    optimization: Optional[Dict[str, Any]] = None
     if args.run_type == "scan":
-        result = engine.run_scan(
-            mode=mode,
-            run_profile=config.get("run_profile", "single"),
-            run_type="scan",
-            universe=config.get("universe", DEFAULT_UNIVERSE),
-            max_names_scored=int(config.get("max_names_scored", 30)),
-            max_names_orders=int(config.get("max_names_orders", 8)),
-            min_conviction=float(config.get("min_conviction", 65.0)),
-            learning_mode=config.get("learning_mode", "adaptive-paper"),
-            portfolio_notional_usd=float(config.get("portfolio_notional_usd", 100000.0)),
-            hedge_ticker=str(config.get("hedge_ticker", "QQQ")),
-            hedge_ratio=float(config.get("hedge_ratio", 1.0)),
-        )
+        def _run_scan(candidate: Dict[str, Any]) -> Dict[str, Any]:
+            return engine.run_scan(
+                mode=mode,
+                run_profile=candidate.get("run_profile", "single"),
+                run_type="scan",
+                universe=candidate.get("universe", DEFAULT_UNIVERSE),
+                max_names_scored=int(candidate.get("max_names_scored", 30)),
+                max_names_orders=int(candidate.get("max_names_orders", 8)),
+                min_conviction=float(candidate.get("min_conviction", 65.0)),
+                learning_mode=candidate.get("learning_mode", "adaptive-paper"),
+                portfolio_notional_usd=float(candidate.get("portfolio_notional_usd", 100000.0)),
+                hedge_ticker=str(candidate.get("hedge_ticker", "QQQ")),
+                hedge_ratio=float(candidate.get("hedge_ratio", 1.0)),
+            )
+
+        if mode != "live":
+            optimized = optimize_scan_config(base_config=config, run_scan=_run_scan)
+            config = optimized["config"]
+            optimization = optimized["summary"]
+            if args.config:
+                Path(args.config).write_text(
+                    json.dumps(config, sort_keys=True, indent=2),
+                    encoding="utf-8",
+                )
+            result = optimized["result"] or _run_scan(config)
+        else:
+            result = _run_scan(config)
     elif args.run_type == "monitor":
         result = engine.run_monitor(mode=mode, run_profile=config.get("run_profile", "single"), run_type="monitor")
     else:
         result = engine.run_post_close(mode=mode, run_profile=config.get("run_profile", "single"))
+
+    if optimization is not None:
+        result["optimization"] = optimization
 
     print(json.dumps(result, indent=2, default=str))
 

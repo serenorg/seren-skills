@@ -10,6 +10,7 @@ import sys
 _SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 _MODULES_TO_CLEAR = (
     "agent",
+    "backtest_optimizer",
     "dca_engine",
     "logger",
     "optimizer",
@@ -116,6 +117,25 @@ def test_single_asset_run_once_ok(tmp_path: Path, monkeypatch) -> None:
     )
     assert result["status"] == "ok"
     assert result["mode"] == "single_asset"
+
+
+def test_run_once_persists_100_bankroll_backtest_selection(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SEREN_API_KEY", "sb_local_test")
+    config = tmp_path / "config.json"
+    _write_config(config, "single_asset")
+
+    result = run_once(
+        config_path=str(config),
+        allow_live=False,
+        accept_risk_disclaimer=True,
+    )
+
+    updated = json.loads(config.read_text(encoding="utf-8"))
+    assert result["optimization"]["bankroll_usd"] == 100.0
+    assert result["optimization"]["target_met"] is True
+    assert updated["inputs"]["total_dca_amount_usd"] == 100.0
+    assert updated["risk"]["max_notional_usd"] >= 100.0
 
 
 def test_first_run_requires_explicit_disclaimer_acceptance(tmp_path: Path, monkeypatch) -> None:

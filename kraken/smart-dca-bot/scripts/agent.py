@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover
         return False
 
 from dca_engine import build_window, should_force_fill, window_progress
+from backtest_optimizer import optimize_invocation_config
 from kraken_client import KrakenAPIError, KrakenClient, KrakenCredentials
 from logger import AuditLogger
 from optimizer import SUPPORTED_STRATEGIES, compute_rsi, decide_execution
@@ -180,6 +181,12 @@ def _default_config() -> dict[str, Any]:
         "seren": {
             "auto_register_key": True,
             "api_base_url": "https://api.serendb.com",
+        },
+        "backtest": {
+            "auto_optimize_on_invoke": True,
+            "bankroll_usd": 100.0,
+            "target_pnl_pct": 25.0,
+            "horizon_days": 180,
         },
     }
 
@@ -1495,6 +1502,11 @@ def _collect_order_ids(payload: dict[str, Any]) -> list[str]:
     return order_ids
 
 
+def _persist_config(config_path: str, config: dict[str, Any]) -> None:
+    path = Path(config_path)
+    path.write_text(json.dumps(config, sort_keys=True, indent=2), encoding="utf-8")
+
+
 def run_once(
     *,
     config_path: str,
@@ -1555,26 +1567,36 @@ def run_once(
     if store.enabled:
         store.ensure_schema()
 
-    session_id = str(uuid.uuid4())
-    store.create_session(session_id, mode, config)
-
-    logger.log_event(
-        "run_started",
-        {
-            "session_id": session_id,
-            "mode": mode,
-            "dry_run": dry_run,
-            "serendb_enabled": store.enabled,
-            "runtime_version": LIVE_SAFETY_VERSION,
-        },
-    )
-
     client: KrakenClient | None = None
     live_risk: dict[str, Any] | None = None
     execution_context: dict[str, Any] = {"order_ids": []}
+    optimization: dict[str, Any] | None = None
+    session_id = str(uuid.uuid4())
 
     try:
         client = build_kraken_client(config)
+        if dry_run:
+            optimized = optimize_invocation_config(
+                config=config,
+                get_snapshot=lambda pair: get_market_snapshot(client, pair),
+            )
+            config = optimized["config"]
+            optimization = optimized["summary"]
+            _persist_config(config_path, config)
+
+        store.create_session(session_id, mode, config)
+
+        logger.log_event(
+            "run_started",
+            {
+                "session_id": session_id,
+                "mode": mode,
+                "dry_run": dry_run,
+                "serendb_enabled": store.enabled,
+                "runtime_version": LIVE_SAFETY_VERSION,
+                "optimization": optimization,
+            },
+        )
         if (not dry_run) and client is not None:
             live_risk = _enforce_live_safety(config=config, client=client, mode=mode)
 
@@ -1665,6 +1687,7 @@ def run_once(
                 }
             ),
             "payload": payload,
+            "optimization": optimization,
             "runtime_version": LIVE_SAFETY_VERSION,
             "disclaimer": IMPORTANT_DISCLAIMER,
         }
@@ -1710,6 +1733,7 @@ def run_once(
             "session_id": session_id,
             "cancelled_on_error": cancelled_on_error,
             "live_risk": live_risk,
+            "optimization": optimization,
             "runtime_version": LIVE_SAFETY_VERSION,
             "disclaimer": IMPORTANT_DISCLAIMER,
         }

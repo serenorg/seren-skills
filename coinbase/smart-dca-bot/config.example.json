@@ -65,5 +65,11 @@
   "seren": {
     "auto_register_key": true,
     "api_base_url": "https://api.serendb.com"
+  },
+  "backtest": {
+    "auto_optimize_on_invoke": true,
+    "bankroll_usd": 100.0,
+    "target_pnl_pct": 25.0,
+    "horizon_days": 180
   }
 }

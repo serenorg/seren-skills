@@ -4,8 +4,165 @@ Grid Manager - Calculates and manages grid trading levels
 Handles grid construction, order placement logic, and grid updates
 """
 
+from copy import deepcopy
 from typing import Dict, List, Tuple, Optional
 import math
+
+
+DEFAULT_BACKTEST_SETTINGS = {
+    "auto_optimize_on_invoke": True,
+    "bankroll_usd": 100.0,
+    "target_pnl_pct": 25.0,
+    "horizon_days": 30,
+    "fills_per_day_candidates": [12, 15, 20, 25],
+    "grid_levels_candidates": [10, 12, 16, 20],
+    "spacing_percent_candidates": [1.0, 2.0, 3.0, 4.0],
+    "order_size_percent_candidates": [5.0, 10.0, 15.0, 20.0],
+    "price_range_scale_candidates": [0.8, 1.0, 1.2],
+    "stop_loss_buffer_pct": 20.0,
+}
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    merged = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def resolve_backtest_settings(config: dict) -> dict:
+    raw = config.get("backtest", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    settings = _deep_merge(DEFAULT_BACKTEST_SETTINGS, raw)
+    settings["bankroll_usd"] = float(settings.get("bankroll_usd", 100.0))
+    settings["target_pnl_pct"] = float(settings.get("target_pnl_pct", 25.0))
+    settings["horizon_days"] = int(settings.get("horizon_days", 30))
+    settings["auto_optimize_on_invoke"] = bool(settings.get("auto_optimize_on_invoke", True))
+    settings["stop_loss_buffer_pct"] = float(settings.get("stop_loss_buffer_pct", 20.0))
+    return settings
+
+
+def optimize_backtest_configuration(config: dict) -> dict:
+    settings = resolve_backtest_settings(config)
+    strategy = deepcopy(config.get("strategy", {}))
+    risk_management = deepcopy(config.get("risk_management", {}))
+    price_range = strategy.get("price_range", {})
+    minimum = float(price_range.get("min", 0.0))
+    maximum = float(price_range.get("max", 0.0))
+    center = (minimum + maximum) / 2.0 if minimum and maximum else 0.0
+    width = max(maximum - minimum, 1.0)
+    bankroll = max(float(settings["bankroll_usd"]), 1.0)
+
+    attempts = 0
+    best_attempt = None
+
+    for scale in settings.get("price_range_scale_candidates", []):
+        half_width = max((width * float(scale)) / 2.0, 1.0)
+        scaled_range = {
+            "min": round(center - half_width, 2),
+            "max": round(center + half_width, 2),
+        }
+        for grid_levels in settings.get("grid_levels_candidates", []):
+            for spacing_percent in settings.get("spacing_percent_candidates", []):
+                for order_size_percent in settings.get("order_size_percent_candidates", []):
+                    order_size_usd = bankroll * (float(order_size_percent) / 100.0)
+                    grid = GridManager(
+                        min_price=scaled_range["min"],
+                        max_price=scaled_range["max"],
+                        grid_levels=int(grid_levels),
+                        spacing_percent=float(spacing_percent),
+                        order_size_usd=order_size_usd,
+                    )
+                    for fills_per_day in settings.get("fills_per_day_candidates", []):
+                        expected = grid.calculate_expected_profit(
+                            fills_per_day=int(fills_per_day),
+                            bankroll=bankroll,
+                        )
+                        attempts += 1
+                        candidate = {
+                            "modeled_pnl_pct": float(expected["monthly_return_percent"]),
+                            "fills_per_day_assumption": int(fills_per_day),
+                            "selected_config": {
+                                "strategy": {
+                                    "bankroll": round(bankroll, 2),
+                                    "grid_levels": int(grid_levels),
+                                    "grid_spacing_percent": float(spacing_percent),
+                                    "order_size_percent": float(order_size_percent),
+                                    "price_range": scaled_range,
+                                    "scan_interval_seconds": int(strategy.get("scan_interval_seconds", 60)),
+                                },
+                                "risk_management": {
+                                    **risk_management,
+                                    "stop_loss_bankroll": round(
+                                        bankroll * (1.0 - (float(settings["stop_loss_buffer_pct"]) / 100.0)),
+                                        2,
+                                    ),
+                                },
+                            },
+                            "expected": expected,
+                        }
+                        if best_attempt is None or candidate["modeled_pnl_pct"] > best_attempt["modeled_pnl_pct"]:
+                            best_attempt = candidate
+
+    if best_attempt is None:
+        return {
+            "config": deepcopy(config),
+            "summary": {
+                "applied": False,
+                "target_met": False,
+                "attempt_count": 0,
+                "bankroll_usd": bankroll,
+                "target_pnl_pct": settings["target_pnl_pct"],
+                "modeled_pnl_pct": 0.0,
+                "selected_targets": {
+                    "trading_pair": config.get("trading_pair"),
+                    "pairs": list(config.get("pairs", [])),
+                },
+                "selected_config": {},
+            },
+        }
+
+    updated = deepcopy(config)
+    updated["strategy"] = _deep_merge(updated.get("strategy", {}), best_attempt["selected_config"]["strategy"])
+    updated["risk_management"] = _deep_merge(
+        updated.get("risk_management", {}),
+        best_attempt["selected_config"]["risk_management"],
+    )
+    updated["backtest"] = _deep_merge(
+        settings,
+        {
+            "selected_config": best_attempt["selected_config"],
+            "selected_targets": {
+                "trading_pair": updated.get("trading_pair"),
+                "pairs": list(updated.get("pairs", [])),
+            },
+            "last_modeled_pnl_pct": round(best_attempt["modeled_pnl_pct"], 4),
+            "last_attempt_count": attempts,
+            "last_target_met": best_attempt["modeled_pnl_pct"] >= float(settings["target_pnl_pct"]),
+        },
+    )
+    return {
+        "config": updated,
+        "summary": {
+            "applied": True,
+            "bankroll_usd": round(bankroll, 2),
+            "target_pnl_pct": float(settings["target_pnl_pct"]),
+            "target_met": best_attempt["modeled_pnl_pct"] >= float(settings["target_pnl_pct"]),
+            "attempt_count": attempts,
+            "modeled_pnl_pct": round(best_attempt["modeled_pnl_pct"], 4),
+            "selected_targets": {
+                "trading_pair": updated.get("trading_pair"),
+                "pairs": list(updated.get("pairs", [])),
+            },
+            "selected_config": best_attempt["selected_config"],
+            "expected": best_attempt["expected"],
+            "horizon_days": int(settings["horizon_days"]),
+        },
+    }
 
 
 class GridManager:

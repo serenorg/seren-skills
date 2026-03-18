@@ -3,6 +3,11 @@
   "mode": "paper-sim",
   "run_profile": "continuous",
   "learning_mode": "adaptive-paper",
+  "backtest": {
+    "auto_optimize_on_invoke": true,
+    "bankroll_usd": 100.0,
+    "target_pnl_pct": 25.0
+  },
   "strict_required_feeds": true,
   "max_names_scored": 30,
   "max_names_orders": 8,

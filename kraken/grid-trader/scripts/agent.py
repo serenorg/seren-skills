@@ -25,7 +25,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from seren_client import SerenClient
-from grid_manager import GridManager
+from grid_manager import GridManager, optimize_backtest_configuration
 from position_tracker import PositionTracker
 from logger import GridTraderLogger
 from serendb_store import SerenDBStore
@@ -86,9 +86,11 @@ class KrakenGridTrader:
         # Load environment
         load_dotenv()
 
+        self.config_path = config_path
         # Load config
         self.config = self._load_config(config_path)
         self.is_dry_run = dry_run
+        self.backtest_optimization: Optional[Dict[str, Any]] = None
 
         # Initialize clients
         api_key = os.getenv('SEREN_API_KEY')
@@ -197,6 +199,28 @@ class KrakenGridTrader:
         risk.setdefault('max_live_drawdown_pct', 0.0)
 
         return config
+
+    def _persist_config(self) -> None:
+        config_path = Path(self.config_path)
+        config_path.write_text(
+            json.dumps(self.config, sort_keys=True, indent=2),
+            encoding='utf-8',
+        )
+
+    def _apply_backtest_optimization(self) -> None:
+        optimization = optimize_backtest_configuration(self.config)
+        summary = optimization.get('summary', {})
+        if not summary.get('applied'):
+            self.backtest_optimization = summary
+            return
+
+        updated = optimization['config']
+        if json.dumps(updated, sort_keys=True) != json.dumps(self.config, sort_keys=True):
+            self.config = updated
+            self._persist_config()
+        else:
+            self.config = updated
+        self.backtest_optimization = summary
 
     def _load_live_risk_state(self) -> Dict[str, Any]:
         try:
@@ -370,11 +394,14 @@ class KrakenGridTrader:
             ),
         )
 
-    def setup(self):
+    def setup(self, *, optimize_backtest: bool = True):
         """Phase 1: Setup and validate configuration"""
         print("\n============================================================")
         print("KRAKEN GRID TRADER - SETUP")
         print("============================================================\n")
+
+        if optimize_backtest:
+            self._apply_backtest_optimization()
 
         # Auto-select the best pair from the candidate list (if configured)
         self._select_trading_pair()
@@ -394,6 +421,13 @@ class KrakenGridTrader:
         print(f"Price Range:     ${strategy['price_range']['min']:,.0f} - ${strategy['price_range']['max']:,.0f}")
         print(f"Scan Interval:   {strategy['scan_interval_seconds']}s")
         print(f"Stop Loss:       ${risk['stop_loss_bankroll']:,.2f}")
+        if self.backtest_optimization and self.backtest_optimization.get('applied'):
+            print(
+                "Backtest Target: "
+                f"{self.backtest_optimization['modeled_pnl_pct']}% / "
+                f"{self.backtest_optimization['target_pnl_pct']}% monthly target "
+                f"(attempts={self.backtest_optimization['attempt_count']})"
+            )
 
         # Initialize grid manager
         order_size_usd = strategy['bankroll'] * (strategy['order_size_percent'] / 100)
@@ -472,6 +506,7 @@ class KrakenGridTrader:
                     "stop_loss_bankroll": risk['stop_loss_bankroll'],
                     "current_price": current_price,
                     "expected": expected,
+                    "backtest_optimization": self.backtest_optimization,
                 },
             ),
         )
@@ -1044,12 +1079,12 @@ def main():
     # Execute command
     try:
         if args.command == 'setup':
-            agent.setup()
+            agent.setup(optimize_backtest=True)
         elif args.command == 'dry-run':
-            agent.setup()
+            agent.setup(optimize_backtest=True)
             agent.dry_run(cycles=args.cycles)
         elif args.command == 'start':
-            agent.setup()
+            agent.setup(optimize_backtest=False)
             agent.start()
         elif args.command == 'status':
             agent.status()
