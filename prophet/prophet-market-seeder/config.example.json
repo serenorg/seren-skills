@@ -14,6 +14,7 @@
     "candidate_limit": 12,
     "command": "run",
     "json_output": false,
+    "prophet_email": "",
     "referral_code": "AGENTACCESS",
     "strict_mode": true,
     "submit_limit": 3

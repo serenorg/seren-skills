@@ -32,9 +32,24 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 
 ## Auth Contract
 
-- Prophet backend requests must include `Authorization: Bearer <PROPHET_SESSION_TOKEN>`.
-- The correct token source is `localStorage["privy:token"]` from an authenticated `app.prophetmarket.ai` browser session.
-- The `privy-session` cookie by itself is not sufficient for authenticated GraphQL access.
+The skill acquires the Prophet session token automatically via Playwright using the email OTP flow:
+
+1. Navigate to `https://app.prophetmarket.ai`
+2. Click the "Connect" button to open the Privy auth modal
+3. Check `localStorage["privy:token"]` — if already set, use it directly
+4. If not authenticated:
+   a. Prompt user for their Prophet email (or read from config `inputs.prophet_email`)
+   b. Fill `#email-input` and click `button:has-text("Submit")`
+   c. Privy sends a 6-digit OTP to the user's email
+   d. Prompt user for the 6-digit code
+   e. Fill `input[name="code-0"]` through `input[name="code-5"]`
+   f. Poll `localStorage["privy:token"]` until non-null (with 60s timeout)
+5. Extract the JWT and pass it as `PROPHET_SESSION_TOKEN`
+
+**Important:**
+- Always use the email OTP path (wallet connect and Google OAuth do not work in Playwright)
+- The token is a JWT starting with `eyJ...` and expires after ~1 hour
+- The `privy-session` cookie alone is not sufficient for authenticated GraphQL access
 
 ## First-Run Setup
 
