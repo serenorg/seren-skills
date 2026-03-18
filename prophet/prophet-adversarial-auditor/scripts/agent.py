@@ -171,7 +171,7 @@ class SerenApi:
         if not api_key:
             raise ValueError("SEREN_API_KEY is required")
         self.api_key = api_key
-        self.api_base = (api_base or os.getenv("SEREN_API_BASE") or "https://api.serendb.com").rstrip("/")
+        self.api_base = (api_base or os.getenv("SEREN_API_BASE") or "https://api.serendb.com/publishers/seren-db").rstrip("/")
 
     def _request(
         self,

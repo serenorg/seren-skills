@@ -13,6 +13,7 @@
   "inputs": {
     "command": "status",
     "json_output": false,
+    "prophet_email": "",
     "recent_window_days": 7,
     "reminder_enabled": true,
     "strict_mode": true,

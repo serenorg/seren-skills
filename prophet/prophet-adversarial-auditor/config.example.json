@@ -14,6 +14,7 @@
     "command": "run",
     "include_loss_hypotheses": true,
     "json_output": false,
+    "prophet_email": "",
     "lookback_days": 30,
     "severity_threshold": "medium",
     "strict_mode": true
