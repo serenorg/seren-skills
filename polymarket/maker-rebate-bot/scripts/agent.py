@@ -10,7 +10,7 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import pstdev
@@ -78,6 +78,7 @@ class StrategyParams:
 
 @dataclass(frozen=True)
 class BacktestParams:
+    bankroll_usd: float = 100.0
     days: int = 90
     fidelity_minutes: int = 60
     participation_rate: float = 0.6
@@ -319,6 +320,7 @@ def to_params(config: dict[str, Any]) -> StrategyParams:
 def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
     backtest = config.get("backtest", {})
     return BacktestParams(
+        bankroll_usd=max(1.0, _safe_float(backtest.get("bankroll_usd"), 100.0)),
         days=max(1, _safe_int(backtest.get("days"), 90)),
         fidelity_minutes=max(1, _safe_int(backtest.get("fidelity_minutes"), 60)),
         participation_rate=clamp(
@@ -1768,6 +1770,7 @@ def _evaluate_backtest(
 ) -> dict[str, Any]:
     strategy_params = to_params(config)
     backtest_params = to_backtest_params(config)
+    strategy_params = replace(strategy_params, bankroll_usd=backtest_params.bankroll_usd)
     market_summaries: list[dict[str, Any]] = []
     equity_curve = [strategy_params.bankroll_usd]
     total_considered = 0

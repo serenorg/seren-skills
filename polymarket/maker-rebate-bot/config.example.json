@@ -15,6 +15,7 @@
     "max_live_drawdown_pct": 15
   },
   "backtest": {
+    "bankroll_usd": 100,
     "days": 90,
     "fidelity_minutes": 60,
     "participation_rate": 0.6,

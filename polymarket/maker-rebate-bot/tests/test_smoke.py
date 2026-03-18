@@ -56,6 +56,7 @@ def _base_backtest_payload(now_ts: int, telemetry_path: Path) -> dict:
     return {
         "execution": {"dry_run": True, "live_mode": False},
         "backtest": {
+            "bankroll_usd": 100,
             "days": 90,
             "fidelity_minutes": 60,
             "participation_rate": 0.25,
@@ -210,6 +211,7 @@ def test_backtest_run_type_returns_stateful_result_and_telemetry(tmp_path: Path)
     assert output["backtest_summary"]["source"] == "config"
     assert output["backtest_summary"]["markets_selected"] == 1
     assert output["backtest_summary"]["orderbook_mode"] == "historical"
+    assert output["results"]["starting_bankroll_usd"] == 100
     assert output["results"]["events"] > 0
     assert output["results"]["telemetry_path"] == str(telemetry_path)
     telemetry_lines = telemetry_path.read_text(encoding="utf-8").strip().splitlines()
@@ -319,8 +321,10 @@ def test_backtest_requires_orderbook_history_when_configured(tmp_path: Path) -> 
 
 
 def test_config_example_uses_seren_polymarket_publisher_urls() -> None:
+    agent = _load_agent_module()
     payload = json.loads(CONFIG_EXAMPLE_PATH.read_text(encoding="utf-8"))
     backtest = payload.get("backtest", {})
+    assert agent.to_backtest_params({}).bankroll_usd == backtest.get("bankroll_usd") == 100
     assert backtest.get("gamma_markets_url", "").startswith(
         "https://api.serendb.com/publishers/polymarket-data/"
     )
