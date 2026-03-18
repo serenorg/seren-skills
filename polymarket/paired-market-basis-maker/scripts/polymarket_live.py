@@ -1530,13 +1530,53 @@ def execute_single_market_quotes(
                     )
                 else:
                     bid_size = bid_notional / max(bid_price, 1e-9)
+                    try:
+                        response = _invoke_trader_call(
+                            f"create_order_buy:{market['market_id']}",
+                            lambda: trader.create_order(
+                                token_id=token_id,
+                                side="BUY",
+                                price=bid_price,
+                                size=bid_size,
+                                tick_size=tick_size,
+                                neg_risk=neg_risk,
+                                fee_rate_bps=fee_rate_bps,
+                            ),
+                            execution_settings,
+                        )
+                        placements.append(
+                            {
+                                "market_id": market["market_id"],
+                                "token_id": token_id,
+                                "side": "BUY",
+                                "price": bid_price,
+                                "size": round(bid_size, 6),
+                                "response": response,
+                            }
+                        )
+                        available_cash_usd = max(0.0, remaining_cash_usd)
+                    except Exception as order_exc:
+                        skips.append(
+                            {
+                                "market_id": market["market_id"],
+                                "reason": "order_placement_failed",
+                                "side": "BUY",
+                                "error": str(order_exc),
+                            }
+                        )
+
+            available_shares = max(0.0, position_sizes.get(token_id, 0.0))
+            sell_notional = min(ask_notional, available_shares * max(ask_price, 0.0))
+            if ask_price > 0.0 and sell_notional > 0.0:
+                ask_size = sell_notional / max(ask_price, 1e-9)
+                try:
                     response = _invoke_trader_call(
-                        f"create_order_buy:{market['market_id']}",
+                        f"create_order_sell:{market['market_id']}",
                         lambda: trader.create_order(
                             token_id=token_id,
-                            side="BUY",
-                            price=bid_price,
-                            size=bid_size,
+                            side="SELL",
+                            price=ask_price,
+                            size=ask_size,
                             tick_size=tick_size,
                             neg_risk=neg_risk,
                             fee_rate_bps=fee_rate_bps,
@@ -1547,41 +1587,21 @@ def execute_single_market_quotes(
                         {
                             "market_id": market["market_id"],
                             "token_id": token_id,
-                            "side": "BUY",
-                            "price": bid_price,
-                            "size": round(bid_size, 6),
+                            "side": "SELL",
+                            "price": ask_price,
+                            "size": round(ask_size, 6),
                             "response": response,
                         }
                     )
-                    available_cash_usd = max(0.0, remaining_cash_usd)
-
-            available_shares = max(0.0, position_sizes.get(token_id, 0.0))
-            sell_notional = min(ask_notional, available_shares * max(ask_price, 0.0))
-            if ask_price > 0.0 and sell_notional > 0.0:
-                ask_size = sell_notional / max(ask_price, 1e-9)
-                response = _invoke_trader_call(
-                    f"create_order_sell:{market['market_id']}",
-                    lambda: trader.create_order(
-                        token_id=token_id,
-                        side="SELL",
-                        price=ask_price,
-                        size=ask_size,
-                        tick_size=tick_size,
-                        neg_risk=neg_risk,
-                        fee_rate_bps=fee_rate_bps,
-                    ),
-                    execution_settings,
-                )
-                placements.append(
-                    {
-                        "market_id": market["market_id"],
-                        "token_id": token_id,
-                        "side": "SELL",
-                        "price": ask_price,
-                        "size": round(ask_size, 6),
-                        "response": response,
-                    }
-                )
+                except Exception as order_exc:
+                    skips.append(
+                        {
+                            "market_id": market["market_id"],
+                            "reason": "order_placement_failed",
+                            "side": "SELL",
+                            "error": str(order_exc),
+                        }
+                    )
             else:
                 skips.append(
                     {
