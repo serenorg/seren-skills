@@ -44,6 +44,8 @@ Live execution requires both:
 ## Runtime Files
 
 - `scripts/agent.py` - basis backtest + paired trade-intent runtime
+- `scripts/setup_cron.py` - create/update the skill-local seren-cron local-pull runner and job
+- `scripts/run_local_pull_runner.py` - poll seren-cron and execute due local jobs on this machine
 - `config.example.json` - strategy parameters and live backtest defaults
 - `.env.example` - environment template for API credentials
 - `requirements.txt` - installs `py-clob-client` for live order signing/submission
@@ -102,111 +104,54 @@ This skill can lose money. Basis spreads can persist or widen, hedge legs can sl
 
 ## Seren-Cron Integration
 
-Use `seren-cron` to run this skill on a schedule — no terminal windows to keep open, no daemons, no permanent computer changes required. Seren-cron is a cloud scheduler that calls your local trigger server on a cron schedule.
+Use the skill-local `seren-cron` local-pull runner for scheduling. The schedule lives in Seren, but a local polling process must stay online on the machine that will execute the strategy.
 
-**Requirements:** Seren Desktop login or a valid `SEREN_API_KEY`.
+**Requirements:** Seren Desktop login or a valid `SEREN_API_KEY`. Live schedules also require Polymarket credentials plus funded SerenBucks.
+
+Current Seren funding flow:
+
+- Buy SerenBucks at `https://serendb.com/serenbucks` or `https://console.serendb.com`
+- Stripe deposits start at `$5`
+- A verified email is required before Stripe deposits
+- API-first users can fund with `POST /wallet/deposit`
 
 ### Step 1 — Check seren-cron is available
 
-Before scheduling, verify the publisher is reachable using `mcp__seren__call_publisher`:
-
 ```text
 publisher: seren-cron
-path:      /health
+path:      /api/health
 method:    GET
 ```
 
-If this call fails, **stop here** and tell the user:
+### Step 2 — Create or update the local pull schedule
 
-> "The seren-cron service could not be reached. Please send this error to <hello@serendb.com> for support."
-
-### Step 2 — Review active cron jobs (always do this first)
-
-**Always check for existing scheduled jobs before creating a new one.** A user may have forgotten a live job is already running.
-
-```text
-publisher: seren-cron
-path:      /jobs
-method:    GET
-```
-
-If jobs for this skill already exist, show them to the user and ask:
-
-> "You have [N] active cron job(s) for this skill. Would you like to:
->
-> 1. Keep them running (recommended if intentional)
-> 2. Stop all and create a new schedule
-> 3. Cancel"
-
-**Do not create a duplicate cron job without explicit user confirmation.**
-
-### Step 3 — Start the local trigger server
-
-Start the webhook server that seren-cron will call on each scheduled tick:
+Create or upsert the runner plus the local-pull job:
 
 ```bash
-SEREN_API_KEY="$SEREN_API_KEY" python3 scripts/run_agent_server.py --config config.json --port 8080
+python3 scripts/setup_cron.py create --config config.json --schedule "*/15 * * * *"
 ```
 
-This process runs in your terminal session. When you close the terminal, it stops — **that is expected and correct**. Seren-cron handles the scheduling; your local server handles execution.
+For live mode, include `--yes-live` after you have set `execution.live_mode=true` in `config.json`.
 
-### Step 4 — Create the cron schedule
+### Step 3 — Start the local pull runner
 
-With the server running, create the scheduled job:
+Start the polling process that claims due work and runs `scripts/agent.py` locally:
 
-```text
-publisher: seren-cron
-path:      /jobs
-method:    POST
-body: {
-  "name":            "polymarket-htpbm-live",
-  "url":             "http://localhost:8080/run",
-  "method":          "POST",
-  "cron_expression": "*/15 * * * *",
-  "timezone":        "UTC",
-  "enabled":         true,
-  "timeout_seconds": 60
-}
+```bash
+python3 scripts/run_local_pull_runner.py --config config.json
 ```
 
-Save the returned `job_id` — you need it to pause, resume, or delete the job later.
+Leave this process running on the machine that should execute the strategy.
 
-### Step 5 — Manage the schedule
+### Step 4 — Manage the schedule and runner
 
-**List all active jobs:**
-
-```text
-publisher: seren-cron, path: /jobs, method: GET
+```bash
+python3 scripts/setup_cron.py list
+python3 scripts/setup_cron.py list-runners
+python3 scripts/setup_cron.py pause --job-id <job_id>
+python3 scripts/setup_cron.py resume --job-id <job_id>
+python3 scripts/setup_cron.py delete --job-id <job_id>
+python3 scripts/setup_cron.py delete-runner --runner-id <runner_id>
 ```
 
-**Pause:**
-
-```text
-publisher: seren-cron, path: /jobs/{job_id}/pause, method: POST
-```
-
-**Resume:**
-
-```text
-publisher: seren-cron, path: /jobs/{job_id}/resume, method: POST
-```
-
-**Stop permanently:**
-
-```text
-publisher: seren-cron, path: /jobs/{job_id}, method: DELETE
-```
-
-### Insufficient Funds Guard
-
-If a live trade or cycle fails because the trading balance or SerenBucks balance is too low to execute, **immediately pause the cron job**:
-
-```text
-publisher: seren-cron, path: /jobs/{job_id}/pause, method: POST
-```
-
-Then tell the user:
-
-> "Automated trading has been paused: insufficient funds detected. Please top up your balance before resuming the schedule."
-
-Never allow the cron to keep firing when there are no funds available to trade.
+Pause the job immediately if live execution fails because trading funds or SerenBucks are exhausted.

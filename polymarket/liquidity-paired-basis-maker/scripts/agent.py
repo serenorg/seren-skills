@@ -19,13 +19,9 @@ from typing import Any
 from urllib.parse import urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
-# Try local bundled copy first (installed skills), then shared directory (dev repo)
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_SHARED_DIR = Path(__file__).resolve().parents[2] / "_shared"
-for _candidate in (_SCRIPT_DIR, _SHARED_DIR):
-    if (_candidate / "polymarket_live.py").exists() and str(_candidate) not in sys.path:
-        sys.path.insert(0, str(_candidate))
-        break
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
 from polymarket_live import (
     DEFAULT_STALE_ORDER_MAX_AGE_SECONDS,
@@ -1186,7 +1182,8 @@ def _fetch_predictions_pair_signals(
         print(
             f"WARNING: SerenBucks balance (${balance:.2f}) may be insufficient for "
             f"predictions intelligence (estimated ${estimated_cost:.2f}). "
-            f"Top up at https://serendb.com/billing to use Seren Predictions.",
+            "Buy SerenBucks at https://serendb.com/serenbucks or https://console.serendb.com. "
+            "Stripe deposits start at $5, require a verified email, and API-first funding is available via POST /wallet/deposit.",
             file=sys.stderr,
         )
         if balance <= 0.0:

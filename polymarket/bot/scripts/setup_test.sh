@@ -39,7 +39,7 @@ if [ -f .env ]; then
 else
     echo ""
     echo "Enter your SEREN_API_KEY (optional if API_KEY is injected by Seren Desktop):"
-    echo "(Get it from https://app.serendb.com/settings/api-keys)"
+    echo "(Create/manage it from https://console.serendb.com)"
     read -r SEREN_API_KEY
 
     if [ -z "$SEREN_API_KEY" ] && [ -z "${API_KEY:-}" ]; then
@@ -120,8 +120,8 @@ echo "   - Configure Polymarket publisher credentials in Seren Desktop Settings 
 echo "     (or set SEREN_DESKTOP_PUBLISHER_AUTH=false and provide POLY_* in .env)"
 echo "   - Review config.json risk parameters"
 echo "   - Ensure you have $550+ total budget (see SKILL.md Phase 4)"
-echo "   - Start the agent server: python3 scripts/run_agent_server.py --config config.json"
-echo "   - Setup cron job: python3 scripts/setup_cron.py --url http://localhost:8080/run"
+echo "   - Create the seren-cron job: python3 scripts/setup_cron.py create --config config.json --schedule \"0 */2 * * *\" --live"
+echo "   - Start the local runner: python3 scripts/run_local_pull_runner.py --config config.json"
 echo ""
 echo "4. Monitor logs:"
 echo "   tail -f logs/trading_*.log"

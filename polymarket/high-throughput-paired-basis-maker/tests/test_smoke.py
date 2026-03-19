@@ -10,6 +10,7 @@ from pathlib import Path
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "agent.py"
+LIVE_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "polymarket_live.py"
 CONFIG_EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "config.example.json"
 
 
@@ -19,6 +20,15 @@ def _read_fixture(name: str) -> dict:
 
 def _load_agent_module() -> object:
     spec = importlib.util.spec_from_file_location("high_throughput_paired_basis_maker_agent_test", SCRIPT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_live_module() -> object:
+    spec = importlib.util.spec_from_file_location("high_throughput_paired_basis_maker_live_test", LIVE_SCRIPT_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     assert spec.loader is not None
@@ -233,6 +243,7 @@ def test_main_applies_backtest_config_updates_before_trade(monkeypatch, tmp_path
             backtest_days=None,
             allow_negative_backtest=False,
             yes_live=False,
+            unwind_all=False,
         ),
     )
     monkeypatch.setattr(module, "load_config", lambda path: json.loads(config_path.read_text(encoding="utf-8")))
@@ -255,3 +266,55 @@ def test_main_applies_backtest_config_updates_before_trade(monkeypatch, tmp_path
     assert seen["basis_entry_bps"] == 12.0
     persisted = json.loads(config_path.read_text(encoding="utf-8"))
     assert persisted["strategy"]["basis_entry_bps"] == 12.0
+
+
+def test_setup_local_pull_schedule_registers_runner_and_job(monkeypatch) -> None:
+    live = _load_live_module()
+    calls: list[tuple[str, str, object]] = []
+
+    def fake_call_publisher_json(*, publisher, method, path, headers=None, body=None, timeout_seconds=30.0):
+        del headers, timeout_seconds
+        calls.append((method, path, body))
+        assert publisher == "seren-cron"
+        if method == "GET" and path == "/api/runners":
+            return {"success": True, "data": []}
+        if method == "POST" and path == "/api/runners":
+            return {
+                "success": True,
+                "data": {
+                    "id": "runner-ht-1",
+                    "name": "ht-runner",
+                    "machine_label": "codex-mac",
+                    "skill_slug": "high-throughput-paired-basis-maker",
+                },
+            }
+        if method == "GET" and path == "/api/jobs":
+            return {"success": True, "data": []}
+        if method == "POST" and path == "/api/jobs":
+            return {"success": True, "data": {"id": "job-ht-1", **body}}
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+    monkeypatch.setattr(live, "call_publisher_json", fake_call_publisher_json)
+
+    result = live.setup_local_pull_schedule(
+        skill_slug="high-throughput-paired-basis-maker",
+        runner_name="ht-runner",
+        machine_label="codex-mac",
+        poll_interval_seconds=30,
+        job_name="polymarket-htpbm-local-pull",
+        cron_expression="*/15 * * * *",
+        timezone_name="UTC",
+        config_path="config.json",
+        run_type="trade",
+        yes_live=True,
+    )
+
+    assert result["runner"]["id"] == "runner-ht-1"
+    assert result["job"]["id"] == "job-ht-1"
+    job_body = next(body for method, path, body in calls if method == "POST" and path == "/api/jobs")
+    assert isinstance(job_body, dict)
+    assert job_body["execution_mode"] == "local_pull"
+    assert job_body["runner_id"] == "runner-ht-1"
+    assert job_body["local_payload"]["skill_slug"] == "high-throughput-paired-basis-maker"
+    assert job_body["local_payload"]["run_type"] == "trade"
+    assert job_body["local_payload"]["yes_live"] is True

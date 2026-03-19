@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage seren-cron local pull schedules for polymarket-bot."""
+"""Manage seren-cron local pull schedules for liquidity-paired-basis-maker."""
 
 from __future__ import annotations
 
@@ -26,10 +26,10 @@ from polymarket_live import (  # noqa: E402
 )
 
 
-SKILL_SLUG = "polymarket-bot"
-DEFAULT_JOB_NAME = "polymarket-bot-local-pull"
-DEFAULT_CRON_EXPRESSION = "0 */2 * * *"
-DEFAULT_RUN_TYPE = "scan"
+SKILL_SLUG = "liquidity-paired-basis-maker"
+DEFAULT_JOB_NAME = "polymarket-lpbm-local-pull"
+DEFAULT_CRON_EXPRESSION = "*/30 * * * *"
+DEFAULT_RUN_TYPE = "trade"
 
 
 def _job_payload(job: dict[str, Any]) -> dict[str, Any]:
@@ -63,7 +63,7 @@ def _is_skill_runner(runner: dict[str, Any]) -> bool:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Manage seren-cron local pull schedules for polymarket-bot."
+        description="Manage seren-cron local pull schedules for liquidity-paired-basis-maker."
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -72,6 +72,12 @@ def parse_args() -> argparse.Namespace:
     create.add_argument("--schedule", default=DEFAULT_CRON_EXPRESSION, help="Cron expression.")
     create.add_argument("--timezone", default="UTC", help="IANA timezone name.")
     create.add_argument("--config", default="config.json", help="Config path passed to scripts/agent.py.")
+    create.add_argument(
+        "--run-type",
+        default=DEFAULT_RUN_TYPE,
+        choices=("backtest", "trade"),
+        help="Agent run type for the scheduled execution.",
+    )
     create.add_argument(
         "--runner-name",
         default="",
@@ -88,20 +94,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_SEREN_CRON_POLL_INTERVAL_SECONDS,
         help="Runner poll cadence.",
     )
-    dry_mode = create.add_mutually_exclusive_group()
-    dry_mode.add_argument(
-        "--dry-run",
-        dest="dry_run",
+    create.add_argument(
+        "--yes-live",
         action="store_true",
-        help="Schedule paper trading only.",
+        help="Include --yes-live in local runner executions.",
     )
-    dry_mode.add_argument(
-        "--live",
-        dest="dry_run",
-        action="store_false",
-        help="Schedule live trading. Review credentials and budget first.",
-    )
-    create.set_defaults(dry_run=True)
 
     sub.add_parser("list", help="List local pull jobs for this skill.")
     sub.add_parser("list-runners", help="List runners for this skill.")
@@ -138,8 +135,8 @@ def main() -> int:
                 cron_expression=args.schedule,
                 timezone_name=args.timezone,
                 config_path=args.config,
-                run_type=DEFAULT_RUN_TYPE,
-                local_payload={"dry_run": bool(args.dry_run)},
+                run_type=args.run_type,
+                yes_live=args.yes_live,
                 timeout_seconds=30.0,
             )
         elif args.command == "list":

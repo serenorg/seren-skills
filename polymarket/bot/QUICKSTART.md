@@ -92,19 +92,19 @@ The bot will:
 
 ⚠️ **Only use this with real Polymarket publisher credentials and $550+ budget**
 
-1. Start the agent server:
+1. Create or update the local-pull seren-cron schedule:
 
 ```bash
-python3 scripts/run_agent_server.py --config config.json
+python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --live
 ```
 
-2. In another terminal, setup autonomous scheduling:
+2. Start the local-pull runner on the machine that should execute jobs:
 
 ```bash
-python3 scripts/setup_cron.py --url http://localhost:8080/run --schedule "*/120 * * * *"
+python3 scripts/run_local_pull_runner.py --config config.json
 ```
 
-This creates a cron job that triggers the bot every 2 hours.
+This creates a seren-cron job that runs the bot every 2 hours and uses the local runner process to poll for due executions.
 
 ## Monitoring
 

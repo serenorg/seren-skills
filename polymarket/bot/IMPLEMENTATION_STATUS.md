@@ -72,7 +72,7 @@
 
 **What was added:**
 
-- Order placement via `DirectClobTrader` from `_shared/polymarket_live.py`
+- Order placement via `DirectClobTrader` from `scripts/polymarket_live.py`
 - Local EIP-712 signing via `py-clob-client` — no publisher intermediary
 - Requires `POLY_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_PASSPHRASE`, `POLY_SECRET`
 
