@@ -29,7 +29,7 @@ cp .env.example .env
 ```
 
 Edit `.env` and add:
-- **SEREN_API_KEY** (or runtime `API_KEY` when launched by Seren Desktop): Get from [app.serendb.com/settings/api-keys](https://app.serendb.com/settings/api-keys)
+- **SEREN_API_KEY** (or runtime `API_KEY` when launched by Seren Desktop): get one from [console.serendb.com](https://console.serendb.com)
 - **SEREN_DESKTOP_PUBLISHER_AUTH=true** (recommended): use desktop sidecar/keychain publisher auth
 
 Desktop sidecar/keychain flow (recommended):
@@ -76,8 +76,11 @@ This will:
 Once you've tested and are ready to trade with real money:
 
 ```bash
-python3 scripts/agent.py --config config.json
+python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --live
+python3 scripts/run_local_pull_runner.py --config config.json
 ```
+
+This uses a seren-cron local-pull runner. The schedule lives in Seren, but the polling process must stay online on the machine that will execute trades.
 
 **IMPORTANT**: Only risk what you can afford to lose!
 
@@ -90,6 +93,8 @@ polymarket-bot/
 ├── scripts/polymarket_client.py     # Polymarket CLOB API wrapper
 ├── scripts/kelly.py                 # Kelly Criterion calculator
 ├── scripts/position_tracker.py      # Position management
+├── scripts/setup_cron.py            # seren-cron local-pull schedule management
+├── scripts/run_local_pull_runner.py # Local seren-cron polling runner
 ├── scripts/logger.py                # Trading logger
 ├── requirements.txt         # Python dependencies
 ├── config.json              # Trading configuration (create from example)

@@ -63,5 +63,16 @@
     "inventory": {},
     "live_risk": {}
   },
+  "cron": {
+    "runner_name": "",
+    "machine_label": "",
+    "poll_interval_seconds": 30,
+    "job_name": "polymarket-maker-rebate-local-pull",
+    "cron_expression": "*/30 * * * *",
+    "timezone": "UTC",
+    "run_type": "quote",
+    "config_path": "config.json",
+    "yes_live": false
+  },
   "markets": []
 }

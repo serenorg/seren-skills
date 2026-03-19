@@ -9,6 +9,16 @@
   "candidate_limit": 80,
   "analyze_limit": 30,
   "min_liquidity": 100.0,
+  "cron": {
+    "runner_name": "",
+    "machine_label": "",
+    "poll_interval_seconds": 30,
+    "job_name": "polymarket-bot-local-pull",
+    "cron_expression": "0 */2 * * *",
+    "timezone": "UTC",
+    "config_path": "config.json",
+    "dry_run": true
+  },
   "created_at": "2026-02-12T00:00:00Z",
   "last_updated": "2026-02-12T00:00:00Z"
 }

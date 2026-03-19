@@ -650,6 +650,57 @@ def test_check_neg_risk_approvals_returns_structured_result() -> None:
     assert "NegRiskAdapter" in result["errors"][0]
 
 
+def test_setup_local_pull_schedule_uses_quote_payload(monkeypatch) -> None:
+    live = _load_live_module()
+    calls: list[tuple[str, str, object]] = []
+
+    def fake_call_publisher_json(*, publisher, method, path, headers=None, body=None, timeout_seconds=30.0):
+        del headers, timeout_seconds
+        calls.append((method, path, body))
+        assert publisher == "seren-cron"
+        if method == "GET" and path == "/api/runners":
+            return {"success": True, "data": []}
+        if method == "POST" and path == "/api/runners":
+            return {
+                "success": True,
+                "data": {
+                    "id": "runner-maker-1",
+                    "name": "maker-runner",
+                    "machine_label": "codex-mac",
+                    "skill_slug": "polymarket-maker-rebate-bot",
+                },
+            }
+        if method == "GET" and path == "/api/jobs":
+            return {"success": True, "data": []}
+        if method == "POST" and path == "/api/jobs":
+            return {"success": True, "data": {"id": "job-maker-1", **body}}
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+    monkeypatch.setattr(live, "call_publisher_json", fake_call_publisher_json)
+
+    result = live.setup_local_pull_schedule(
+        skill_slug="polymarket-maker-rebate-bot",
+        runner_name="maker-runner",
+        machine_label="codex-mac",
+        poll_interval_seconds=30,
+        job_name="polymarket-maker-rebate-local-pull",
+        cron_expression="*/30 * * * *",
+        timezone_name="UTC",
+        config_path="config.json",
+        run_type="quote",
+        yes_live=False,
+    )
+
+    assert result["runner"]["id"] == "runner-maker-1"
+    assert result["job"]["id"] == "job-maker-1"
+    job_body = next(body for method, path, body in calls if method == "POST" and path == "/api/jobs")
+    assert isinstance(job_body, dict)
+    assert job_body["execution_mode"] == "local_pull"
+    assert job_body["local_payload"]["skill_slug"] == "polymarket-maker-rebate-bot"
+    assert job_body["local_payload"]["run_type"] == "quote"
+    assert "yes_live" not in job_body["local_payload"]
+
+
 def test_neg_risk_market_skipped_when_approvals_missing() -> None:
     """#159: Neg-risk markets are skipped with actionable error when approvals missing."""
     live = _load_live_module()

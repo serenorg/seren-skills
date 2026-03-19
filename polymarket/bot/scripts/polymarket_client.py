@@ -1,7 +1,7 @@
 """
 Polymarket Client - Wrapper for Polymarket CLOB API
 
-Uses ``py-clob-client`` (via DirectClobTrader from _shared/polymarket_live.py) for
+Uses ``py-clob-client`` (via DirectClobTrader from scripts/polymarket_live.py) for
 trading operations and the ``polymarket-data`` Seren publisher for market discovery.
 """
 
@@ -10,13 +10,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-# Try local bundled copy first (installed skills), then shared directory (dev repo)
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_SHARED_DIR = Path(__file__).resolve().parents[2] / "_shared"
-for _candidate in (_SCRIPT_DIR, _SHARED_DIR):
-    if (_candidate / "polymarket_live.py").exists() and str(_candidate) not in sys.path:
-        sys.path.insert(0, str(_candidate))
-        break
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
 from seren_client import SerenClient
 

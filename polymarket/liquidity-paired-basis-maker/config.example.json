@@ -68,5 +68,16 @@
     "leg_exposure": {},
     "live_risk": {}
   },
+  "cron": {
+    "runner_name": "",
+    "machine_label": "",
+    "poll_interval_seconds": 30,
+    "job_name": "polymarket-lpbm-local-pull",
+    "cron_expression": "*/30 * * * *",
+    "timezone": "UTC",
+    "run_type": "trade",
+    "config_path": "config.json",
+    "yes_live": false
+  },
   "markets": []
 }

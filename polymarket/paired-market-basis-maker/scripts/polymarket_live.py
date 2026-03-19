@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import platform
 import select
 import shlex
 import signal
@@ -29,6 +30,8 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_CHAIN_ID = 137
 LIVE_SAFETY_VERSION = "2026-03-18.polymarket-live-safety-v3"
 USDC_DECIMALS = 6
+SEREN_CRON_PUBLISHER = "seren-cron"
+DEFAULT_SEREN_CRON_POLL_INTERVAL_SECONDS = 30
 
 # Polymarket contract addresses on Polygon mainnet
 POLYGON_USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
@@ -560,6 +563,279 @@ def call_publisher_json(
         if not text:
             return {}
         return json.loads(text)
+
+
+def current_machine_label() -> str:
+    label = safe_str(os.getenv("SEREN_RUNNER_MACHINE_LABEL") or platform.node(), "").strip()
+    return label[:120] or "local-machine"
+
+
+def current_platform_label() -> str:
+    system = safe_str(platform.system(), "unknown").lower()
+    machine = safe_str(platform.machine(), "unknown").lower().replace(" ", "-")
+    return f"{system}-{machine}"
+
+
+def _extract_publisher_data(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        if "body" in payload:
+            return _extract_publisher_data(payload.get("body"))
+        if payload.get("success") is False:
+            raise RuntimeError(safe_str(payload.get("error"), "Publisher request failed."))
+        if "data" in payload:
+            return payload.get("data")
+    return payload
+
+
+def list_seren_cron_runners(
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> list[dict[str, Any]]:
+    payload = call_publisher_json(
+        publisher=SEREN_CRON_PUBLISHER,
+        method="GET",
+        path="/api/runners",
+        timeout_seconds=timeout_seconds,
+    )
+    rows = _extract_publisher_data(payload)
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def list_seren_cron_jobs(
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> list[dict[str, Any]]:
+    payload = call_publisher_json(
+        publisher=SEREN_CRON_PUBLISHER,
+        method="GET",
+        path="/api/jobs",
+        timeout_seconds=timeout_seconds,
+    )
+    rows = _extract_publisher_data(payload)
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def default_local_pull_runner_name(skill_slug: str, machine_label: str | None = None) -> str:
+    machine = safe_str(machine_label, "").strip() or current_machine_label()
+    return f"{skill_slug}-{machine}"[:120]
+
+
+def ensure_local_pull_runner(
+    *,
+    skill_slug: str,
+    runner_name: str | None = None,
+    machine_label: str | None = None,
+    poll_interval_seconds: int = DEFAULT_SEREN_CRON_POLL_INTERVAL_SECONDS,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    resolved_machine = safe_str(machine_label, "").strip() or current_machine_label()
+    resolved_name = safe_str(runner_name, "").strip() or default_local_pull_runner_name(
+        skill_slug,
+        resolved_machine,
+    )
+    for runner in list_seren_cron_runners(timeout_seconds=timeout_seconds):
+        if safe_str(runner.get("name"), "") == resolved_name:
+            return runner
+
+    payload = call_publisher_json(
+        publisher=SEREN_CRON_PUBLISHER,
+        method="POST",
+        path="/api/runners",
+        body={
+            "name": resolved_name,
+            "machine_label": resolved_machine,
+            "skill_slug": skill_slug,
+            "platform": current_platform_label(),
+            "poll_interval_seconds": max(5, safe_int(poll_interval_seconds, DEFAULT_SEREN_CRON_POLL_INTERVAL_SECONDS)),
+        },
+        timeout_seconds=timeout_seconds,
+    )
+    runner = _extract_publisher_data(payload)
+    if not isinstance(runner, dict):
+        raise RuntimeError("seren-cron runner registration did not return a runner object.")
+    return runner
+
+
+def build_local_pull_job_body(
+    *,
+    name: str,
+    cron_expression: str,
+    timezone_name: str,
+    runner_id: str,
+    skill_slug: str,
+    config_path: str,
+    run_type: str,
+    yes_live: bool = False,
+    local_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "skill_slug": skill_slug,
+        "config_path": config_path,
+        "run_type": run_type,
+    }
+    if yes_live:
+        payload["yes_live"] = True
+    if isinstance(local_payload, dict):
+        payload.update(local_payload)
+    return {
+        "name": name,
+        "cron_expression": cron_expression,
+        "timezone": timezone_name,
+        "execution_mode": "local_pull",
+        "runner_id": runner_id,
+        "local_payload": payload,
+    }
+
+
+def upsert_local_pull_job(
+    *,
+    name: str,
+    cron_expression: str,
+    timezone_name: str,
+    runner_id: str,
+    skill_slug: str,
+    config_path: str,
+    run_type: str,
+    yes_live: bool = False,
+    local_payload: dict[str, Any] | None = None,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    body = build_local_pull_job_body(
+        name=name,
+        cron_expression=cron_expression,
+        timezone_name=timezone_name,
+        runner_id=runner_id,
+        skill_slug=skill_slug,
+        config_path=config_path,
+        run_type=run_type,
+        yes_live=yes_live,
+        local_payload=local_payload,
+    )
+    existing_job = next(
+        (
+            job
+            for job in list_seren_cron_jobs(timeout_seconds=timeout_seconds)
+            if safe_str(job.get("name"), "") == name and safe_str(job.get("id"), "")
+        ),
+        None,
+    )
+    if existing_job is None:
+        payload = call_publisher_json(
+            publisher=SEREN_CRON_PUBLISHER,
+            method="POST",
+            path="/api/jobs",
+            body=body,
+            timeout_seconds=timeout_seconds,
+        )
+    else:
+        payload = call_publisher_json(
+            publisher=SEREN_CRON_PUBLISHER,
+            method="PUT",
+            path=f"/api/jobs/{safe_str(existing_job.get('id'), '')}",
+            body=body,
+            timeout_seconds=timeout_seconds,
+        )
+    job = _extract_publisher_data(payload)
+    if not isinstance(job, dict):
+        raise RuntimeError("seren-cron job upsert did not return a job object.")
+    return job
+
+
+def setup_local_pull_schedule(
+    *,
+    skill_slug: str,
+    runner_name: str | None,
+    machine_label: str | None,
+    poll_interval_seconds: int,
+    job_name: str,
+    cron_expression: str,
+    timezone_name: str,
+    config_path: str,
+    run_type: str,
+    yes_live: bool = False,
+    local_payload: dict[str, Any] | None = None,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    runner = ensure_local_pull_runner(
+        skill_slug=skill_slug,
+        runner_name=runner_name,
+        machine_label=machine_label,
+        poll_interval_seconds=poll_interval_seconds,
+        timeout_seconds=timeout_seconds,
+    )
+    job = upsert_local_pull_job(
+        name=job_name,
+        cron_expression=cron_expression,
+        timezone_name=timezone_name,
+        runner_id=safe_str(runner.get("id"), ""),
+        skill_slug=skill_slug,
+        config_path=config_path,
+        run_type=run_type,
+        yes_live=yes_live,
+        local_payload=local_payload,
+        timeout_seconds=timeout_seconds,
+    )
+    return {
+        "runner": runner,
+        "job": job,
+    }
+
+
+def poll_local_pull_runner(
+    runner_id: str,
+    *,
+    last_seen_result_id: str | None = None,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    payload = call_publisher_json(
+        publisher=SEREN_CRON_PUBLISHER,
+        method="POST",
+        path=f"/api/runners/{runner_id}/poll",
+        body={
+            "last_seen_result_id": last_seen_result_id,
+            "supports": {
+                "stdout_tail": True,
+                "stderr_tail": True,
+                "response_body": True,
+            },
+        },
+        timeout_seconds=timeout_seconds,
+    )
+    data = _extract_publisher_data(payload)
+    return data if isinstance(data, dict) else {}
+
+
+def submit_local_pull_result(
+    runner_id: str,
+    *,
+    execution_result_id: str,
+    status: str,
+    response_body: str,
+    exit_code: int,
+    stdout_tail: str,
+    stderr_tail: str,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    payload = call_publisher_json(
+        publisher=SEREN_CRON_PUBLISHER,
+        method="POST",
+        path=f"/api/runners/{runner_id}/results",
+        body={
+            "execution_result_id": execution_result_id,
+            "status": status,
+            "response_body": response_body,
+            "exit_code": exit_code,
+            "stdout_tail": stdout_tail,
+            "stderr_tail": stderr_tail,
+        },
+        timeout_seconds=timeout_seconds,
+    )
+    data = _extract_publisher_data(payload)
+    return data if isinstance(data, dict) else {"value": data}
 
 
 def _call_clob_json(path: str, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> Any:
