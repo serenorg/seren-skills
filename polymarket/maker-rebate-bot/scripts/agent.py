@@ -27,11 +27,15 @@ for _candidate in (_SCRIPT_DIR, _SHARED_DIR):
         break
 
 from polymarket_live import (
+    DEFAULT_STALE_ORDER_MAX_AGE_SECONDS,
+    DEFAULT_UNWIND_BEFORE_RESOLUTION_SECONDS,
     DirectClobTrader,
+    cancel_stale_orders,
     execute_single_market_quotes,
     inject_held_position_markets,
     live_settings_from_execution,
     load_live_single_markets,
+    positions_by_key,
     single_market_inventory_notional,
 )
 
@@ -163,6 +167,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Override backtest lookback window in days (default from config: 90).",
+    )
+    parser.add_argument(
+        "--unwind-all",
+        action="store_true",
+        help="Emergency liquidation: cancel all orders and market-sell all positions. Requires --yes-live.",
     )
     return parser.parse_args()
 
@@ -2179,17 +2188,33 @@ def run_once(
         str(k): _safe_float(v, 0.0) for k, v in inventory.items()
     }
     live_trader: DirectClobTrader | None = None
+    stale_cleanup: dict[str, Any] | None = None
     if live_mode:
         try:
             live_trader = DirectClobTrader(
                 skill_root=Path(__file__).resolve().parents[1],
                 client_name="polymarket-maker-rebate-bot",
             )
+            prior_order_timestamps = config.get("state", {}).get("order_timestamps", {})
+            if prior_order_timestamps:
+                stale_cleanup = cancel_stale_orders(
+                    trader=live_trader,
+                    prior_order_timestamps=prior_order_timestamps,
+                    stale_order_max_age_seconds=_safe_int(
+                        execution.get("stale_order_max_age_seconds"),
+                        DEFAULT_STALE_ORDER_MAX_AGE_SECONDS,
+                    ),
+                )
             raw_positions = live_trader.get_positions()
+            unwind_seconds = _safe_int(
+                config.get("strategy", {}).get("unwind_before_resolution_seconds"),
+                DEFAULT_UNWIND_BEFORE_RESOLUTION_SECONDS,
+            )
             markets = inject_held_position_markets(
                 raw_positions=raw_positions,
                 markets=markets,
                 default_rebate_bps=params.default_rebate_bps,
+                unwind_before_resolution_seconds=unwind_seconds,
             )
             inventory_notional_by_market = single_market_inventory_notional(
                 raw_positions=raw_positions,
@@ -2274,6 +2299,8 @@ def run_once(
             execution_settings=execution_settings,
         )
         payload["live_execution"] = live_execution
+        if stale_cleanup and stale_cleanup.get("stale_count", 0) > 0:
+            payload["stale_order_cleanup"] = stale_cleanup
         payload["state"] = {
             "inventory": live_execution.get("updated_inventory", {}),
             "live_risk": live_execution.get("live_risk", {}),
@@ -2294,6 +2321,55 @@ def run_once(
             payload["error_code"] = live_execution.get("error_code")
             payload["message"] = live_execution.get("message")
     return payload
+
+
+def run_unwind_all(config: dict[str, Any]) -> dict[str, Any]:
+    """Emergency liquidation: cancel all orders and market-sell all positions."""
+    try:
+        trader = DirectClobTrader(
+            skill_root=Path(__file__).resolve().parents[1],
+            client_name="polymarket-maker-rebate-bot",
+        )
+    except Exception as exc:
+        return {"status": "error", "error_code": "trader_init_failed", "message": str(exc)}
+
+    results: dict[str, Any] = {"status": "ok", "skill": "polymarket-maker-rebate-bot", "mode": "unwind-all"}
+
+    try:
+        cancel_result = trader.cancel_all()
+        results["cancel_all"] = cancel_result
+    except Exception as exc:
+        results["cancel_error"] = str(exc)
+
+    try:
+        raw_positions = trader.get_positions()
+        sizes = positions_by_key(raw_positions)
+        sell_results: list[dict[str, Any]] = []
+        for token_id, shares in sizes.items():
+            if shares <= 0:
+                continue
+            try:
+                from polymarket_live import fetch_midpoint
+                mid = fetch_midpoint(token_id, fallback_mid=0.5)
+                sell_price = round(max(0.01, mid * 0.95), 4)
+                response = trader.create_order(
+                    token_id=token_id,
+                    side="SELL",
+                    price=sell_price,
+                    size=shares,
+                    tick_size="0.01",
+                    neg_risk=False,
+                    fee_rate_bps=0,
+                )
+                sell_results.append({"token_id": token_id, "shares": shares, "price": sell_price, "response": response})
+            except Exception as sell_exc:
+                sell_results.append({"token_id": token_id, "shares": shares, "error": str(sell_exc)})
+        results["sell_results"] = sell_results
+        results["positions_unwound"] = len(sell_results)
+    except Exception as exc:
+        results["position_error"] = str(exc)
+
+    return results
 
 
 def run_quote(config: dict[str, Any], markets_file: str | None, yes_live: bool) -> dict[str, Any]:
@@ -2317,6 +2393,19 @@ def run_quote(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
 def main() -> int:
     args = parse_args()
     config = load_config(args.config)
+
+    if args.unwind_all:
+        if not args.yes_live:
+            result = {
+                "status": "error",
+                "error_code": "unwind_confirmation_required",
+                "message": "Emergency unwind requires --yes-live confirmation.",
+            }
+        else:
+            result = run_unwind_all(config=config)
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result.get("status") == "ok" else 1
+
     if args.run_type == "backtest":
         result = run_backtest(
             config=config,
@@ -2332,8 +2421,12 @@ def main() -> int:
     else:
         result = run_quote(config=config, markets_file=args.markets_file, yes_live=args.yes_live)
         if isinstance(result.get("state"), dict):
+            state = result["state"]
+            live_exec = result.get("live_execution", {})
+            if isinstance(live_exec, dict) and live_exec.get("order_timestamps"):
+                state["order_timestamps"] = live_exec["order_timestamps"]
             try:
-                _persist_runtime_state(args.config, config, result["state"])
+                _persist_runtime_state(args.config, config, state)
             except Exception as exc:  # pragma: no cover - defensive runtime path
                 result["state_writeback_warning"] = str(exc)
     print(json.dumps(result, sort_keys=True))

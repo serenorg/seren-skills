@@ -28,6 +28,10 @@ for _candidate in (_SCRIPT_DIR, _SHARED_DIR):
         break
 
 from polymarket_live import (
+    DEFAULT_STALE_ORDER_MAX_AGE_SECONDS,
+    DEFAULT_UNWIND_BEFORE_RESOLUTION_SECONDS,
+    cancel_stale_orders,
+    positions_by_key,
     DirectClobTrader,
     execute_pair_trades,
     live_settings_from_execution,
@@ -145,6 +149,7 @@ def parse_args() -> argparse.Namespace:
         help="Allow trade mode even if backtest return is <= 0.",
     )
     parser.add_argument("--yes-live", action="store_true", help="Explicit live execution confirmation.")
+    parser.add_argument("--unwind-all", action="store_true", help="Emergency liquidation: cancel all orders and market-sell all positions.")
     return parser.parse_args()
 
 
@@ -1978,9 +1983,55 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
     return payload
 
 
+
+def run_unwind_all(config: dict[str, Any]) -> dict[str, Any]:
+    """Emergency liquidation: cancel all orders and market-sell all positions."""
+    try:
+        trader = DirectClobTrader(
+            skill_root=Path(__file__).resolve().parents[1],
+            client_name="high-throughput-paired-basis-maker",
+        )
+    except Exception as exc:
+        return {"status": "error", "error_code": "trader_init_failed", "message": str(exc)}
+    results: dict[str, Any] = {"status": "ok", "skill": "high-throughput-paired-basis-maker", "mode": "unwind-all"}
+    try:
+        cancel_result = trader.cancel_all()
+        results["cancel_all"] = cancel_result
+    except Exception as exc:
+        results["cancel_error"] = str(exc)
+    try:
+        raw_positions = trader.get_positions()
+        sizes = positions_by_key(raw_positions)
+        sell_results: list[dict[str, Any]] = []
+        for token_id, shares in sizes.items():
+            if shares <= 0:
+                continue
+            try:
+                from polymarket_live import fetch_midpoint
+                mid = fetch_midpoint(token_id, fallback_mid=0.5)
+                sell_price = round(max(0.01, mid * 0.95), 4)
+                response = trader.create_order(token_id=token_id, side="SELL", price=sell_price, size=shares, tick_size="0.01", neg_risk=False, fee_rate_bps=0)
+                sell_results.append({"token_id": token_id, "shares": shares, "price": sell_price, "response": response})
+            except Exception as sell_exc:
+                sell_results.append({"token_id": token_id, "shares": shares, "error": str(sell_exc)})
+        results["sell_results"] = sell_results
+        results["positions_unwound"] = len(sell_results)
+    except Exception as exc:
+        results["position_error"] = str(exc)
+    return results
+
+
 def main() -> int:
     args = parse_args()
     config = load_config(args.config)
+
+    if args.unwind_all:
+        if not args.yes_live:
+            result = {"status": "error", "error_code": "unwind_confirmation_required", "message": "Emergency unwind requires --yes-live."}
+        else:
+            result = run_unwind_all(config=config)
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result.get("status") == "ok" else 1
 
     backtest = run_backtest(
         config=config,

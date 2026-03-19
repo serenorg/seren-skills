@@ -27,7 +27,8 @@ POLYMARKET_DATA_API_BASE_URL = "https://data-api.polymarket.com"
 POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_CHAIN_ID = 137
-LIVE_SAFETY_VERSION = "2026-03-16.polymarket-live-safety-v1"
+LIVE_SAFETY_VERSION = "2026-03-18.polymarket-live-safety-v2"
+USDC_DECIMALS = 6
 
 
 def maybe_load_dotenv(skill_root: Path) -> None:
@@ -894,8 +895,8 @@ class LiveExecutionSettings:
     operation_timeout_seconds: float = 10.0
     operation_retry_attempts: int = 1
     min_cash_reserve_usd: float = 0.0
-    max_live_drawdown_usd: float = 0.0
-    max_live_drawdown_pct: float = 0.0
+    max_live_drawdown_usd: float = 20.0
+    max_live_drawdown_pct: float = 20.0
     prior_peak_equity_usd: float = 0.0
     runtime_version: str = LIVE_SAFETY_VERSION
 
@@ -1157,6 +1158,9 @@ class DirectClobTrader:
         except Exception:
             return []
 
+    def cancel_order(self, order_id: str) -> Any:
+        return self._client.cancel(order_id=order_id)
+
     def get_cash_balance(self) -> float:
         try:
             from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
@@ -1164,9 +1168,16 @@ class DirectClobTrader:
             payload = self._client.get_balance_allowance(
                 BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
             )
-            return extract_cash_balance_usd(payload)
+            raw = extract_cash_balance_usd(payload)
+            if raw > 1_000_000:
+                return raw / (10**USDC_DECIMALS)
+            return raw
         except Exception as exc:
             raise RuntimeError(f"Unable to fetch collateral balance: {exc}") from exc
+
+
+DEFAULT_UNWIND_BEFORE_RESOLUTION_SECONDS = 7 * 24 * 3600  # 7 days
+DEFAULT_STALE_ORDER_MAX_AGE_SECONDS = 1800  # 30 minutes
 
 
 def inject_held_position_markets(
@@ -1175,20 +1186,36 @@ def inject_held_position_markets(
     markets: list[dict[str, Any]],
     default_rebate_bps: float = 0.0,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    unwind_before_resolution_seconds: int = DEFAULT_UNWIND_BEFORE_RESOLUTION_SECONDS,
 ) -> list[dict[str, Any]]:
     """Inject markets for held positions missing from the discovery list.
 
     Without this, the bot never generates SELL orders for tokens it already
     owns because those markets are not in the quote cycle.
+
+    Markets within ``unwind_before_resolution_seconds`` of their endDate are
+    tagged ``sell_only=True`` so the quoting engine only emits SELL orders,
+    forcing the position to unwind before resolution.
     """
     sizes = positions_by_key(raw_positions)
     if not sizes:
         return markets
 
+    now_ts = int(time.time())
+
+    # Tag existing markets with sell_only if approaching resolution and user holds position
+    updated_markets: list[dict[str, Any]] = []
     existing_tokens: set[str] = set()
     for market in markets:
-        existing_tokens.add(safe_str(market.get("token_id"), ""))
-        existing_tokens.add(safe_str(market.get("market_id"), ""))
+        token_id = safe_str(market.get("token_id"), "")
+        market_id = safe_str(market.get("market_id"), "")
+        existing_tokens.add(token_id)
+        existing_tokens.add(market_id)
+        held = sizes.get(token_id, sizes.get(market_id, 0.0))
+        seconds_to_res = max(0, safe_int(market.get("seconds_to_resolution"), 999999))
+        if held > 0 and 0 < seconds_to_res < unwind_before_resolution_seconds:
+            market = {**market, "sell_only": True, "source": market.get("source", "resolution-unwind")}
+        updated_markets.append(market)
     existing_tokens.discard("")
 
     injected: list[dict[str, Any]] = []
@@ -1202,6 +1229,8 @@ def inject_held_position_markets(
             if not (0.0 < best_bid <= 1.0 and 0.0 < best_ask <= 1.0):
                 continue
             midpoint = fetch_midpoint(token_id, fallback_mid=(best_bid + best_ask) / 2.0, timeout_seconds=timeout_seconds)
+            end_ts = safe_int(book.get("end_date_iso"), 0) or safe_int(book.get("end_ts"), 0)
+            seconds_to_res = max(0, end_ts - now_ts) if end_ts else 999999
             injected.append(
                 {
                     "market_id": token_id,
@@ -1210,12 +1239,13 @@ def inject_held_position_markets(
                     "mid_price": round(midpoint, 4),
                     "best_bid": round(best_bid, 4),
                     "best_ask": round(best_ask, 4),
-                    "seconds_to_resolution": 999999,
+                    "seconds_to_resolution": seconds_to_res,
                     "volatility_bps": round(abs(best_ask - best_bid) * 10000.0, 3),
                     "rebate_bps": default_rebate_bps,
                     "tick_size": safe_str(book.get("tick_size"), "0.01"),
                     "neg_risk": bool(book.get("neg_risk", False)),
-                    "source": "held-position-injection",
+                    "sell_only": seconds_to_res < unwind_before_resolution_seconds,
+                    "source": "held-inventory-unwind" if seconds_to_res < unwind_before_resolution_seconds else "held-position-injection",
                 }
             )
             existing_tokens.add(token_id)
@@ -1223,8 +1253,8 @@ def inject_held_position_markets(
             continue
 
     if injected:
-        return list(markets) + injected
-    return markets
+        return updated_markets + injected
+    return updated_markets
 
 
 def single_market_inventory_notional(
@@ -1426,6 +1456,47 @@ def _live_failure_payload(
     return payload
 
 
+def cancel_stale_orders(
+    *,
+    trader: Any,
+    prior_order_timestamps: dict[str, str],
+    stale_order_max_age_seconds: int = DEFAULT_STALE_ORDER_MAX_AGE_SECONDS,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Cancel orders older than stale_order_max_age_seconds.
+
+    Returns a summary of stale orders found and cancel results.
+    """
+    if not prior_order_timestamps:
+        return {"stale_count": 0, "cancelled": []}
+
+    now = datetime.now(tz=timezone.utc)
+    stale_ids: list[str] = []
+    for order_id, placed_at_str in prior_order_timestamps.items():
+        try:
+            placed_at = datetime.fromisoformat(placed_at_str)
+            if (now - placed_at).total_seconds() > stale_order_max_age_seconds:
+                stale_ids.append(order_id)
+        except (ValueError, TypeError):
+            stale_ids.append(order_id)
+
+    if not stale_ids:
+        return {"stale_count": 0, "cancelled": []}
+
+    cancelled: list[dict[str, Any]] = []
+    for order_id in stale_ids:
+        try:
+            if hasattr(trader, "cancel_order"):
+                result = trader.cancel_order(order_id)
+                cancelled.append({"order_id": order_id, "status": "cancelled", "response": result})
+            else:
+                cancelled.append({"order_id": order_id, "status": "skipped", "reason": "no_cancel_order_method"})
+        except Exception as exc:
+            cancelled.append({"order_id": order_id, "status": "error", "error": str(exc)})
+
+    return {"stale_count": len(stale_ids), "cancelled": cancelled}
+
+
 def execute_single_market_quotes(
     *,
     trader: PolymarketPublisherTrader | DirectClobTrader,
@@ -1512,8 +1583,9 @@ def execute_single_market_quotes(
 
             bid_price = snap_price(safe_float(quote.get("bid_price"), 0.0), tick_size, "BUY")
             ask_price = snap_price(safe_float(quote.get("ask_price"), 0.0), tick_size, "SELL")
+            sell_only = bool(market.get("sell_only", False)) or bool(quote.get("sell_only", False))
 
-            if bid_price > 0.0 and bid_notional > 0.0:
+            if bid_price > 0.0 and bid_notional > 0.0 and not sell_only:
                 remaining_cash_usd = available_cash_usd - bid_notional
                 if (
                     execution_settings.min_cash_reserve_usd > 0.0
@@ -1654,6 +1726,10 @@ def execute_single_market_quotes(
                 live_risk=live_risk_state,
             )
 
+        placed_at_iso = datetime.now(tz=timezone.utc).isoformat()
+        order_timestamps = {
+            oid: placed_at_iso for oid in active_order_ids(latest_orders)
+        }
         return {
             "status": "ok",
             "cancel_all": cancel_response,
@@ -1661,6 +1737,7 @@ def execute_single_market_quotes(
             "order_skips": skips,
             "open_orders": latest_orders,
             "open_order_ids": active_order_ids(latest_orders),
+            "order_timestamps": order_timestamps,
             "positions": latest_positions,
             "updated_inventory": updated_inventory,
             "live_risk": live_risk_state,
@@ -1904,6 +1981,10 @@ def execute_pair_trades(
                 live_risk=live_risk_state,
             )
 
+        placed_at_iso = datetime.now(tz=timezone.utc).isoformat()
+        order_timestamps = {
+            oid: placed_at_iso for oid in active_order_ids(latest_orders)
+        }
         return {
             "status": "ok",
             "cancel_all": cancel_response,
@@ -1911,6 +1992,7 @@ def execute_pair_trades(
             "order_skips": skips,
             "open_orders": latest_orders,
             "open_order_ids": active_order_ids(latest_orders),
+            "order_timestamps": order_timestamps,
             "positions": latest_positions,
             "updated_leg_exposure": updated_leg_exposure,
             "live_risk": live_risk_state,
