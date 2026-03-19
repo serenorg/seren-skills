@@ -1,0 +1,8 @@
+{
+  "name": "seren-skill-gdex-trading",
+  "version": "1.0.0",
+  "description": "GDEX Trading skill for Seren Desktop",
+  "dependencies": {
+    "@gdexsdk/gdex-skill": "^2.0.0"
+  }
+}
