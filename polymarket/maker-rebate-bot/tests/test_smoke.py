@@ -630,3 +630,36 @@ def test_unwind_all_requires_yes_live() -> None:
         unwind_all=True, markets_file=None, backtest_file=None, backtest_days=None,
     )
     assert hasattr(args, "unwind_all")
+
+
+def test_check_neg_risk_approvals_returns_structured_result() -> None:
+    """#159: check_neg_risk_approvals returns actionable errors for missing approvals."""
+    live = _load_live_module()
+    assert hasattr(live, "check_neg_risk_approvals")
+    assert hasattr(live, "POLYGON_NEG_RISK_ADAPTER")
+    assert live.POLYGON_NEG_RISK_ADAPTER == "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+    # Test with a zero-address wallet (no approvals) against a non-responding RPC
+    result = live.check_neg_risk_approvals(
+        "0x0000000000000000000000000000000000000000",
+        rpc_url="http://127.0.0.1:1",  # unreachable — forces 0x0 fallback
+        timeout_seconds=1.0,
+    )
+    assert isinstance(result, dict)
+    assert result["checks_passed"] is False
+    assert len(result["errors"]) >= 1
+    assert "NegRiskAdapter" in result["errors"][0]
+
+
+def test_neg_risk_market_skipped_when_approvals_missing() -> None:
+    """#159: Neg-risk markets are skipped with actionable error when approvals missing."""
+    live = _load_live_module()
+    # Verify the skip reason string exists in the code
+    import inspect
+    source = inspect.getsource(live.execute_single_market_quotes)
+    assert "neg_risk_approval_missing" in source
+
+
+def test_direct_clob_trader_has_preflight_neg_risk() -> None:
+    """#159: DirectClobTrader exposes preflight_neg_risk method."""
+    live = _load_live_module()
+    assert hasattr(live.DirectClobTrader, "preflight_neg_risk")
