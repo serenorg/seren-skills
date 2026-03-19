@@ -27,8 +27,17 @@ POLYMARKET_DATA_API_BASE_URL = "https://data-api.polymarket.com"
 POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_CHAIN_ID = 137
-LIVE_SAFETY_VERSION = "2026-03-18.polymarket-live-safety-v2"
+LIVE_SAFETY_VERSION = "2026-03-18.polymarket-live-safety-v3"
 USDC_DECIMALS = 6
+
+# Polymarket contract addresses on Polygon mainnet
+POLYGON_USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+POLYGON_CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+POLYGON_NEG_RISK_CTF_EXCHANGE = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
+POLYGON_NEG_RISK_ADAPTER = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+POLYGON_CONDITIONAL_TOKENS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+ERC20_ALLOWANCE_ABI_FRAGMENT = "0xdd62ed3e"  # allowance(address,address)
+ERC1155_IS_APPROVED_ABI_FRAGMENT = "0xe985e9c5"  # isApprovedForAll(address,address)
 
 
 def maybe_load_dotenv(skill_root: Path) -> None:
@@ -1051,6 +1060,78 @@ class PolymarketPublisherTrader:
         return self._call("GET", "/positions")
 
 
+def check_neg_risk_approvals(
+    wallet_address: str,
+    *,
+    rpc_url: str = "https://polygon-rpc.com",
+    timeout_seconds: float = 10.0,
+) -> dict[str, Any]:
+    """Check if wallet has USDC.e and CT approvals for NegRiskAdapter.
+
+    Returns a dict with approval status and actionable error messages.
+    Does not revert or block — callers decide how to handle missing approvals.
+    """
+    results: dict[str, Any] = {
+        "wallet": wallet_address,
+        "neg_risk_adapter": POLYGON_NEG_RISK_ADAPTER,
+        "usdc_approved": False,
+        "ct_approved": False,
+        "checks_passed": False,
+        "errors": [],
+    }
+
+    wallet_padded = wallet_address.lower().replace("0x", "").zfill(64)
+    adapter_padded = POLYGON_NEG_RISK_ADAPTER.lower().replace("0x", "").zfill(64)
+
+    def _eth_call(to: str, data: str) -> str:
+        payload = json.dumps({
+            "jsonrpc": "2.0", "method": "eth_call", "id": 1,
+            "params": [{"to": to, "data": data}, "latest"],
+        }).encode()
+        req = Request(rpc_url, data=payload, headers={"Content-Type": "application/json"})
+        try:
+            with urlopen(req, timeout=timeout_seconds) as resp:
+                body = json.loads(resp.read())
+                return safe_str(body.get("result"), "0x0")
+        except Exception:
+            return "0x0"
+
+    # Check USDC.e allowance to NegRiskAdapter
+    usdc_data = f"0x{ERC20_ALLOWANCE_ABI_FRAGMENT[2:]}{wallet_padded}{adapter_padded}"
+    usdc_result = _eth_call(POLYGON_USDC_E, usdc_data)
+    try:
+        usdc_allowance = int(usdc_result, 16)
+    except (ValueError, TypeError):
+        usdc_allowance = 0
+    results["usdc_allowance_raw"] = usdc_allowance
+    results["usdc_approved"] = usdc_allowance > 10 ** USDC_DECIMALS  # > 1 USDC.e
+
+    # Check CT isApprovedForAll to NegRiskAdapter
+    ct_data = f"0x{ERC1155_IS_APPROVED_ABI_FRAGMENT[2:]}{wallet_padded}{adapter_padded}"
+    ct_result = _eth_call(POLYGON_CONDITIONAL_TOKENS, ct_data)
+    try:
+        ct_approved = int(ct_result, 16) > 0
+    except (ValueError, TypeError):
+        ct_approved = False
+    results["ct_approved"] = ct_approved
+
+    if not results["usdc_approved"]:
+        results["errors"].append(
+            f"USDC.e ({POLYGON_USDC_E}) is not approved for NegRiskAdapter "
+            f"({POLYGON_NEG_RISK_ADAPTER}). Neg-risk market orders will fail with "
+            f"'not enough balance / allowance'. Run: approve(NegRiskAdapter, MAX_UINT256) "
+            f"on USDC.e contract."
+        )
+    if not results["ct_approved"]:
+        results["errors"].append(
+            f"Conditional Tokens ({POLYGON_CONDITIONAL_TOKENS}) setApprovalForAll is not "
+            f"set for NegRiskAdapter ({POLYGON_NEG_RISK_ADAPTER}). Neg-risk SELL orders "
+            f"will fail. Run: setApprovalForAll(NegRiskAdapter, true) on CT contract."
+        )
+    results["checks_passed"] = results["usdc_approved"] and results["ct_approved"]
+    return results
+
+
 class DirectClobTrader:
     """Direct Polymarket CLOB client for local py-clob-client execution."""
 
@@ -1105,6 +1186,22 @@ class DirectClobTrader:
             creds=creds,
         )
         self.address = safe_str(self._client.get_address(), "").lower()
+        self._neg_risk_checked = False
+        self._neg_risk_approval_status: dict[str, Any] | None = None
+
+    def preflight_neg_risk(self) -> dict[str, Any]:
+        """Check NegRiskAdapter approvals. Caches result for the session."""
+        if self._neg_risk_checked:
+            return self._neg_risk_approval_status or {"checks_passed": True}
+        self._neg_risk_checked = True
+        try:
+            self._neg_risk_approval_status = check_neg_risk_approvals(self.address)
+        except Exception as exc:
+            self._neg_risk_approval_status = {
+                "checks_passed": False,
+                "errors": [f"Approval check failed: {exc}"],
+            }
+        return self._neg_risk_approval_status
 
     def create_order(
         self,
@@ -1573,6 +1670,20 @@ def execute_single_market_quotes(
             token_id = safe_str(market.get("token_id"), safe_str(market.get("market_id"), ""))
             tick_size = safe_str(market.get("tick_size"), "0.01")
             neg_risk = bool(market.get("neg_risk", False))
+            if neg_risk and hasattr(trader, "preflight_neg_risk"):
+                nr_status = trader.preflight_neg_risk()
+                if not nr_status.get("checks_passed", True):
+                    skips.append({
+                        "market_id": market["market_id"],
+                        "reason": "neg_risk_approval_missing",
+                        "errors": nr_status.get("errors", []),
+                        "hint": (
+                            f"Approve USDC.e and CT to NegRiskAdapter "
+                            f"({POLYGON_NEG_RISK_ADAPTER}) on Polygon. "
+                            f"See issue #159 for details."
+                        ),
+                    })
+                    continue
             fee_rate_bps = fetch_fee_rate_bps(token_id)
             fallback_notional = max(0.0, safe_float(quote.get("quote_notional_usd"), 0.0))
             bid_notional = max(0.0, safe_float(quote.get("bid_notional_usd"), fallback_notional))
@@ -1900,6 +2011,12 @@ def execute_pair_trades(
                         "notional_usd": round(notional, 4),
                     }
                 )
+
+            if not skip_reason and any(ls.get("neg_risk") for ls in leg_specs):
+                if hasattr(trader, "preflight_neg_risk"):
+                    nr_status = trader.preflight_neg_risk()
+                    if not nr_status.get("checks_passed", True):
+                        skip_reason = "neg_risk_approval_missing"
 
             if not skip_reason and (
                 execution_settings.min_cash_reserve_usd > 0.0
