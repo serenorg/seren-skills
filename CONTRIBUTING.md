@@ -65,16 +65,18 @@ Seren repo conventions:
 Skills with executable code should include:
 
 - `scripts/` - executable code (for example, `scripts/agent.py`, `scripts/index.js`, `scripts/run.sh`)
+- `scripts/runtime_paths.py` - generated helper for runtime config resolution when the skill needs stable runtime paths
 - `requirements.txt` (python) or `package.json` (node) at skill root when needed
 - `config.example.json` at skill root when needed
 - `.env.example` at skill root when needed
-- `.gitignore` for local config and secrets
+- `.gitignore` for repo-local development files and secrets
 
 ```
 coinbase/grid-trader/
 ├── SKILL.md               # Required - skill documentation
 ├── scripts/
-│   └── grid_trader.py     # Runtime code
+│   ├── grid_trader.py     # Runtime code
+│   └── runtime_paths.py   # Generated from seren/skill-runtime when needed
 ├── requirements.txt       # Python dependencies
 ├── package.json           # Node dependencies
 ├── config.example.json    # Configuration template
@@ -82,7 +84,65 @@ coinbase/grid-trader/
 ```
 
 Keep dependency/config templates (`requirements.txt`, `package.json`, `config.example.json`, `.env.example`) at the skill root, not inside `scripts/`.
-Local `config.json` should also live at the skill root and be gitignored.
+Do not assume real `config.json` or `.env` files live in the installed skill directory. Seren refreshes installed skills by replacing the managed directory, so user-owned runtime files must live outside it:
+
+- shared runtime root:
+  - macOS/Linux: `$XDG_CONFIG_HOME/seren` with `~/.config/seren` fallback
+  - Windows: `%APPDATA%\seren`
+- global skill runtime files: `$SEREN_CONFIG_DIR/skills-data/<slug>/`
+- project overrides: `<project>/.seren/skills-data/<slug>/`
+
+Use `config.example.json` and `.env.example` as templates only. Skill runtimes should accept explicit `--config` and `--env-file` paths, or equivalent environment variables, so `seren` and `seren-desktop` can pass files from the runtime directory.
+
+For Python skills, prefer generating a local `scripts/runtime_paths.py` from [`seren/skill-runtime`](./seren/skill-runtime/) and then using `activate_runtime()` near process start:
+
+```python
+from runtime_paths import activate_runtime
+
+args.config = str(activate_runtime(args.config))
+```
+
+That pattern gives you:
+
+- project override support via `<project>/.seren/skills-data/<slug>/`
+- shared runtime config under XDG / `%APPDATA%`
+- legacy skill-root fallback with a deprecation warning
+- relative `state/` and `logs/` paths rooted in the runtime directory instead of the installed skill directory
+
+If you are not using the shared helper yet, keep the resolution order simple. Resolve the env file in this order:
+
+1. `--env-file` CLI argument
+2. project override: `<project>/.seren/skills-data/<slug>/.env`
+3. shared config root:
+   - macOS/Linux: `$XDG_CONFIG_HOME/seren/skills-data/<slug>/.env`
+   - Windows: `%APPDATA%\seren\skills-data\<slug>\.env`
+4. fallback on macOS/Linux: `~/.config/seren/skills-data/<slug>/.env`
+
+Minimal helper pattern:
+
+```python
+from pathlib import Path
+import os
+
+
+def default_skill_env_path(slug: str, project_root: str | None = None) -> Path:
+    if project_root:
+        project_env = Path(project_root) / ".seren" / "skills-data" / slug / ".env"
+        if project_env.exists():
+            return project_env
+
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "seren" / "skills-data" / slug / ".env"
+
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config_home:
+        return Path(xdg_config_home) / "seren" / "skills-data" / slug / ".env"
+
+    return Path.home() / ".config" / "seren" / "skills-data" / slug / ".env"
+```
+
+Then pass the resolved path to `load_dotenv()` or your own parser if the file exists. If your skill uses the shared `activate_runtime()` pattern, relative `state/` and `logs/` paths will follow the runtime directory automatically.
 
 Documentation-only skills only need `SKILL.md`.
 

@@ -34,6 +34,7 @@ from polymarket_live import (
     positions_by_key,
     single_market_inventory_notional,
 )
+from runtime_paths import activate_runtime
 
 SEREN_POLYMARKET_PUBLISHER_HOST = "api.serendb.com"
 SEREN_PUBLISHERS_PREFIX = "/publishers/"
@@ -2389,6 +2390,7 @@ def run_quote(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
 
 def main() -> int:
     args = parse_args()
+    args.config = str(activate_runtime(args.config))
     config = load_config(args.config)
 
     if args.unwind_all:

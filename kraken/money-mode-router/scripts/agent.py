@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from kraken_client import KrakenClient
 from mode_engine import ModeEngine
+from runtime_paths import activate_runtime
 from serendb_store import SerenDBStore
 from urllib.request import Request, urlopen
 
@@ -420,6 +421,10 @@ def _check_serenbucks_balance(api_key: str) -> float:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if hasattr(args, "config"):
+        args.config = str(activate_runtime(args.config))
+    else:
+        activate_runtime()
     return args.func(args)
 
 

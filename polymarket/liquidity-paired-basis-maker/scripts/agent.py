@@ -42,6 +42,7 @@ from pair_stateful_replay import (
     snapshot_from_live_book,
     write_telemetry_records,
 )
+from runtime_paths import activate_runtime
 
 SEREN_POLYMARKET_PUBLISHER_HOST = "api.serendb.com"
 SEREN_PUBLISHERS_PREFIX = "/publishers/"
@@ -2081,6 +2082,7 @@ def run_unwind_all(config: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     args = parse_args()
+    args.config = str(activate_runtime(args.config))
     config = load_config(args.config)
 
     if args.unwind_all:

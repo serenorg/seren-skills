@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover
         return False
 
 from agent import run_once
+from runtime_paths import activate_runtime
 
 try:
     from datetime import UTC
@@ -137,8 +138,9 @@ def _load_loop_interval_seconds(config_path: str, fallback: int = 60) -> int:
 
 
 def main() -> int:
-    load_dotenv()
     args = parse_args()
+    args.config = str(activate_runtime(args.config))
+    load_dotenv()
     DCARequestHandler.config_path = args.config
     DCARequestHandler.allow_live = bool(args.allow_live)
     DCARequestHandler.accept_risk_disclaimer = bool(args.accept_risk_disclaimer)

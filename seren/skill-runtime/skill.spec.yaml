@@ -1,0 +1,9 @@
+skill: skill-runtime
+type: library
+description: Shared runtime path resolution for executable seren skills.
+version: "1.0"
+exports:
+  - scripts/seren_runtime.py
+publish:
+  org: seren
+  slug: skill-runtime

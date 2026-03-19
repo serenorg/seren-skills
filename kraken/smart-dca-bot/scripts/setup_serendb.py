@@ -13,6 +13,7 @@ except ImportError:  # pragma: no cover
         return False
 
 from serendb_store import SerenDBStore
+from runtime_paths import activate_runtime
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,8 +27,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    load_dotenv()
     args = parse_args()
+    activate_runtime()
+    load_dotenv()
     dsn = args.dsn.strip() or os.getenv("SERENDB_URL", "")
     store = SerenDBStore(dsn)
 

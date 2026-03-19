@@ -28,6 +28,7 @@ from seren_client import SerenClient
 from grid_manager import GridManager, optimize_backtest_configuration
 from position_tracker import PositionTracker
 from logger import GridTraderLogger
+from runtime_paths import activate_runtime
 from serendb_store import SerenDBStore
 import pair_selector
 from urllib.request import Request, urlopen
@@ -1074,6 +1075,7 @@ def main():
 
     # Initialize agent
     dry_run = (args.command == 'dry-run')
+    args.config = str(activate_runtime(args.config))
     agent = KrakenGridTrader(config_path=args.config, dry_run=dry_run)
 
     # Execute command

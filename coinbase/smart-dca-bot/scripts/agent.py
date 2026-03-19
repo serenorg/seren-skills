@@ -40,6 +40,7 @@ from logger import AuditLogger
 from optimizer import SUPPORTED_STRATEGIES, compute_rsi, decide_execution
 from portfolio_manager import PortfolioManager
 from position_tracker import PositionTracker
+from runtime_paths import activate_runtime
 from scanner import OpportunityScanner
 from seren_api_client import SerenAPIError, SerenAPIKeyManager
 from serendb_store import SerenDBStore
@@ -2130,6 +2131,7 @@ def _check_serenbucks_balance(api_key: str) -> float:
 
 def main() -> int:
     args = parse_args()
+    args.config = str(activate_runtime(args.config))
 
     command = args.command or "run"
     if command == "init-db":
