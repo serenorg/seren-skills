@@ -23,11 +23,13 @@ With 15 fills per day: **$252/day or $7,560/month** (75.6% monthly return)
 ## Features
 
 - **Mechanical Strategy**: No predictions, just profit from volatility
-- **Risk Management**: Stop-loss, position limits, bankroll protection
+- **Adaptive Runtime**: Re-centers the grid, adjusts spacing/order size, and persists accepted parameters across runs
+- **Shadow Evaluation**: Scores candidate settings in the background before promotion or rollback
+- **Risk Management**: Stop-loss, daily loss caps, position limits, open-order caps, and cooldowns after loss streaks
 - **Cost Efficient**: 0.16% maker fees via Kraken
 - **Always Active**: Always has opportunities (unlike prediction markets)
-- **Audit Trail**: JSONL logs for every trade
-- **Dry-Run Mode**: Test strategy without risking capital
+- **Audit Trail**: JSONL logs for setup, metrics, fills, reviews, and alerts
+- **Dry-Run Adaptive Path**: Test adaptive decisions without placing real orders
 
 ## Quick Start
 
@@ -119,8 +121,20 @@ python scripts/agent.py setup --config config.json
 # Simulate trading (no real orders)
 python scripts/agent.py dry-run --config config.json --cycles 10
 
+# Run exactly one adaptive cycle
+python scripts/agent.py cycle --config config.json
+
+# Run one live adaptive cycle
+python scripts/agent.py cycle --config config.json --allow-live
+
 # Start live trading
-python scripts/agent.py start --config config.json
+python scripts/agent.py start --config config.json --allow-live
+
+# Generate weekly review JSON
+python scripts/agent.py review --config config.json
+
+# Run one-shot safety checks
+python scripts/agent.py safety-check --config config.json
 
 # Check current status
 python scripts/agent.py status --config config.json
@@ -165,6 +179,8 @@ python scripts/agent.py stop --config config.json
 - **price_range**: Min/max prices for grid (should span 20-30% range)
 - **scan_interval_seconds**: How often to check for fills (60s recommended)
 - **stop_loss_bankroll**: Auto-stop if value drops below this (80% of bankroll)
+- **daily_loss_cap_usd**: Pause new risk if realized + unrealized daily loss breaches the cap
+- **cooldown_after_consecutive_losses**: Number of losing cycles before adaptive cooldown kicks in
 
 ## Cost Analysis
 
@@ -207,7 +223,12 @@ All operations logged to `logs/` directory as JSONL files:
 - `orders.jsonl` - Order placements/cancellations
 - `fills.jsonl` - Trade executions
 - `positions.jsonl` - Position snapshots
+- `metrics.jsonl` - Per-cycle adaptive telemetry and rolling windows
+- `weekly_reviews.jsonl` - Weekly review summaries
+- `alerts.jsonl` - Safety incidents and repeated failures
 - `errors.jsonl` - Errors and warnings
+
+Adaptive state persists in `state/adaptive_state.json`, including accepted parameters, shadow scores, recent cycles, and known open orders for one-shot cron execution.
 
 ## SerenDB Persistence
 
@@ -224,10 +245,27 @@ SerenDB persistence is best-effort; if unavailable, trading continues with local
 ## Safety Features
 
 1. **Stop-Loss**: Auto-stops if bankroll drops below threshold
-2. **Position Limits**: Prevents overexposure
-3. **Dry-Run Mode**: Test without risking capital
-4. **Audit Trail**: Every trade logged
-5. **Graceful Shutdown**: Cancels all orders on exit
+2. **Daily Loss Caps + Cooldowns**: New buys pause after loss streaks or daily drawdown breaches
+3. **Position/Open Order Limits**: Prevents overexposure and runaway order spam
+4. **Shadow Promotion Gate**: Candidate settings must outperform the baseline before promotion
+5. **Audit Trail**: Every cycle, review, fill, and alert is logged
+6. **Graceful Shutdown**: Cancels all orders on exit
+
+## seren-cron
+
+The preferred automation path is one-shot scheduling:
+
+```bash
+python scripts/run_agent_server.py --config config.json --port 8787
+python scripts/setup_cron.py create \
+  --runner-url "https://YOUR_PUBLIC_RUNNER_URL" \
+  --webhook-secret "$KRAKEN_GRID_WEBHOOK_SECRET"
+```
+
+This creates three jobs by default:
+- `kraken-grid-trader-cycle`
+- `kraken-grid-trader-safety-check`
+- `kraken-grid-trader-weekly-review`
 
 ## Troubleshooting
 

@@ -35,5 +35,28 @@
     "cancel_on_error": true,
     "operation_timeout_seconds": 30,
     "cycle_timeout_seconds": 90
+  },
+  "adaptive": {
+    "enabled": true,
+    "state_path": "state/adaptive_state.json",
+    "lock_path": "state/runtime.lock",
+    "slippage_buffer_pct": 0.2,
+    "min_spacing_percent": 0.0,
+    "max_spacing_multiplier": 2.5,
+    "min_order_size_multiplier": 0.25,
+    "max_order_size_multiplier": 1.0,
+    "min_risk_multiplier": 0.35,
+    "max_risk_multiplier": 1.0,
+    "cooldown_after_consecutive_losses": 3,
+    "cooldown_minutes": 60,
+    "daily_loss_cap_usd": 150.0,
+    "shadow_min_samples": 5,
+    "shadow_improvement_threshold_pct": 5.0,
+    "shadow_rollback_degradation_pct": 10.0,
+    "metrics_log_path": "logs/metrics.jsonl",
+    "review_log_path": "logs/weekly_reviews.jsonl",
+    "review_output_dir": "logs/reviews",
+    "alert_log_path": "logs/alerts.jsonl",
+    "max_failure_count_before_alert": 3
   }
 }

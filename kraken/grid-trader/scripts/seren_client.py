@@ -172,6 +172,47 @@ class SerenClient:
 
         raise KeyError(f"No ticker data found for pair {pair}")
 
+    def get_market_snapshot(self, pair: str) -> Dict[str, float]:
+        """
+        Return a normalized top-of-book and range snapshot for a trading pair.
+
+        Args:
+            pair: Trading pair (e.g., 'XBTUSD')
+
+        Returns:
+            Dict with current_price, bid, ask, high, low, volume, and spread metrics.
+        """
+        ticker = self.get_ticker(pair)
+        result = ticker.get("result", {})
+        if pair in result:
+            payload = result[pair]
+        elif result:
+            payload = result[list(result.keys())[0]]
+        else:
+            raise KeyError(f"No ticker data found for pair {pair}")
+
+        bid = float(payload.get("b", [0.0])[0])
+        ask = float(payload.get("a", [0.0])[0])
+        current_price = float(payload.get("c", [bid or ask or 0.0])[0])
+        high_values = payload.get("h", [current_price, current_price])
+        low_values = payload.get("l", [current_price, current_price])
+        volume_values = payload.get("v", [0.0, 0.0])
+        high = float(high_values[-1])
+        low = float(low_values[-1])
+        volume = float(volume_values[-1])
+        mid_price = (bid + ask) / 2.0 if ask > 0 and bid > 0 else current_price
+        spread_pct = ((ask - bid) / mid_price * 100.0) if mid_price > 0 else 0.0
+        return {
+            "current_price": current_price,
+            "bid": bid,
+            "ask": ask,
+            "high": high,
+            "low": low,
+            "volume": volume,
+            "mid_price": mid_price,
+            "spread_pct": spread_pct,
+        }
+
     def get_asset_pairs(self, pair: str) -> Dict[str, Any]:
         """
         Get asset pair information
