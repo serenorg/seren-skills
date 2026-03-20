@@ -147,8 +147,6 @@ def test_cancel_all_orders_returns_confirmation():
 
 def test_emergency_unwind_with_yes_live(tmp_path):
     """Full unwind path with --yes-live succeeds when dependencies are met."""
-    config_file = tmp_path / "config.json"
-    config_file.write_text('{"execution": {"live_mode": true}}')
     config = {"execution": {"live_mode": True}}
     args = mock.MagicMock(yes_live=True, allow_live=False, unwind_all=True)
     env = {
