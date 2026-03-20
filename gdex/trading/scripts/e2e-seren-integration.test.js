@@ -44,7 +44,7 @@ function assert(condition, label, detail) {
   }
 }
 
-// ─── Skill root (two levels up from scripts/) ────────────────────────────────
+// ─── Skill root (one level up from scripts/) ────────────────────────────────
 const SKILL_ROOT = path.resolve(__dirname, '..');
 const SKILL_MD_PATH = path.join(SKILL_ROOT, 'SKILL.md');
 
