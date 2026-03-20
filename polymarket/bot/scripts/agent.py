@@ -214,18 +214,34 @@ class TradingAgent:
 
         pre_selected = time_filtered[:limit]
 
-        # Enrich with live CLOB midpoint prices
+        # Enrich with live CLOB midpoint prices. If CLOB is unavailable, keep only
+        # markets that already have a non-fallback Gamma price.
         enriched = []
+        stale_price_skips = 0
         for m in pre_selected:
+            live_mid = None
             try:
                 live_mid = self.polymarket.get_midpoint(m['token_id'])
-                if live_mid and 0.01 < live_mid < 0.99:
-                    m['price'] = live_mid
             except Exception:
-                pass
-            enriched.append(m)
+                live_mid = None
+
+            if live_mid and 0.01 < live_mid < 0.99:
+                m['price'] = live_mid
+                m['price_source'] = 'clob_midpoint'
+                enriched.append(m)
+                continue
+
+            if m.get('price_source') == 'gamma':
+                enriched.append(m)
+                continue
+
+            stale_price_skips += 1
+            question = m.get('question', '')[:60]
+            print(f"  Skipping stale-priced market: {question}")
 
         dropped = len(markets) - len(enriched)
+        if stale_price_skips:
+            print(f"  Skipped {stale_price_skips} markets with fallback 50% prices and no valid CLOB midpoint")
         print(f"  Ranked {len(markets)} markets → kept top {len(enriched)} candidates (dropped {dropped})")
         return enriched
 

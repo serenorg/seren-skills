@@ -45,7 +45,7 @@ class TestResolutionDateFilter:
         agent = MagicMock()
         agent.max_resolution_days = max_resolution_days
         agent.polymarket = MagicMock()
-        agent.polymarket.get_midpoint = MagicMock(return_value=0.5)
+        agent.polymarket.get_midpoint = MagicMock(return_value=0.4)
 
         # Import the actual rank_candidates and bind it
         from agent import TradingAgent
@@ -103,6 +103,35 @@ class TestResolutionDateFilter:
         questions = [m['question'] for m in result]
         assert 'Bad date' not in questions
         assert questions == ['Near market']
+
+    def test_skips_fallback_50_price_when_clob_midpoint_unavailable(self):
+        agent = self._make_agent_with_config(max_resolution_days=180)
+        agent.polymarket.get_midpoint.side_effect = RuntimeError("missing CLOB creds")
+        markets = [
+            {'question': 'Fallback price', 'end_date': self._iso(30),
+             'liquidity': 1000, 'volume': 5000, 'token_id': 'tok1',
+             'price': 0.5, 'price_source': 'gamma_fallback'},
+            {'question': 'Valid gamma price', 'end_date': self._iso(30),
+             'liquidity': 1000, 'volume': 4000, 'token_id': 'tok2',
+             'price': 0.18, 'price_source': 'gamma'},
+        ]
+        result = agent.rank_candidates(markets, limit=10)
+        questions = [m['question'] for m in result]
+        assert 'Fallback price' not in questions
+        assert questions == ['Valid gamma price']
+
+    def test_prefers_valid_clob_midpoint_over_gamma_price(self):
+        agent = self._make_agent_with_config(max_resolution_days=180)
+        agent.polymarket.get_midpoint.return_value = 0.22
+        markets = [
+            {'question': 'Near market', 'end_date': self._iso(30),
+             'liquidity': 1000, 'volume': 5000, 'token_id': 'tok1',
+             'price': 0.5, 'price_source': 'gamma_fallback'},
+        ]
+        result = agent.rank_candidates(markets, limit=10)
+        assert len(result) == 1
+        assert result[0]['price'] == pytest.approx(0.22, abs=0.001)
+        assert result[0]['price_source'] == 'clob_midpoint'
 
 
 class TestEvaluateOpportunityGuards:
