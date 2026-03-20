@@ -227,6 +227,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Required safety flag for live execution.",
     )
+    parser.add_argument(
+        "--unwind-all",
+        action="store_true",
+        help="Stop trading and prepare an emergency liquidation plan for the tracked position.",
+    )
     return parser.parse_args()
 
 
@@ -1574,6 +1579,80 @@ def run_once(config: dict[str, Any], *, yes_live: bool, ledger_address: str) -> 
     }
 
 
+def run_unwind_all(config: dict[str, Any], *, ledger_address: str) -> dict[str, Any]:
+    """Stop trading and prepare an unwind plan for the tracked position inventory."""
+    api_key = os.environ.get("SEREN_API_KEY", "").strip()
+    if not api_key:
+        raise ConfigError("SEREN_API_KEY is required in the environment.")
+
+    config_api = config.get("api", {})
+    configured_base_url = ""
+    if isinstance(config_api, dict):
+        configured_base_url = str(config_api.get("base_url", ""))
+    base_url = configured_base_url or os.environ.get("SEREN_API_BASE_URL", DEFAULT_API_BASE)
+    client = SerenPublisherClient(api_key=api_key, base_url=base_url)
+
+    inputs = _resolve_inputs(config)
+    wallet_config = config.get("wallet", {})
+    if wallet_config is None:
+        wallet_config = {}
+    if not isinstance(wallet_config, dict):
+        raise ConfigError("Config field 'wallet' must be an object when provided.")
+    wallet_path = Path(str(wallet_config.get("path", DEFAULT_WALLET_PATH)))
+    ledger_from_config = str(wallet_config.get("ledger_address", ""))
+    resolved_ledger = ledger_address or ledger_from_config
+
+    signer = resolve_signer(
+        wallet_mode=inputs["wallet_mode"],
+        wallet_path=wallet_path,
+        ledger_address=resolved_ledger,
+    )
+    rpc_capability = check_rpc_capability(
+        client,
+        chain=inputs["chain"],
+        config=config,
+    )
+    rpc_target = {
+        "publisher": rpc_capability["publisher"],
+        "method": str(rpc_capability.get("rpc_target", {}).get("method", "POST")),
+        "path": str(rpc_capability.get("rpc_target", {}).get("path", "")),
+        "publisher_source": rpc_capability.get("publisher_source", "unknown"),
+    }
+    gauges_response = fetch_top_gauges(
+        client,
+        chain=inputs["chain"],
+        limit=inputs["top_n_gauges"],
+    )
+    trade_plan = choose_trade_plan(
+        gauges_response,
+        token=inputs["deposit_token"],
+        amount_usd=inputs["deposit_amount_usd"],
+    )
+    position_sync = sync_positions(
+        client,
+        signer=signer,
+        rpc_target=rpc_target,
+        trade_plan=trade_plan,
+    )
+    return {
+        "status": "ok",
+        "mode": "unwind-all",
+        "stop_trading": True,
+        "cancel_all_orders": "not_applicable_for_onchain_curve_positions",
+        "liquidate_position": True,
+        "message": (
+            "stop trading plan generated; no open orders exist on Curve, so unwind the "
+            "LP and gauge position using the synced addresses below."
+        ),
+        "chain": inputs["chain"],
+        "signer_mode": signer["mode"],
+        "signer_address": signer["address"],
+        "rpc_capability": rpc_capability,
+        "position_sync": position_sync,
+        "trade_plan": trade_plan,
+    }
+
+
 
 # ---------------------------------------------------------------------------
 # SerenBucks balance helpers
@@ -1643,11 +1722,14 @@ def main() -> int:
 
     try:
         config = load_config(args.config)
-        result = run_once(
-            config=config,
-            yes_live=bool(args.yes_live),
-            ledger_address=args.ledger_address.strip(),
-        )
+        if args.unwind_all:
+            result = run_unwind_all(config=config, ledger_address=args.ledger_address.strip())
+        else:
+            result = run_once(
+                config=config,
+                yes_live=bool(args.yes_live),
+                ledger_address=args.ledger_address.strip(),
+            )
     except (ConfigError, PublisherError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1

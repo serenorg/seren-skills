@@ -1037,6 +1037,14 @@ def _check_serenbucks_balance(api_key: str) -> float:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
 
+def _require_live_confirmation(command: str, allow_live: bool) -> None:
+    if command == "start" and not allow_live:
+        raise SystemExit(
+            "Live mode requested but --allow-live was not provided. "
+            "Use `python scripts/agent.py start --config config.json --allow-live` "
+            "for the startup-only live opt-in."
+        )
+
 def main():
     """CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -1057,6 +1065,11 @@ def main():
     # Start command
     start_parser = subparsers.add_parser('start', help='Start live trading')
     start_parser.add_argument('--config', required=True, help='Path to config JSON file')
+    start_parser.add_argument(
+        '--allow-live',
+        action='store_true',
+        help='Explicit startup-only opt-in for live trading.',
+    )
 
     # Status command
     status_parser = subparsers.add_parser('status', help='Show current trading status')
@@ -1071,6 +1084,8 @@ def main():
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    _require_live_confirmation(args.command, getattr(args, 'allow_live', False))
 
     # Initialize agent
     dry_run = (args.command == 'dry-run')

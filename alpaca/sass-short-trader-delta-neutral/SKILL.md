@@ -67,6 +67,32 @@ Legacy Python/API scripts remain available as fallback, not default.
 
 Use `scripts/dry_run_prompt.txt` for one-copy/paste execution.
 
+## Pre-Trade Checklist
+
+Before any live run:
+
+1. Verify `SEREN_API_KEY` is loaded and the `alpaca` publisher can read `/v2/account`.
+2. Verify `sec-filings-intelligence`, `google-trends`, and `perplexity` or `exa` are reachable.
+3. Verify the configured hedge ticker, `strict_required_feeds`, and `live_controls` still fit the account before submitting orders.
+4. If any required feed, credential, or account preflight fails, stop here and fail closed instead of submitting orders.
+
+## Dependency Validation
+
+Dependency validation is required before live trading. Verify `SEREN_API_KEY`, the `alpaca` publisher, `sec-filings-intelligence`, `google-trends`, and the news research publisher are loaded and reachable. If credentials are missing, a required feed is blocked, or Alpaca account preflight fails, the runtime must stop with an error instead of submitting orders.
+
+## Live Safety Opt-In
+
+Default mode is `paper-sim`. Live trading requires both:
+
+- `mode=live` in config or request payload
+- `python3 scripts/strategy_engine.py --config config.json --mode live --allow-live ...`
+
+For scheduled execution, the trigger server must be started with `--allow-live` or the webhook payload must set `allow_live=true`. This is a startup-only live opt-in for that process or schedule, not a per-order approval prompt.
+
+## Emergency Exit Path
+
+To stop trading immediately, run `python3 scripts/strategy_engine.py --config config.json --stop-trading` or send `action=stop-trading` to the webhook runner. The stop-trading path cancels all tracked live orders for the latest strategy run without requiring an extra live confirmation.
+
 ## Continuous Schedule (Recommended ET)
 
 - Scan: `15 8 * * 1-5` (08:15 ET)

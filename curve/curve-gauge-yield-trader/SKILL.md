@@ -67,6 +67,27 @@ This skill can trade real money. Use at your own risk. Past performance does not
   - `evm_execution.tx.gas_limit_multiplier`
   - `evm_execution.tx.fallback_gas_limit`
 
+## Trade Execution Contract
+
+When the user says `sell`, `close`, `exit`, `unwind`, or `flatten`, treat that as an immediate operator instruction to stop trading and prepare the LP or gauge withdrawal path. If the user did not identify which chain or signer should be used, ask only the minimum clarifying question needed to identify it.
+
+## Pre-Trade Checklist
+
+Before any live execution:
+
+1. Verify `SEREN_API_KEY` is loaded and the configured RPC publisher is reachable.
+2. Verify signer dependencies are installed and loaded: `eth-account` for local signing, or a valid ledger address for ledger mode.
+3. Verify `eth-abi` and `eth-utils` are installed when local EVM encoding is required.
+4. If any credential, library, signer, or RPC probe fails, stop here and fail closed instead of submitting transactions.
+
+## Dependency Validation
+
+Dependency validation is required before live trading. Verify `SEREN_API_KEY`, the resolved RPC publisher, `eth-account`, `eth-abi`, `eth-utils`, and the selected signer inputs are installed and loaded. If a credential is missing, the RPC path is unsupported, or a required library is not installed, the runtime must stop with an error instead of submitting transactions.
+
+## Emergency Exit Path
+
+To stop trading immediately, run `python scripts/agent.py --config config.json --unwind-all`. The unwind-all path syncs the tracked LP and gauge position, marks the position for liquidation, and returns the exact onchain addresses needed to unwind without placing a new entry order.
+
 ## Quick Start
 
 1. Create/get your `SEREN_API_KEY` by following [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.md), then set it in your environment (for example: `export SEREN_API_KEY=...`).

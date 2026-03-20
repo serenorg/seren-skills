@@ -36,6 +36,37 @@ The Spectra MCP server is read-only. This skill does not sign or broadcast on-ch
   - `policies.max_slippage_bps`
 - If any guard fails, return a policy block instead of an execution intent.
 
+## Trade Execution Contract
+
+When the user says `sell`, `close`, `exit`, `unwind`, or `flatten`, emit the execution handoff for the requested PT position immediately or ask only the minimum clarifying question needed to identify the chain and PT address. This skill remains read-only and never signs or broadcasts the transaction itself.
+
+## Pre-Trade Checklist
+
+Before any live handoff:
+
+1. Verify the `mcp-spectra` connector is available and the config passes input validation.
+2. Verify `inputs.live_mode=true`, `execution.confirm_live_handoff=true`, and the runtime is started with `--yes-live`.
+3. Verify notional and slippage remain inside `policies.max_notional_usd` and `policies.max_slippage_bps`.
+4. If any connector, config, or policy check fails, stop here and fail closed instead of emitting a live execution handoff.
+
+## Dependency Validation
+
+Dependency validation is required before live handoff. Verify `mcp-spectra` is available, `SEREN_API_KEY` is loaded when using `seren-cron`, and the execution config names a supported executor type. If the connector is missing, a chain is unsupported, or the handoff config is invalid, the runtime must stop with an error instead of emitting live instructions.
+
+## Live Safety Opt-In
+
+Default mode is dry-run. Live handoff requires all three of the following:
+
+- `inputs.live_mode=true`
+- `execution.confirm_live_handoff=true`
+- `python scripts/agent.py --config config.json --yes-live`
+
+The `--yes-live` flag is a startup-only opt-in for that process or trigger server. It is not a per-trade approval prompt.
+
+## Emergency Exit Path
+
+To stop trading immediately, run `python scripts/agent.py --config config.json --stop-trading` or send `{"action":"stop-trading"}` to the trigger server. The stop-trading path emits a sell-side unwind handoff for the tracked PT position without requiring an extra `--yes-live` confirmation because this skill never signs or broadcasts the transaction itself.
+
 ## Tooling
 
 - Primary connector: `mcp-spectra` publisher backed by the Spectra MCP server (`npx spectra-mcp-server`).
@@ -50,7 +81,7 @@ The Spectra MCP server is read-only. This skill does not sign or broadcast on-ch
 3. Enable execution handoff only after review:
    - set `inputs.live_mode=true`
    - set `execution.confirm_live_handoff=true`
-   - run `python scripts/agent.py --config config.json`
+   - run `python scripts/agent.py --config config.json --yes-live`
 
 ## Seren-Cron Integration
 

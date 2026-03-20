@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import sys
+import types
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -27,6 +28,7 @@ UNWIND_AGENT_PATHS = {
     "high-throughput-paired-basis-maker": POLYMARKET_ROOT / "high-throughput-paired-basis-maker" / "scripts" / "agent.py",
     "paired-market-basis-maker": POLYMARKET_ROOT / "paired-market-basis-maker" / "scripts" / "agent.py",
 }
+BOT_AGENT_PATH = POLYMARKET_ROOT / "bot" / "scripts" / "agent.py"
 
 
 def _load_module(name: str, path: Path, *, clear_modules: tuple[str, ...] = ()) -> object:
@@ -38,6 +40,51 @@ def _load_module(name: str, path: Path, *, clear_modules: tuple[str, ...] = ()) 
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _load_bot_agent_module() -> object:
+    for module_name in (
+        "dotenv",
+        "seren_client",
+        "polymarket_client",
+        "position_tracker",
+        "logger",
+        "serendb_storage",
+        "kelly",
+    ):
+        sys.modules.pop(module_name, None)
+
+    dotenv = types.ModuleType("dotenv")
+    dotenv.load_dotenv = lambda: None
+    sys.modules["dotenv"] = dotenv
+
+    seren_client = types.ModuleType("seren_client")
+    seren_client.SerenClient = object
+    sys.modules["seren_client"] = seren_client
+
+    polymarket_client = types.ModuleType("polymarket_client")
+    polymarket_client.PolymarketClient = object
+    sys.modules["polymarket_client"] = polymarket_client
+
+    position_tracker = types.ModuleType("position_tracker")
+    position_tracker.PositionTracker = object
+    sys.modules["position_tracker"] = position_tracker
+
+    logger = types.ModuleType("logger")
+    logger.TradingLogger = object
+    sys.modules["logger"] = logger
+
+    serendb_storage = types.ModuleType("serendb_storage")
+    serendb_storage.SerenDBStorage = object
+    sys.modules["serendb_storage"] = serendb_storage
+
+    sys.modules["kelly"] = types.ModuleType("kelly")
+
+    return _load_module(
+        "polymarket_bot_agent_test",
+        BOT_AGENT_PATH,
+        clear_modules=("agent",),
+    )
 
 
 @pytest.mark.parametrize("skill_slug", sorted(LIVE_MODULE_PATHS))
@@ -172,3 +219,20 @@ def test_unwind_all_uses_marketable_sell_plan(
     assert captured_order["fee_rate_bps"] == 7
     assert result["sell_results"][0]["estimated_exit_value_usd"] == pytest.approx(1.02)
     assert result["sell_results"][0]["execution_style"] == "marketable-limit-min-tick"
+
+
+def test_polymarket_bot_requires_yes_live_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_bot_agent_module()
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["agent.py", "--config", str(config_path)])
+
+    stdout = io.StringIO()
+    with pytest.raises(SystemExit) as exc, redirect_stdout(stdout):
+        module.main()
+
+    assert exc.value.code == 1
+    assert "--yes-live" in stdout.getvalue()

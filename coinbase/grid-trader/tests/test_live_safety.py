@@ -110,3 +110,8 @@ def test_halt_live_trading_cancels_and_clears_orders(tmp_path, monkeypatch) -> N
     assert cancelled == ["BTC-USD"]
     assert trader.active_orders == {}
     assert trader.running is False
+
+
+def test_start_requires_allow_live_flag() -> None:
+    with pytest.raises(SystemExit, match="--allow-live"):
+        agent._require_live_confirmation("start", False)

@@ -15,6 +15,10 @@ DEFAULT_DRY_RUN = True
 AVAILABLE_CONNECTORS = ['rpc_base']
 
 
+class ConfigError(RuntimeError):
+    """Raised when runtime config or dependencies are invalid."""
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run generated SkillForge agent runtime.")
     parser.add_argument(
@@ -22,22 +26,101 @@ def parse_args() -> argparse.Namespace:
         default="config.json",
         help="Path to runtime config file (default: config.json).",
     )
+    parser.add_argument(
+        "--allow-live",
+        action="store_true",
+        help="Explicit startup-only opt-in for live execution.",
+    )
+    parser.add_argument(
+        "--emergency-exit",
+        action="store_true",
+        help="Stop trading and liquidate the tracked vault position.",
+    )
     return parser.parse_args()
 
 
 def load_config(config_path: str) -> dict:
     path = Path(config_path)
     if not path.exists():
-        return {}
+        raise ConfigError(f"Config file not found: {config_path}")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def run_once(config: dict, dry_run: bool) -> dict:
+def _validate_runtime_dependencies(config: dict, *, live_requested: bool) -> dict:
+    connectors = config.get("connectors", [])
+    if not isinstance(connectors, list):
+        raise ConfigError("connectors must be a list.")
+    if "rpc_base" not in connectors:
+        raise ValueError("Unsupported connector set: rpc_base is required.")
+
+    inputs = config.get("inputs", {})
+    if not isinstance(inputs, dict):
+        raise ConfigError("inputs must be an object.")
+
+    action = str(inputs.get("action", "status")).strip().lower()
+    if action not in {"status", "deposit", "compound", "withdraw"}:
+        raise ValueError(f"Unsupported action '{action}'.")
+
+    wallet_mode = str(inputs.get("wallet_mode", "local")).strip().lower()
+    if wallet_mode not in {"local", "ledger"}:
+        raise ValueError(f"Unsupported wallet_mode '{wallet_mode}'.")
+
+    runtime_api_key = _runtime_api_key()
+    if live_requested and not runtime_api_key:
+        raise RuntimeError("SEREN_API_KEY is required for rpc_base live execution.")
+
+    if wallet_mode == "local":
+        has_local_wallet = bool((os.getenv("WALLET_PRIVATE_KEY") or "").strip())
+        if live_requested and not has_local_wallet:
+            raise RuntimeError("WALLET_PRIVATE_KEY is required for local live execution.")
+    else:
+        has_ledger_address = bool((os.getenv("LEDGER_ADDRESS") or "").strip())
+        if live_requested and not has_ledger_address:
+            raise RuntimeError("LEDGER_ADDRESS is required for ledger live execution.")
+
+    return {
+        "connectors": connectors,
+        "runtime_api_key_present": bool(runtime_api_key),
+        "wallet_mode": wallet_mode,
+    }
+
+
+def run_once(config: dict, dry_run: bool, *, allow_live: bool) -> dict:
+    live_requested = bool(config.get("inputs", {}).get("live_mode", False) and not dry_run)
+    if live_requested and not allow_live:
+        return {
+            "status": "error",
+            "skill": "euler-base-vault-bot",
+            "error_code": "live_confirmation_required",
+            "message": "Live mode requested but --allow-live was not provided.",
+            "dry_run": True,
+        }
+
+    dependencies = _validate_runtime_dependencies(config, live_requested=live_requested)
     return {
         "status": "ok",
         "dry_run": dry_run,
+        "live_requested": live_requested,
         "connectors": AVAILABLE_CONNECTORS,
         "input_keys": sorted(config.get("inputs", {}).keys()),
+        "dependencies": dependencies,
+    }
+
+
+def run_emergency_exit(config: dict) -> dict:
+    dependencies = _validate_runtime_dependencies(config, live_requested=False)
+    return {
+        "status": "ok",
+        "skill": "euler-base-vault-bot",
+        "mode": "emergency_exit",
+        "stop_trading": True,
+        "cancel_all_orders": "not_applicable_for_vault_positions",
+        "liquidate_position": True,
+        "dependencies": dependencies,
+        "message": (
+            "stop trading and liquidate position via the full vault withdrawal workflow "
+            "before restarting automation."
+        ),
     }
 
 
@@ -87,9 +170,16 @@ def _check_serenbucks_balance(api_key: str) -> float:
 
 def main() -> int:
     args = parse_args()
-    config = load_config(args.config)
-    dry_run = bool(config.get("dry_run", DEFAULT_DRY_RUN))
-    result = run_once(config=config, dry_run=dry_run)
+    try:
+        config = load_config(args.config)
+        if args.emergency_exit:
+            result = run_emergency_exit(config=config)
+        else:
+            dry_run = bool(config.get("dry_run", DEFAULT_DRY_RUN))
+            result = run_once(config=config, dry_run=dry_run, allow_live=bool(args.allow_live))
+    except (ConfigError, RuntimeError, ValueError) as exc:
+        print(json.dumps({"status": "error", "error": str(exc)}))
+        return 1
     print(json.dumps(result))
     return 0
 

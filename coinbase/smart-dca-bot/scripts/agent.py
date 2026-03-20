@@ -2004,6 +2004,66 @@ def export_state(path: str) -> dict[str, Any]:
     return payload
 
 
+def _load_pending_order_ids(path: Path = STATE_EXPORT_PATH) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    order_ids = payload.get("pending_order_ids", [])
+    if not isinstance(order_ids, list):
+        return []
+    return sorted({str(order_id).strip() for order_id in order_ids if str(order_id).strip()})
+
+
+def stop_trading(*, config_path: str) -> dict[str, Any]:
+    load_dotenv()
+    config = load_config(config_path)
+    dry_run = bool(config.get("dry_run", True))
+    pending_order_ids = _load_pending_order_ids()
+    cancelled_orders: list[dict[str, Any]] = []
+
+    if dry_run:
+        return {
+            "status": "ok",
+            "skill": SKILL_NAME,
+            "dry_run": True,
+            "pending_order_ids": pending_order_ids,
+            "cancelled_orders": cancelled_orders,
+            "message": "stop trading completed in dry-run mode; no live orders were cancelled.",
+        }
+
+    client = build_coinbase_client(config)
+    if client is None:
+        return {
+            "status": "error",
+            "skill": SKILL_NAME,
+            "error_code": "client_unavailable",
+            "message": "stop trading failed because Coinbase client credentials are missing.",
+            "pending_order_ids": pending_order_ids,
+        }
+
+    for order_id in pending_order_ids:
+        try:
+            result = client.cancel_order(order_id)
+            cancelled_orders.append({"order_id": order_id, "result": result})
+        except Exception as exc:  # noqa: BLE001
+            cancelled_orders.append({"order_id": order_id, "error": str(exc)})
+
+    return {
+        "status": "ok",
+        "skill": SKILL_NAME,
+        "dry_run": False,
+        "pending_order_ids": pending_order_ids,
+        "cancelled_orders": cancelled_orders,
+        "message": (
+            "stop trading cancelled pending orders and left held spot positions untouched "
+            "for the operator to liquidate separately if needed."
+        ),
+    }
+
+
 def run_loop(*, config_path: str, allow_live: bool, accept_risk_disclaimer: bool) -> int:
     load_dotenv()
     config = load_config(config_path)
@@ -2013,7 +2073,7 @@ def run_loop(*, config_path: str, allow_live: bool, accept_risk_disclaimer: bool
     signal.signal(signal.SIGINT, _request_shutdown)
     signal.signal(signal.SIGTERM, _request_shutdown)
 
-    pending_state: dict[str, Any] = {"runs": [], "cancelled_on_shutdown": []}
+    pending_state: dict[str, Any] = {"runs": [], "cancelled_on_shutdown": [], "pending_order_ids": []}
     pending_order_ids: set[str] = set()
 
     while not _shutdown_requested:
@@ -2052,6 +2112,7 @@ def run_loop(*, config_path: str, allow_live: bool, accept_risk_disclaimer: bool
                     )
 
     STATE_EXPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    pending_state["pending_order_ids"] = sorted(pending_order_ids)
     STATE_EXPORT_PATH.write_text(
         json.dumps(pending_state, sort_keys=True, indent=2),
         encoding="utf-8",
@@ -2072,6 +2133,9 @@ def parse_args() -> argparse.Namespace:
     loop.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     loop.add_argument("--allow-live", action="store_true")
     loop.add_argument("--accept-risk-disclaimer", action="store_true")
+
+    stop_cmd = sub.add_parser("stop-trading", help="Stop trading and cancel tracked pending orders")
+    stop_cmd.add_argument("--config", default=DEFAULT_CONFIG_PATH)
 
     init_db = sub.add_parser("init-db", help="Initialize SerenDB schema")
     init_db.add_argument("--config", default=DEFAULT_CONFIG_PATH)
@@ -2149,6 +2213,11 @@ def main() -> int:
         payload = export_state(args.output)
         print(json.dumps({"status": "ok", "payload": payload}, sort_keys=True))
         return 0
+
+    if command == "stop-trading":
+        result = stop_trading(config_path=args.config)
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result.get("status") == "ok" else 1
 
     if command == "loop":
         return run_loop(

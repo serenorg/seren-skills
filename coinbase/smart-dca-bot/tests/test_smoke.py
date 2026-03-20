@@ -283,3 +283,32 @@ def test_live_mode_cancels_known_orders_on_error(tmp_path: Path, monkeypatch) ->
     assert result["status"] == "error"
     assert cancelled == ["order-1"]
     assert result["cancelled_on_error"][0]["order_id"] == "order-1"
+
+
+def test_stop_trading_cancels_pending_orders_from_state(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "config.json"
+    _write_config(config, "single_asset")
+
+    body = json.loads(config.read_text(encoding="utf-8"))
+    body["dry_run"] = False
+    config.write_text(json.dumps(body), encoding="utf-8")
+
+    state_path = tmp_path / "state" / "last_state_export.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"pending_order_ids": ["order-1", "order-2"]}), encoding="utf-8")
+    monkeypatch.setattr(agent, "STATE_EXPORT_PATH", state_path)
+
+    cancelled: list[str] = []
+
+    class _Client:
+        def cancel_order(self, order_id: str):
+            cancelled.append(order_id)
+            return {"success": True}
+
+    monkeypatch.setattr(agent, "build_coinbase_client", lambda config: _Client())
+
+    result = agent.stop_trading(config_path=str(config))
+
+    assert "stop trading" in result["message"]
+    assert cancelled == ["order-1", "order-2"]

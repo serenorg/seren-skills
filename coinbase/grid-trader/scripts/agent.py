@@ -951,6 +951,14 @@ def _check_serenbucks_balance(api_key: str) -> float:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
 
+def _require_live_confirmation(command: str, allow_live: bool) -> None:
+    if command == "start" and not allow_live:
+        raise SystemExit(
+            "Live mode requested but --allow-live was not provided. "
+            "Use `python scripts/agent.py start --config config.json --allow-live` "
+            "for the startup-only live opt-in."
+        )
+
 def main():
     """CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -970,11 +978,19 @@ def main():
         sp.add_argument('--config', required=True, help='Path to config JSON file')
         if cmd == 'dry-run':
             sp.add_argument('--cycles', type=int, default=5, help='Cycles to simulate')
+        if cmd == 'start':
+            sp.add_argument(
+                '--allow-live',
+                action='store_true',
+                help='Explicit startup-only opt-in for live trading.',
+            )
 
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    _require_live_confirmation(args.command, getattr(args, 'allow_live', False))
 
     dry_run = (args.command == 'dry-run')
     agent = CoinbaseGridTrader(config_path=args.config, dry_run=dry_run)

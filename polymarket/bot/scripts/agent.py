@@ -536,12 +536,24 @@ def main():
         action='store_true',
         help='Dry-run mode (no actual trades)'
     )
+    parser.add_argument(
+        '--yes-live',
+        action='store_true',
+        help='Explicit startup-only opt-in for live trading.'
+    )
 
     args = parser.parse_args()
 
     # Check config exists
     if not os.path.exists(args.config):
         print(f"Error: Config file not found: {args.config}")
+        sys.exit(1)
+
+    if not args.dry_run and not args.yes_live:
+        print(
+            "Error: live trading requires --yes-live. "
+            "Use --dry-run for paper mode or pass --yes-live for a startup-only live opt-in."
+        )
         sys.exit(1)
 
     # Initialize agent

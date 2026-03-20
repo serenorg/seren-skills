@@ -162,6 +162,15 @@ Before any live buy, sell, or unwind:
 4. Verify `py-clob-client` is installed and `POLY_PRIVATE_KEY` or `WALLET_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_PASSPHRASE`, and `POLY_SECRET` are loaded.
 5. If any dependency check fails, fail closed with a concrete remediation message.
 
+## Live Safety Opt-In
+
+Default mode should be `--dry-run`. Live trading requires:
+
+- `python scripts/agent.py --config config.json --yes-live`
+- or a wrapper that omits `--dry-run` and sets `--yes-live` for that process
+
+The `--yes-live` flag is a startup-only live opt-in. It is not a per-order approval prompt.
+
 ## Overview
 
 This skill helps users set up and manage an autonomous trading agent that:
