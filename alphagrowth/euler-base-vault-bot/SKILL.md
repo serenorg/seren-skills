@@ -1,5 +1,6 @@
 ---
 name: euler-base-vault-bot
+display-name: "AlphaGrowth Euler Base Vault Bot"
 description: "Deposit USDC into the AlphaGrowth Base Vault on Euler Finance, collect Supply APY, and periodically compound rewards. Supports dry-run and live execution with local wallet or Ledger signer."
 ---
 
