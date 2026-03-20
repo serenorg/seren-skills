@@ -633,21 +633,22 @@ def test_unwind_all_requires_yes_live() -> None:
 
 
 def test_check_neg_risk_approvals_returns_structured_result() -> None:
-    """#159: check_neg_risk_approvals returns actionable errors for missing approvals."""
+    """#159: check_neg_risk_approvals fails closed with structured RPC errors."""
     live = _load_live_module()
     assert hasattr(live, "check_neg_risk_approvals")
     assert hasattr(live, "POLYGON_NEG_RISK_ADAPTER")
     assert live.POLYGON_NEG_RISK_ADAPTER == "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
-    # Test with a zero-address wallet (no approvals) against a non-responding RPC
+    # Test with a zero-address wallet against a non-responding public RPC fallback.
     result = live.check_neg_risk_approvals(
         "0x0000000000000000000000000000000000000000",
-        rpc_url="http://127.0.0.1:1",  # unreachable — forces 0x0 fallback
+        rpc_url="http://127.0.0.1:1",
         timeout_seconds=1.0,
     )
     assert isinstance(result, dict)
     assert result["checks_passed"] is False
     assert len(result["errors"]) >= 1
-    assert "NegRiskAdapter" in result["errors"][0]
+    assert "Polygon RPC read failed" in result["errors"][0]
+    assert not any("NegRiskAdapter" in error for error in result["errors"])
 
 
 def test_setup_local_pull_schedule_uses_quote_payload(monkeypatch) -> None:
