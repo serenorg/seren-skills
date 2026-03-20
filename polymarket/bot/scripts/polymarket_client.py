@@ -96,7 +96,8 @@ class PolymarketClient:
             if not token_ids:
                 continue
 
-            token_id = token_ids[0]
+            yes_token_id = token_ids[0]
+            no_token_id = token_ids[1] if len(token_ids) > 1 else None
 
             outcome_prices = market_data.get('outcomePrices', ['0.5'])
             try:
@@ -114,7 +115,8 @@ class PolymarketClient:
             markets.append({
                 'market_id': market_id,
                 'question': question,
-                'token_id': token_id,
+                'token_id': yes_token_id,
+                'no_token_id': no_token_id,
                 'price': price,
                 'volume': volume,
                 'liquidity': liquidity,
@@ -188,27 +190,32 @@ class PolymarketClient:
         except Exception:
             return 0.0
 
-    def get_price(self, token_id: str, side: str) -> float:
-        """Get current price for a token from the CLOB orderbook."""
+    def _get_book_levels(self, token_id: str):
+        """Get best bid/ask from CLOB, falling back to raw data if parsed lists are empty."""
         from polymarket_live import fetch_book
-
-        book = fetch_book(token_id)
-        if side.upper() == 'BUY':
-            asks = book.get('asks', [])
-            return float(asks[0]['price']) if asks else 0.0
-        else:
-            bids = book.get('bids', [])
-            return float(bids[0]['price']) if bids else 0.0
-
-    def get_midpoint(self, token_id: str) -> float:
-        """Get midpoint price (average of best bid and ask)."""
-        from polymarket_live import fetch_book
-
         book = fetch_book(token_id)
         bids = book.get('bids', [])
         asks = book.get('asks', [])
+        if not bids or not asks:
+            raw = book.get('raw', {})
+            if isinstance(raw, dict):
+                bids = bids or raw.get('bids', [])
+                asks = asks or raw.get('asks', [])
         best_bid = float(bids[0]['price']) if bids else 0.0
         best_ask = float(asks[0]['price']) if asks else 0.0
+        return best_bid, best_ask
+
+    def get_price(self, token_id: str, side: str) -> float:
+        """Get current price for a token from the CLOB orderbook."""
+        best_bid, best_ask = self._get_book_levels(token_id)
+        if side.upper() == 'BUY':
+            return best_ask
+        else:
+            return best_bid
+
+    def get_midpoint(self, token_id: str) -> float:
+        """Get midpoint price (average of best bid and ask)."""
+        best_bid, best_ask = self._get_book_levels(token_id)
         if best_bid and best_ask:
             return (best_bid + best_ask) / 2.0
         return best_bid or best_ask

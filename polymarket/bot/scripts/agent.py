@@ -158,35 +158,42 @@ class TradingAgent:
         """
         Cheap heuristic ranking to select the best candidates for LLM analysis.
 
-        No API calls. Ranks by a composite score of:
-        - Liquidity (higher = better)
-        - Price proximity to 50% (closer to 50% = more uncertain = more edge potential)
-        - Volume (if available)
+        Ranks by liquidity + volume (Gamma API prices are stale 0.50 seeds).
+        After ranking, enriches top candidates with live CLOB midpoint prices.
 
         Args:
             markets: Full list of fetched markets
             limit: Number of candidates to keep
 
         Returns:
-            Top N markets by heuristic score
+            Top N markets by heuristic score, enriched with live prices
         """
+        import math
+
         def score(m: Dict) -> float:
             liquidity = float(m.get('liquidity', 0))
-            price = float(m.get('price', 0.5))
             volume = float(m.get('volume', 0))
-            # Proximity to 50% — max uncertainty, most edge potential
-            uncertainty = 1.0 - abs(price - 0.5) * 2
-            # Normalise liquidity contribution (log scale to avoid domination)
-            import math
             liq_score = math.log1p(liquidity)
             vol_score = math.log1p(volume)
-            return liq_score + vol_score + uncertainty * 2
+            return liq_score + vol_score * 2
 
         ranked = sorted(markets, key=score, reverse=True)
-        selected = ranked[:limit]
-        dropped = len(markets) - len(selected)
-        print(f"  Ranked {len(markets)} markets → kept top {len(selected)} candidates (dropped {dropped})")
-        return selected
+        pre_selected = ranked[:limit]
+
+        # Enrich with live CLOB midpoint prices
+        enriched = []
+        for m in pre_selected:
+            try:
+                live_mid = self.polymarket.get_midpoint(m['token_id'])
+                if live_mid and 0.01 < live_mid < 0.99:
+                    m['price'] = live_mid
+            except Exception:
+                pass
+            enriched.append(m)
+
+        dropped = len(markets) - len(enriched)
+        print(f"  Ranked {len(markets)} markets → kept top {len(enriched)} candidates (dropped {dropped})")
+        return enriched
 
     def research_opportunity(self, market_question: str) -> str:
         """
@@ -362,14 +369,29 @@ class TradingAgent:
             return True
 
         # Execute actual trade
-        try:
-            print(f"    📊 Placing {side} order...")
+        # On Polymarket CLOB, "SELL" means betting against the outcome.
+        # This is done by BUYing the NO token at the live ask price.
+        if side == 'SELL' and market.get('no_token_id'):
+            exec_token_id = market['no_token_id']
+            exec_side = 'BUY'
+            try:
+                no_ask_price = self.polymarket.get_price(exec_token_id, 'BUY')
+                exec_price = no_ask_price if no_ask_price and no_ask_price > 0 else 1.0 - price
+            except Exception:
+                exec_price = 1.0 - price
+            print(f"    📊 Placing BUY NO order @ {exec_price:.4f} (betting against YES @ {price*100:.1f}%)...")
+        else:
+            exec_token_id = market['token_id']
+            exec_side = side
+            exec_price = price
+            print(f"    📊 Placing {side} order @ {exec_price:.4f}...")
 
+        try:
             order = self.polymarket.place_order(
-                token_id=market['token_id'],
-                side=side,
+                token_id=exec_token_id,
+                side=exec_side,
                 size=size,
-                price=price
+                price=exec_price
             )
 
             print(f"    ✓ Order placed: {order.get('orderID', 'unknown')}")
@@ -378,7 +400,7 @@ class TradingAgent:
             self.positions.add_position(
                 market=market['question'],
                 market_id=market['market_id'],
-                token_id=market['token_id'],
+                token_id=exec_token_id,
                 side=side,
                 entry_price=price,
                 size=size
