@@ -101,6 +101,10 @@ def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+def mid_price_in_band(mid_price: float, min_mid_price: float, max_mid_price: float) -> bool:
+    return min_mid_price <= mid_price <= max_mid_price
+
+
 def parse_iso_ts(value: Any) -> int | None:
     raw = safe_str(value, "")
     if not raw:
@@ -1392,6 +1396,9 @@ def load_live_single_markets(
     *,
     markets_max: int,
     min_seconds_to_resolution: int,
+    min_mid_price: float,
+    max_mid_price: float,
+    min_daily_volume_usd: float,
     volatility_window_points: int,
     min_history_points: int,
     min_liquidity_usd: float,
@@ -1431,6 +1438,9 @@ def load_live_single_markets(
             ttl = max(0, end_ts - now_ts)
             if ttl < min_seconds_to_resolution:
                 continue
+            volume24hr = safe_float(raw_market.get("volume24hr"), 0.0)
+            if volume24hr < min_daily_volume_usd:
+                continue
 
             history = fetch_history(
                 token_id=token_id,
@@ -1447,6 +1457,8 @@ def load_live_single_markets(
             best_bid = safe_float(book.get("best_bid"), 0.0)
             best_ask = safe_float(book.get("best_ask"), 0.0)
             if not (0.0 <= best_bid <= 1.0 and 0.0 <= best_ask <= 1.0 and best_bid <= best_ask):
+                continue
+            if not mid_price_in_band(midpoint, min_mid_price, max_mid_price):
                 continue
 
             volatility_bps = history_volatility_bps(history, volatility_window_points)
@@ -1474,6 +1486,7 @@ def load_live_single_markets(
                     "news_shock_score": round(shock_score, 4),
                     "breaking_news": False,
                     "liquidity": round(liquidity, 4),
+                    "volume24hr": round(volume24hr, 4),
                 }
             )
             if len(selected) >= markets_max:
@@ -2437,6 +2450,65 @@ def execute_single_market_quotes(
             bid_price = snap_price(safe_float(quote.get("bid_price"), 0.0), tick_size, "BUY")
             ask_price = snap_price(safe_float(quote.get("ask_price"), 0.0), tick_size, "SELL")
             sell_only = bool(market.get("sell_only", False)) or bool(quote.get("sell_only", False))
+            force_unwind = bool(market.get("force_unwind", False)) or bool(quote.get("force_unwind", False))
+
+            if force_unwind:
+                available_shares = max(0.0, position_sizes.get(token_id, 0.0))
+                if available_shares <= 0.0:
+                    skips.append(
+                        {
+                            "market_id": market["market_id"],
+                            "reason": "no_inventory_to_force_unwind",
+                            "available_shares": 0.0,
+                        }
+                    )
+                    continue
+                try:
+                    sell_plan = build_marketable_sell_order(token_id, available_shares)
+                    response = _invoke_trader_call(
+                        f"force_unwind_sell:{market['market_id']}",
+                        lambda: trader.create_order(
+                            token_id=token_id,
+                            side="SELL",
+                            price=sell_plan["price"],
+                            size=available_shares,
+                            tick_size=sell_plan["tick_size"],
+                            neg_risk=sell_plan["neg_risk"],
+                            fee_rate_bps=sell_plan["fee_rate_bps"],
+                        ),
+                        execution_settings,
+                    )
+                    placements.append(
+                        {
+                            "market_id": market["market_id"],
+                            "token_id": token_id,
+                            "side": "SELL",
+                            "price": sell_plan["price"],
+                            "size": round(available_shares, 6),
+                            "best_bid": sell_plan["best_bid"],
+                            "best_ask": sell_plan["best_ask"],
+                            "estimated_exit_value_usd": sell_plan["estimated_exit_value_usd"],
+                            "estimated_fill_size": sell_plan["estimated_fill_size"],
+                            "estimated_unfilled_size": sell_plan["estimated_unfilled_size"],
+                            "estimated_average_price": sell_plan["estimated_average_price"],
+                            "execution_style": sell_plan["execution_style"],
+                            "response": response,
+                            "source": "forced_inventory_unwind",
+                            "reason": safe_str(
+                                quote.get("policy_action"),
+                                safe_str(market.get("force_unwind_reason"), "force_unwind"),
+                            ),
+                        }
+                    )
+                except Exception as order_exc:
+                    skips.append(
+                        {
+                            "market_id": market["market_id"],
+                            "reason": "force_unwind_failed",
+                            "error": str(order_exc),
+                        }
+                    )
+                continue
 
             if bid_price > 0.0 and bid_notional > 0.0 and not sell_only:
                 remaining_cash_usd = available_cash_usd - bid_notional

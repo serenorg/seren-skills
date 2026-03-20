@@ -44,7 +44,11 @@
   "strategy": {
     "bankroll_usd": 1000,
     "markets_max": 12,
-    "min_seconds_to_resolution": 21600,
+    "min_seconds_to_resolution": 1209600,
+    "min_mid_price": 0.3,
+    "max_mid_price": 0.7,
+    "min_daily_volume_usd": 5000,
+    "max_inventory_hold_cycles": 3,
     "min_edge_bps": 2,
     "default_rebate_bps": 3,
     "expected_unwind_cost_bps": 1.5,
@@ -59,9 +63,10 @@
     "inventory_skew_strength_bps": 25
   },
   "state": {
-    "_note": "Leave inventory/live_risk empty. The skill populates these from live order, position, and cash state.",
+    "_note": "Leave inventory/live_risk/inventory_cycles empty. The skill populates these from live order, position, and cash state.",
     "inventory": {},
-    "live_risk": {}
+    "live_risk": {},
+    "inventory_cycles": {}
   },
   "cron": {
     "runner_name": "",
