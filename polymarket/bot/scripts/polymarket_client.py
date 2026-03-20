@@ -99,11 +99,27 @@ class PolymarketClient:
             yes_token_id = token_ids[0]
             no_token_id = token_ids[1] if len(token_ids) > 1 else None
 
-            outcome_prices = market_data.get('outcomePrices', ['0.5'])
-            try:
-                price = float(outcome_prices[0]) if outcome_prices else 0.5
-            except Exception:
-                price = 0.5
+            raw_outcome_prices = market_data.get('outcomePrices')
+            price = 0.5
+            price_source = 'gamma_fallback'
+
+            if isinstance(raw_outcome_prices, str):
+                try:
+                    outcome_prices = json.loads(raw_outcome_prices)
+                except Exception:
+                    outcome_prices = []
+            elif isinstance(raw_outcome_prices, list):
+                outcome_prices = raw_outcome_prices
+            else:
+                outcome_prices = []
+
+            if outcome_prices:
+                try:
+                    price = float(outcome_prices[0])
+                    price_source = 'gamma'
+                except Exception:
+                    price = 0.5
+                    price_source = 'gamma_fallback'
 
             volume = float(market_data.get('volume', 0))
             liquidity = float(market_data.get('liquidity', 0))
@@ -118,6 +134,7 @@ class PolymarketClient:
                 'token_id': yes_token_id,
                 'no_token_id': no_token_id,
                 'price': price,
+                'price_source': price_source,
                 'volume': volume,
                 'liquidity': liquidity,
                 'end_date': end_date,

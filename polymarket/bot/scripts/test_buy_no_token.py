@@ -63,6 +63,26 @@ class TestGetMarketsExposesNoTokenId:
         markets = client.get_markets(limit=10)
         assert markets[0]["no_token_id"] is None
 
+    def test_marks_missing_outcome_prices_as_gamma_fallback(self):
+        seren = _mock_seren()
+        seren.call_publisher.return_value = {
+            "body": [
+                {
+                    "conditionId": "0xabc",
+                    "question": "Will X happen?",
+                    "clobTokenIds": '["YES_TOKEN", "NO_TOKEN"]',
+                    "volume": "5000",
+                    "liquidity": "10000",
+                    "endDateIso": "2026-12-31",
+                    "active": True,
+                }
+            ]
+        }
+        client = PolymarketClient(seren_client=seren, dry_run=True)
+        markets = client.get_markets(limit=10)
+        assert markets[0]["price"] == 0.5
+        assert markets[0]["price_source"] == "gamma_fallback"
+
 
 class TestBookLevelFallback:
     def test_get_book_levels_uses_raw_when_parsed_empty(self, monkeypatch):
