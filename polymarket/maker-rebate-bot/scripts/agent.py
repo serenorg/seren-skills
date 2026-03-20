@@ -2020,6 +2020,107 @@ def _maker_optimization_candidates(config: dict[str, Any], total_markets: int) -
             },
             "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.05, 0.0, 1.0), 4)},
         },
+        # --- 10 new candidates below ---
+        {
+            "name": "defensive-wide-spread",
+            "subset_size": base_markets,
+            "strategy": {
+                "min_spread_bps": round(p.min_spread_bps * 1.3, 4),
+                "max_spread_bps": round(p.max_spread_bps * 1.2, 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate - 0.1, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "narrow-top3-concentration",
+            "subset_size": max(1, min(3, total_markets)),
+            "strategy": {
+                "markets_max": max(1, min(3, total_markets)),
+                "base_order_notional_usd": round(p.base_order_notional_usd * 1.4, 4),
+                "max_notional_per_market_usd": round(p.max_notional_per_market_usd * 1.3, 4),
+                "max_position_notional_usd": round(p.max_position_notional_usd * 1.3, 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.1, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "mid-aggressive-edge",
+            "subset_size": base_markets,
+            "strategy": {
+                "min_edge_bps": round(max(0.5, p.min_edge_bps * 0.6), 4),
+                "base_order_notional_usd": round(p.base_order_notional_usd * 1.2, 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.05, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "passive-low-participation",
+            "subset_size": base_markets,
+            "strategy": {
+                "min_spread_bps": round(p.min_spread_bps * 1.15, 4),
+                "base_order_notional_usd": round(p.base_order_notional_usd * 0.85, 4),
+            },
+            "backtest": {"participation_rate": round(max(0.1, bt.participation_rate - 0.2), 4)},
+        },
+        {
+            "name": "optimistic-rebate",
+            "subset_size": base_markets,
+            "strategy": {
+                "expected_unwind_cost_bps": round(max(0.5, p.expected_unwind_cost_bps * 0.7), 4),
+                "adverse_selection_bps": round(max(0.3, p.adverse_selection_bps * 0.7), 4),
+            },
+            "backtest": {
+                "join_best_queue_factor": round(min(1.0, bt.join_best_queue_factor + 0.1), 4),
+                "off_best_queue_factor": round(min(1.0, bt.off_best_queue_factor + 0.1), 4),
+            },
+        },
+        {
+            "name": "optimistic-fill-quality",
+            "subset_size": base_markets,
+            "strategy": {
+                "min_spread_bps": round(max(5.0, p.min_spread_bps * 0.8), 4),
+            },
+            "backtest": {
+                "spread_decay_bps": round(max(10.0, bt.spread_decay_bps * 0.75), 4),
+                "participation_rate": round(clamp(bt.participation_rate + 0.1, 0.0, 1.0), 4),
+            },
+        },
+        {
+            "name": "broad-diversified",
+            "subset_size": broad_markets,
+            "strategy": {
+                "markets_max": broad_markets,
+                "base_order_notional_usd": round(p.base_order_notional_usd * 0.8, 4),
+                "max_notional_per_market_usd": round(p.max_notional_per_market_usd * 0.75, 4),
+                "max_total_notional_usd": round(p.max_total_notional_usd * 1.25, 4),
+            },
+            "backtest": {"participation_rate": round(bt.participation_rate, 4)},
+        },
+        {
+            "name": "tight-midpoint-band",
+            "subset_size": base_markets,
+            "strategy": {
+                "min_mid_price": round(min(0.40, p.min_mid_price + 0.05), 4),
+                "max_mid_price": round(max(0.60, p.max_mid_price - 0.05), 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.05, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "high-inventory-skew",
+            "subset_size": base_markets,
+            "strategy": {
+                "inventory_skew_strength_bps": round(p.inventory_skew_strength_bps * 1.5, 4),
+                "max_inventory_hold_cycles": max(1, p.max_inventory_hold_cycles - 1),
+            },
+            "backtest": {"participation_rate": round(bt.participation_rate, 4)},
+        },
+        {
+            "name": "vol-adjusted-wide",
+            "subset_size": base_markets,
+            "strategy": {
+                "volatility_spread_multiplier": round(p.volatility_spread_multiplier * 1.5, 4),
+                "min_spread_bps": round(p.min_spread_bps * 1.1, 4),
+                "max_spread_bps": round(p.max_spread_bps * 1.3, 4),
+            },
+            "backtest": {"participation_rate": round(max(0.1, bt.participation_rate - 0.05), 4)},
+        },
     ]
 
 

@@ -1137,6 +1137,107 @@ def _pair_optimization_candidates(config: dict[str, Any], total_markets: int) ->
             },
             "backtest": {},
         },
+        # --- 10 new candidates below ---
+        {
+            "name": "defensive-wide-entry",
+            "subset_size": base_pairs,
+            "strategy": {
+                "basis_entry_bps": round(p.basis_entry_bps * 1.3, 4),
+                "basis_exit_bps": round(p.basis_exit_bps * 1.2, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "narrow-top2-concentration",
+            "subset_size": max(2, min(2, total_markets)),
+            "strategy": {
+                "pairs_max": max(2, min(2, total_markets)),
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 1.4, 4),
+                "max_notional_per_pair_usd": round(p.max_notional_per_pair_usd * 1.3, 4),
+                "max_leg_notional_usd": round(p.max_leg_notional_usd * 1.3, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "aggressive-entry",
+            "subset_size": base_pairs,
+            "strategy": {
+                "basis_entry_bps": round(max(10.0, p.basis_entry_bps * 0.6), 4),
+                "expected_convergence_ratio": round(clamp(p.expected_convergence_ratio + 0.2, 0.0, 1.0), 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "passive-conservative",
+            "subset_size": base_pairs,
+            "strategy": {
+                "basis_entry_bps": round(p.basis_entry_bps * 1.15, 4),
+                "basis_exit_bps": round(p.basis_exit_bps * 1.3, 4),
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 0.8, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "optimistic-costs",
+            "subset_size": base_pairs,
+            "strategy": {
+                "expected_unwind_cost_bps": round(max(0.5, p.expected_unwind_cost_bps * 0.7), 4),
+                "adverse_selection_bps": round(max(0.3, p.adverse_selection_bps * 0.7), 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "tight-exit-fast-convergence",
+            "subset_size": base_pairs,
+            "strategy": {
+                "basis_exit_bps": round(max(0.0, p.basis_exit_bps * 0.6), 4),
+                "expected_convergence_ratio": round(clamp(p.expected_convergence_ratio + 0.25, 0.0, 1.0), 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "broad-diversified",
+            "subset_size": broad_pairs,
+            "strategy": {
+                "pairs_max": broad_pairs,
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 0.75, 4),
+                "max_notional_per_pair_usd": round(p.max_notional_per_pair_usd * 0.7, 4),
+                "max_total_notional_usd": round(p.max_total_notional_usd * 1.3, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "mid-edge-relaxed",
+            "subset_size": base_pairs,
+            "strategy": {
+                "min_edge_bps": round(max(0.5, p.min_edge_bps * 0.5), 4),
+                "basis_entry_bps": round(max(10.0, p.basis_entry_bps * 0.85), 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "high-notional-concentrated",
+            "subset_size": focus_pairs,
+            "strategy": {
+                "pairs_max": focus_pairs,
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 1.5, 4),
+                "max_notional_per_pair_usd": round(p.max_notional_per_pair_usd * 1.5, 4),
+                "max_leg_notional_usd": round(p.max_leg_notional_usd * 1.4, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "balanced-moderate",
+            "subset_size": base_pairs,
+            "strategy": {
+                "basis_entry_bps": round(max(10.0, p.basis_entry_bps * 0.9), 4),
+                "basis_exit_bps": round(max(0.0, p.basis_exit_bps * 0.9), 4),
+                "expected_convergence_ratio": round(clamp(p.expected_convergence_ratio + 0.08, 0.0, 1.0), 4),
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 1.05, 4),
+                "max_total_notional_usd": round(p.max_total_notional_usd * 1.1, 4),
+            },
+            "backtest": {},
+        },
     ]
 
 
