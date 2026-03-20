@@ -93,6 +93,7 @@ class TradingAgent:
         self.candidate_limit = int(self.config.get('candidate_limit', 20))
         self.analyze_limit = int(self.config.get('analyze_limit', self.candidate_limit))
         self.min_liquidity = float(self.config.get('min_liquidity', 100.0))
+        self.stale_price_demotion = float(self.config.get('stale_price_demotion', 0.1))
 
         print(f"✓ Agent initialized (Dry-run: {dry_run})")
         print(f"  Bankroll: ${self.bankroll:.2f}")
@@ -177,12 +178,32 @@ class TradingAgent:
         """
         import math
 
+        stale_demotion = self.stale_price_demotion
+
+        def _parse_price_asymmetry(m: Dict) -> float:
+            """Return abs(p1 - p2) from outcomePrices string, or -1 if unparseable."""
+            raw = m.get('outcomePrices', '')
+            if not raw:
+                return -1.0
+            try:
+                parts = raw.split(',')
+                p1, p2 = float(parts[0]), float(parts[1])
+                return abs(p1 - p2)
+            except (IndexError, ValueError, TypeError):
+                return -1.0
+
         def score(m: Dict) -> float:
             liquidity = float(m.get('liquidity', 0))
             volume = float(m.get('volume', 0))
             liq_score = math.log1p(liquidity)
             vol_score = math.log1p(volume)
-            return liq_score + vol_score * 2
+            base = liq_score + vol_score * 2
+
+            # Demote markets whose outcomePrices are still at the Gamma 0.5/0.5 default
+            asymmetry = _parse_price_asymmetry(m)
+            if 0 <= asymmetry < 0.02:
+                return base * stale_demotion
+            return base
 
         ranked = sorted(markets, key=score, reverse=True)
 

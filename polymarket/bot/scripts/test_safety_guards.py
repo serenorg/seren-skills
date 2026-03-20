@@ -44,6 +44,7 @@ class TestResolutionDateFilter:
 
         agent = MagicMock()
         agent.max_resolution_days = max_resolution_days
+        agent.stale_price_demotion = 0.1
         agent.polymarket = MagicMock()
         agent.polymarket.get_midpoint = MagicMock(return_value=0.4)
 
@@ -254,6 +255,7 @@ class TestStaleGammaPriceRejection:
 
         agent = MagicMock()
         agent.max_resolution_days = max_resolution_days
+        agent.stale_price_demotion = 0.1
         agent.polymarket = MagicMock()
         agent.rank_candidates = types.MethodType(TradingAgent.rank_candidates, agent)
         return agent
@@ -304,3 +306,80 @@ class TestStaleGammaPriceRejection:
         assert len(result) == 1
         assert result[0]['price'] == pytest.approx(0.72, abs=0.001)
         assert result[0]['price_source'] == 'clob_midpoint'
+
+
+class TestStalePriceDemotion:
+    """Test that markets with 0.5/0.5 outcomePrices are deprioritized in ranking."""
+
+    def _make_agent_with_config(self, stale_price_demotion=0.1, max_resolution_days=180):
+        from unittest.mock import MagicMock
+        from agent import TradingAgent
+        import types
+
+        agent = MagicMock()
+        agent.max_resolution_days = max_resolution_days
+        agent.stale_price_demotion = stale_price_demotion
+        agent.polymarket = MagicMock()
+        agent.polymarket.get_midpoint = MagicMock(return_value=0.4)
+        agent.rank_candidates = types.MethodType(TradingAgent.rank_candidates, agent)
+        return agent
+
+    @staticmethod
+    def _iso(days_from_now: int) -> str:
+        return (datetime.now(timezone.utc) + timedelta(days=days_from_now)).isoformat().replace('+00:00', 'Z')
+
+    def test_stale_price_demoted_in_ranking(self):
+        """Market at 0.5/0.5 ranks below a market at 0.7/0.3 even with higher liquidity."""
+        agent = self._make_agent_with_config()
+        markets = [
+            {
+                'question': 'Stale market',
+                'end_date': self._iso(30),
+                'liquidity': 50000,
+                'volume': 100000,
+                'token_id': 'tok_stale',
+                'outcomePrices': '0.5,0.5',
+            },
+            {
+                'question': 'Real market',
+                'end_date': self._iso(30),
+                'liquidity': 5000,
+                'volume': 10000,
+                'token_id': 'tok_real',
+                'outcomePrices': '0.7,0.3',
+            },
+        ]
+        result = agent.rank_candidates(markets, limit=10)
+        questions = [m['question'] for m in result]
+        assert 'Real market' in questions
+        assert 'Stale market' in questions
+        assert questions.index('Real market') < questions.index('Stale market')
+
+    def test_real_price_not_demoted(self):
+        """Market at 0.85/0.15 keeps its full ranking score."""
+        agent = self._make_agent_with_config()
+        import math
+
+        market = {
+            'question': 'Strong signal',
+            'end_date': self._iso(30),
+            'liquidity': 10000,
+            'volume': 20000,
+            'token_id': 'tok_strong',
+            'outcomePrices': '0.85,0.15',
+        }
+        markets = [market]
+        result = agent.rank_candidates(markets, limit=10)
+        assert len(result) == 1
+
+        stale_market = {
+            'question': 'Stale low liq',
+            'end_date': self._iso(30),
+            'liquidity': 9000,
+            'volume': 18000,
+            'token_id': 'tok_stale2',
+            'outcomePrices': '0.50,0.50',
+        }
+        result2 = agent.rank_candidates([market, stale_market], limit=10)
+        questions = [m['question'] for m in result2]
+        assert questions.index('Strong signal') < questions.index('Stale low liq')
