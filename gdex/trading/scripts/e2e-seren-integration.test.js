@@ -314,13 +314,14 @@ if (typeof validateAddress === 'function') {
   // Invalid address
   try {
     let threw = false;
+    let result;
     try {
-      validateAddress('not-an-address');
+      result = validateAddress('not-an-address');
     } catch {
       threw = true;
     }
     // Either throws or returns falsy
-    assert(threw, 'validateAddress() rejects invalid address');
+    assert(threw || !result, 'validateAddress() rejects invalid address');
   } catch (err) {
     fail('validateAddress() invalid-address test failed', err.message);
   }
