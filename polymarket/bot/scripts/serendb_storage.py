@@ -809,7 +809,7 @@ class SerenDBStorage:
                     query = query.replace('?', str(param), 1)
 
         # Call Seren Gateway database API
-        url = f"{self.seren.gateway_url}/databases/projects/{self.project_id}/branches/{self.branch_id}/query"
+        url = f"{self.seren.gateway_url}/projects/{self.project_id}/branches/{self.branch_id}/query"
 
         response = self.seren.session.post(
             url,
@@ -818,39 +818,48 @@ class SerenDBStorage:
         )
 
         response.raise_for_status()
-        return response.json()
+        return self._unwrap_data(response.json())
 
     def _list_projects(self) -> List[Dict[str, Any]]:
         """List all SerenDB projects"""
-        url = f"{self.seren.gateway_url}/databases/projects"
+        url = f"{self.seren.gateway_url}/projects"
         response = self.seren.session.get(url, timeout=10)
         response.raise_for_status()
-        return response.json().get('data', [])
+        return self._unwrap_data(response.json(), default=[])
 
     def _create_project(self, name: str) -> Dict[str, Any]:
         """Create a new SerenDB project"""
-        url = f"{self.seren.gateway_url}/databases/projects"
+        url = f"{self.seren.gateway_url}/projects"
         response = self.seren.session.post(
             url,
             json={'name': name, 'region': 'aws-us-east-2'},
             timeout=30
         )
         response.raise_for_status()
-        data = response.json()
+        data = self._unwrap_data(response.json())
         # Return full project details
-        project_id = data['data']['id']
+        project_id = data['id']
         return self._get_project(project_id)
 
     def _get_project(self, project_id: str) -> Dict[str, Any]:
         """Get project details"""
-        url = f"{self.seren.gateway_url}/databases/projects/{project_id}"
+        url = f"{self.seren.gateway_url}/projects/{project_id}"
         response = self.seren.session.get(url, timeout=10)
         response.raise_for_status()
-        return response.json().get('data', {})
+        return self._unwrap_data(response.json(), default={})
 
     def _list_branches(self, project_id: str) -> List[Dict[str, Any]]:
         """List branches for a project"""
-        url = f"{self.seren.gateway_url}/databases/projects/{project_id}/branches"
+        url = f"{self.seren.gateway_url}/projects/{project_id}/branches"
         response = self.seren.session.get(url, timeout=10)
         response.raise_for_status()
-        return response.json().get('data', [])
+        return self._unwrap_data(response.json(), default=[])
+
+    @staticmethod
+    def _unwrap_data(payload: Any, default: Optional[Any] = None) -> Any:
+        """Accept either wrapped {'data': ...} or direct payloads from SerenDB."""
+        if payload is None:
+            return default
+        if isinstance(payload, dict) and 'data' in payload:
+            return payload['data']
+        return payload
