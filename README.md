@@ -81,6 +81,16 @@ Quick version:
 3. For agent skills, put runtime code in `scripts/` and keep dependency/config templates at the skill root
 4. Open a PR
 
+## Trading Skill Safety CI
+
+PRs that change trading skills now run a dedicated validator that inspects the changed skill directories only. This keeps non-trading changes unblocked while still enforcing the minimum execution-safety floor for skills that can affect customer money.
+
+The validator lives at [`scripts/validate_trading_skill_safety.py`](scripts/validate_trading_skill_safety.py) and is wired through [`.github/workflows/trading-skill-safety.yml`](.github/workflows/trading-skill-safety.yml).
+
+Use the trading-skill guide for the required operator contract, runtime guardrails, waiver format, and local commands:
+
+- [`docs/trading-skills/README.md`](docs/trading-skills/README.md)
+
 ## SKILL.md Frontmatter
 
 ```yaml
