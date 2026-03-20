@@ -241,3 +241,66 @@ class TestEvaluateOpportunityGuards:
             market, 'research', fair_value=0.60, confidence='high'
         )
         assert result is None
+
+
+class TestStaleGammaPriceRejection:
+    """Test that markets with stale Gamma 50/50 outcomePrices are rejected
+    when CLOB enrichment fails (#235)."""
+
+    def _make_agent_with_config(self, max_resolution_days=180):
+        from unittest.mock import MagicMock
+        from agent import TradingAgent
+        import types
+
+        agent = MagicMock()
+        agent.max_resolution_days = max_resolution_days
+        agent.polymarket = MagicMock()
+        agent.rank_candidates = types.MethodType(TradingAgent.rank_candidates, agent)
+        return agent
+
+    @staticmethod
+    def _iso(days_from_now: int) -> str:
+        return (datetime.now(timezone.utc) + timedelta(days=days_from_now)).isoformat().replace('+00:00', 'Z')
+
+    def test_stale_gamma_price_rejected_without_clob(self):
+        """Market with outcomePrices '0.5,0.5' and no CLOB data is skipped."""
+        agent = self._make_agent_with_config()
+        agent.polymarket.get_midpoint.side_effect = RuntimeError("no CLOB")
+        markets = [
+            {'question': 'Stale market', 'end_date': self._iso(30),
+             'liquidity': 1000, 'volume': 5000, 'token_id': 'tok1',
+             'outcomePrices': '0.5,0.5',
+             'price': 0.5, 'price_source': 'gamma'},
+        ]
+        result = agent.rank_candidates(markets, limit=10)
+        assert len(result) == 0
+
+    def test_real_gamma_price_kept_without_clob(self):
+        """Market with outcomePrices '0.85,0.15' and no CLOB data is kept."""
+        agent = self._make_agent_with_config()
+        agent.polymarket.get_midpoint.side_effect = RuntimeError("no CLOB")
+        markets = [
+            {'question': 'Real price market', 'end_date': self._iso(30),
+             'liquidity': 1000, 'volume': 5000, 'token_id': 'tok1',
+             'outcomePrices': '0.85,0.15',
+             'price': 0.85, 'price_source': 'gamma'},
+        ]
+        result = agent.rank_candidates(markets, limit=10)
+        assert len(result) == 1
+        assert result[0]['question'] == 'Real price market'
+        assert result[0]['price'] == pytest.approx(0.85, abs=0.01)
+
+    def test_stale_gamma_overridden_by_clob(self):
+        """Market with outcomePrices '0.5,0.5' but real CLOB midpoint uses CLOB price."""
+        agent = self._make_agent_with_config()
+        agent.polymarket.get_midpoint.return_value = 0.72
+        markets = [
+            {'question': 'CLOB override', 'end_date': self._iso(30),
+             'liquidity': 1000, 'volume': 5000, 'token_id': 'tok1',
+             'outcomePrices': '0.5,0.5',
+             'price': 0.5, 'price_source': 'gamma'},
+        ]
+        result = agent.rank_candidates(markets, limit=10)
+        assert len(result) == 1
+        assert result[0]['price'] == pytest.approx(0.72, abs=0.001)
+        assert result[0]['price_source'] == 'clob_midpoint'

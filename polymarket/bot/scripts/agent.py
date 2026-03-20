@@ -218,9 +218,23 @@ class TradingAgent:
 
         # Enrich with live CLOB midpoint prices. If CLOB is unavailable, keep only
         # markets that already have a non-fallback Gamma price.
+        # Also reject markets where Gamma outcomePrices is the stale 0.5/0.5 default
+        # unless the CLOB provides a real midpoint.
         enriched = []
         stale_price_skips = 0
+        stale_gamma_skips = 0
         for m in pre_selected:
+            # Detect stale Gamma 50/50 default prices from outcomePrices field
+            stale_gamma_price = False
+            outcome_prices_str = m.get('outcomePrices', '')
+            if outcome_prices_str:
+                try:
+                    parts = [float(p.strip()) for p in outcome_prices_str.split(',')]
+                    if len(parts) == 2 and all(abs(p - 0.5) <= 0.01 for p in parts):
+                        stale_gamma_price = True
+                except (ValueError, TypeError):
+                    pass
+
             live_mid = None
             try:
                 live_mid = self.polymarket.get_midpoint(m['token_id'])
@@ -233,6 +247,13 @@ class TradingAgent:
                 enriched.append(m)
                 continue
 
+            # CLOB enrichment failed — check if Gamma price is trustworthy
+            if stale_gamma_price:
+                stale_gamma_skips += 1
+                question = m.get('question', '')[:60]
+                print(f"  Skipping stale 50/50 Gamma market (no CLOB): {question}")
+                continue
+
             if m.get('price_source') == 'gamma':
                 enriched.append(m)
                 continue
@@ -242,6 +263,8 @@ class TradingAgent:
             print(f"  Skipping stale-priced market: {question}")
 
         dropped = len(markets) - len(enriched)
+        if stale_gamma_skips:
+            print(f"  Skipped {stale_gamma_skips} markets with stale 50/50 Gamma prices and no valid CLOB midpoint")
         if stale_price_skips:
             print(f"  Skipped {stale_price_skips} markets with fallback 50% prices and no valid CLOB midpoint")
         print(f"  Ranked {len(markets)} markets → kept top {len(enriched)} candidates (dropped {dropped})")
