@@ -114,7 +114,43 @@ class SerenClient:
         url = f"{self.gateway_url}/wallet/balance"
         response = self.session.get(url, timeout=30)
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Unexpected wallet balance response shape")
+
+        data = payload.get('data')
+        if isinstance(data, dict):
+            payload = data
+
+        normalized = payload.copy()
+        for field in (
+            'balance_usd',
+            'funded_balance_usd',
+            'promotional_balance_usd',
+            'total_purchases_usd',
+        ):
+            parsed = self._parse_usd_amount(normalized.get(field))
+            if parsed is not None:
+                normalized[field] = parsed
+
+        return normalized
+
+    @staticmethod
+    def _parse_usd_amount(value: Any) -> Optional[float]:
+        """Parse USD amounts returned as either numbers or '$12.34' strings."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            cleaned = value.strip().replace('$', '').replace(',', '')
+            if not cleaned:
+                return None
+            try:
+                return float(cleaned)
+            except ValueError:
+                return None
+        return None
 
     def _extract_text(self, response: Dict[str, Any]) -> str:
         """
