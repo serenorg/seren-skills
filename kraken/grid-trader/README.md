@@ -223,24 +223,24 @@ All operations logged to `logs/` directory as JSONL files:
 - `orders.jsonl` - Order placements/cancellations
 - `fills.jsonl` - Trade executions
 - `positions.jsonl` - Position snapshots
-- `metrics.jsonl` - Per-cycle adaptive telemetry and rolling windows
-- `weekly_reviews.jsonl` - Weekly review summaries
-- `alerts.jsonl` - Safety incidents and repeated failures
 - `errors.jsonl` - Errors and warnings
 
-Adaptive state persists in `state/adaptive_state.json`, including accepted parameters, shadow scores, recent cycles, and known open orders for one-shot cron execution.
+Adaptive runtime state, telemetry, review references, and the shared cron lease now persist in SerenDB. This includes accepted parameters, shadow scores, recent cycles, known open orders, `live_risk_state`, runtime events, and the lock record used to fail closed on overlapping one-shot invocations.
 
 ## SerenDB Persistence
 
-When `seren-mcp` is available, the bot also persists to SerenDB:
+When `seren-mcp` is available, the bot persists to SerenDB:
 
 - `kraken_grid_sessions`
 - `kraken_grid_orders`
 - `kraken_grid_fills`
 - `kraken_grid_positions`
 - `kraken_grid_events`
+- `trading.runtime_state`
+- `trading.runtime_events`
+- `trading.runtime_locks`
 
-SerenDB persistence is best-effort; if unavailable, trading continues with local logs.
+Adaptive mode requires SerenDB persistence. If the MCP-backed store is unavailable, the adaptive runtime fails closed instead of silently falling back to local state files.
 
 ## Safety Features
 
@@ -248,7 +248,7 @@ SerenDB persistence is best-effort; if unavailable, trading continues with local
 2. **Daily Loss Caps + Cooldowns**: New buys pause after loss streaks or daily drawdown breaches
 3. **Position/Open Order Limits**: Prevents overexposure and runaway order spam
 4. **Shadow Promotion Gate**: Candidate settings must outperform the baseline before promotion
-5. **Audit Trail**: Every cycle, review, fill, and alert is logged
+5. **Audit Trail**: Every cycle, review, fill, alert, and runtime lease transition is persisted
 6. **Graceful Shutdown**: Cancels all orders on exit
 
 ## seren-cron

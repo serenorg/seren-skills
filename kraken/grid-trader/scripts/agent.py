@@ -19,7 +19,7 @@ import signal
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from pathlib import Path
 from dotenv import load_dotenv
@@ -45,7 +45,6 @@ from urllib.request import Request, urlopen
 
 
 LIVE_SAFETY_VERSION = "2026-03-16.kraken-coinbase-live-safety-v1"
-LIVE_RISK_STATE_PATH = Path("state/live_risk.json")
 
 
 class LiveRiskError(RuntimeError):
@@ -132,11 +131,7 @@ class KrakenGridTrader:
         self.tracker = None
         self.running = False
         self.active_orders = {}  # order_id -> order_details
-        self.live_risk_state = self._load_live_risk_state()
         self.adaptive_settings = resolve_adaptive_settings(self.config)
-        self.adaptive_store = AdaptiveStateStore(self.adaptive_settings)
-        self.current_adaptive_decision = None
-        self._cycle_deadline_at: Optional[float] = None
 
         try:
             self.store = _build_store_from_env()
@@ -145,9 +140,23 @@ class KrakenGridTrader:
             print(f"WARNING: SerenDB persistence unavailable: {exc}", file=sys.stderr)
             self.store = None
 
+        if self.adaptive_settings.get('enabled', True) and self.store is None:
+            raise ValueError(
+                "Adaptive runtime requires SerenDB persistence. "
+                "Set SEREN_API_KEY and ensure seren-mcp can reach SerenDB."
+            )
+
+        self.adaptive_store = self._build_adaptive_store()
+        self.live_risk_state = self._load_live_risk_state()
+        self.current_adaptive_decision = None
+        self._cycle_deadline_at: Optional[float] = None
+
     def close(self):
         """Close any external resources."""
-        self.adaptive_store.save()
+        try:
+            self.adaptive_store.save()
+        except Exception:
+            pass
         if self.store is None:
             return
         try:
@@ -167,6 +176,36 @@ class KrakenGridTrader:
                 self.store.close()
             finally:
                 self.store = None
+            if self.adaptive_settings.get('enabled', True):
+                raise RuntimeError(
+                    "Adaptive runtime lost required SerenDB persistence."
+                ) from exc
+
+    def _build_adaptive_store(self) -> AdaptiveStateStore:
+        pair = self.config.get('trading_pair')
+        persistence = None
+        if self.adaptive_settings.get('enabled', True):
+            if self.store is None:
+                raise ValueError("Adaptive runtime requires SerenDB persistence.")
+            if pair:
+                persistence = self.store.adaptive_runtime(
+                    runtime_key=self._adaptive_runtime_key(pair),
+                    lock_key=self._adaptive_lock_key(pair),
+                )
+        return AdaptiveStateStore(self.adaptive_settings, persistence=persistence)
+
+    def _refresh_adaptive_store(self) -> None:
+        self.adaptive_store.save()
+        self.adaptive_store = self._build_adaptive_store()
+        self.live_risk_state = self._load_live_risk_state()
+
+    def _adaptive_runtime_key(self, pair: Optional[str] = None) -> str:
+        runtime_pair = str(pair or self.config.get('trading_pair') or 'pending').strip()
+        campaign = str(self.config.get('campaign_name') or 'grid').strip()
+        return f"{campaign}:{runtime_pair}"
+
+    def _adaptive_lock_key(self, pair: Optional[str] = None) -> str:
+        return f"adaptive:{self._adaptive_runtime_key(pair)}"
 
     def _ensure_session_started(self):
         """Create a persistence session once a trading pair is known."""
@@ -253,12 +292,7 @@ class KrakenGridTrader:
         self.backtest_optimization = summary
 
     def _load_live_risk_state(self) -> Dict[str, Any]:
-        try:
-            payload = json.loads(LIVE_RISK_STATE_PATH.read_text(encoding='utf-8'))
-        except FileNotFoundError:
-            payload = {}
-        except json.JSONDecodeError:
-            payload = {}
+        payload = self.adaptive_store.state.get('live_risk_state', {})
         if not isinstance(payload, dict):
             payload = {}
         payload.setdefault('runtime_version', LIVE_SAFETY_VERSION)
@@ -267,16 +301,13 @@ class KrakenGridTrader:
     def _persist_live_risk_state(self, payload: Dict[str, Any]) -> None:
         state = dict(payload)
         state['runtime_version'] = LIVE_SAFETY_VERSION
-        state['updated_at'] = datetime.utcnow().isoformat()
-        LIVE_RISK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        LIVE_RISK_STATE_PATH.write_text(
-            json.dumps(state, sort_keys=True, indent=2),
-            encoding='utf-8',
-        )
+        state['updated_at'] = datetime.now(timezone.utc).isoformat()
+        self.adaptive_store.state['live_risk_state'] = state
+        self.adaptive_store.save()
         self.live_risk_state = state
 
     def _adaptive_lock_path(self) -> str:
-        return str(self.adaptive_settings.get('lock_path', 'state/runtime.lock'))
+        return self._adaptive_lock_key()
 
     def _current_grid_parameters(self) -> Dict[str, Any]:
         strategy = self.config['strategy']
@@ -538,6 +569,7 @@ class KrakenGridTrader:
                 )
 
         self.config['trading_pair'] = best_pair
+        self._refresh_adaptive_store()
         print(f"\n✓ Selected pair: {best_pair} (score: {best_score['score']:.3f})\n")
         self._ensure_session_started()
         self._store_call(
@@ -748,7 +780,7 @@ class KrakenGridTrader:
                 f"atr={market_metrics['atr_pct']:.4f}% "
                 f"rolling_vol={market_metrics['rolling_stddev_pct']:.4f}%"
             )
-            self.logger.log_metrics_snapshot(
+            self.adaptive_store.record_metric(
                 {
                     'timestamp': datetime.utcnow().isoformat() + 'Z',
                     'pair': pair,
@@ -827,7 +859,12 @@ class KrakenGridTrader:
 
     def run_cycle(self) -> Dict[str, Any]:
         """Execute exactly one adaptive cycle under the shared runtime lock."""
-        with runtime_lock(self._adaptive_lock_path()):
+        with runtime_lock(
+            persistence=self.adaptive_store.persistence,
+            lock_key=self._adaptive_lock_path(),
+            owner_id=self.session_id,
+            ttl_seconds=int(self.adaptive_settings.get('lock_ttl_seconds', 120)),
+        ):
             self._trading_cycle()
             recent_cycles = list(self.adaptive_store.state.get('recent_cycles', []))
             if recent_cycles:
@@ -836,28 +873,37 @@ class KrakenGridTrader:
 
     def build_review(self) -> Dict[str, Any]:
         """Generate and persist the weekly adaptive review report."""
-        with runtime_lock(self._adaptive_lock_path()):
+        with runtime_lock(
+            persistence=self.adaptive_store.persistence,
+            lock_key=self._adaptive_lock_path(),
+            owner_id=self.session_id,
+            ttl_seconds=int(self.adaptive_settings.get('lock_ttl_seconds', 120)),
+        ):
             report = build_review_report(self.adaptive_store)
-            report_path = self.adaptive_store.record_review(report)
+            report_ref = self.adaptive_store.record_review(report)
             self.adaptive_store.save()
-            self.logger.log_review_report({**report, 'report_path': str(report_path)})
             self._store_call(
                 'adaptive_review_event',
                 lambda: self.store.save_event(
                     self.session_id,
                     'adaptive_review_generated',
                     {
-                        'report_path': str(report_path),
+                        'report_reference': report_ref,
                         'cycle_count': report['cycle_count'],
                         'rolling_windows': report['rolling_windows'],
                     },
                 ),
             )
-            return {**report, 'report_path': str(report_path)}
+            return {**report, 'report_reference': report_ref}
 
     def run_safety_check(self) -> Dict[str, Any]:
         """Run a one-shot safety evaluation and optionally surface cooldown alerts."""
-        with runtime_lock(self._adaptive_lock_path()):
+        with runtime_lock(
+            persistence=self.adaptive_store.persistence,
+            lock_key=self._adaptive_lock_path(),
+            owner_id=self.session_id,
+            ttl_seconds=int(self.adaptive_settings.get('lock_ttl_seconds', 120)),
+        ):
             pair = self.config['trading_pair']
             market_snapshot = self._get_market_snapshot(pair)
             current_price = float(market_snapshot['current_price'])
@@ -900,7 +946,6 @@ class KrakenGridTrader:
             }
             if issues:
                 self.adaptive_store.note_incident('safety_check', payload)
-                self.logger.log_alert('safety_check', payload)
             self.adaptive_store.save()
             return payload
 
@@ -983,14 +1028,6 @@ class KrakenGridTrader:
                         'reasons': decision.reasons,
                         'candidate_score': decision.candidate_score,
                         'baseline_score': decision.baseline_score,
-                    },
-                )
-                self.logger.log_alert(
-                    incident_type,
-                    {
-                        'pair': pair,
-                        'current_price': current_price,
-                        'reasons': decision.reasons,
                     },
                 )
 
@@ -1094,7 +1131,7 @@ class KrakenGridTrader:
             self._persist_known_open_orders()
             self.adaptive_store.save()
             rolling_windows = self._rolling_window_metrics()
-            self.logger.log_metrics_snapshot(
+            self.adaptive_store.record_metric(
                 {
                     **cycle_snapshot,
                     'rolling_windows': rolling_windows,

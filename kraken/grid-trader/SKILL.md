@@ -27,8 +27,8 @@ Display the full dry-run results to the user. Only after results are displayed, 
 - Pair selection support (single pair or candidate list)
 - Adaptive grid centering, spacing/order-size tuning, and persistent learning state
 - Shadow evaluation with gated promotion and rollback
-- JSONL logs for setup, metrics, orders, fills, positions, weekly reviews, alerts, and errors
-- MCP-native SerenDB persistence for sessions, events, orders, fills, and position snapshots
+- JSONL logs for setup, orders, fills, positions, and errors
+- MCP-native SerenDB persistence for sessions, events, orders, fills, position snapshots, adaptive runtime state, telemetry, reviews, and runtime locks
 
 ## What is Grid Trading?
 
@@ -84,11 +84,11 @@ Set these optional environment variables in `.env`:
 - `SERENDB_AUTO_CREATE` (default: `true`)
 - `SEREN_MCP_COMMAND` (default: `seren-mcp`)
 
-Persistence is best-effort: if SerenDB/MCP is unavailable, trading still runs and logs locally.
+Adaptive mode requires SerenDB/MCP. If the persistence layer is unavailable, the runtime fails closed rather than falling back to local adaptive state files.
 
 ## Configuration
 
-See `config.example.json` for available parameters including grid spacing, order size, trading pair selection, daily loss caps, cooldowns, shadow thresholds, and adaptive state paths.
+See `config.example.json` for available parameters including grid spacing, order size, trading pair selection, daily loss caps, cooldowns, shadow thresholds, and adaptive lock lease settings.
 
 ## Disclaimer
 
