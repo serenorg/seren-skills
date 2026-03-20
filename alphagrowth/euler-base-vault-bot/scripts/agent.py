@@ -189,8 +189,6 @@ def _persist_normalized_result(config: dict, result: dict, *, run_type: str) -> 
         venue="euler",
         strategy_name="euler-base-vault-bot",
     )
-    if not store.enabled:
-        return
     inputs = config.get("inputs", {}) if isinstance(config.get("inputs"), dict) else {}
     action = str(inputs.get("action", "status"))
     order_events = [

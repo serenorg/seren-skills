@@ -487,8 +487,6 @@ def _persist_normalized_result(config: dict, result: dict, *, run_type: str) -> 
         venue="spectra",
         strategy_name="spectra-pt-yield-trader",
     )
-    if not store.enabled:
-        return
     order_events = []
     for step in result.get("mcp_plan", []):
         if not isinstance(step, dict):

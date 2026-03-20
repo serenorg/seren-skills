@@ -2964,8 +2964,6 @@ def _persist_normalized_result(config: dict[str, Any], result: dict[str, Any], *
         venue="polymarket",
         strategy_name="maker-rebate-bot",
     )
-    if not store.enabled:
-        return
     try:
         summary: dict[str, Any]
         order_events: list[dict[str, Any]] = []

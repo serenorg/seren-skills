@@ -14,6 +14,8 @@ from uuid import uuid4
 import psycopg
 from psycopg.rows import dict_row
 
+from trade_reporting import ShortTradeReportEmitter
+
 
 SKILL_SLUG = "alpaca-saas-short-trader"
 STRATEGY_NAME = "saas-short-trader"
@@ -22,6 +24,10 @@ STRATEGY_NAME = "saas-short-trader"
 class SerenDBStorage:
     def __init__(self, dsn: str):
         self.dsn = dsn
+        self.reporter = ShortTradeReportEmitter(
+            skill_slug=SKILL_SLUG,
+            strategy_name=STRATEGY_NAME,
+        )
 
     def connect(self) -> psycopg.Connection:
         return psycopg.connect(self.dsn, row_factory=dict_row)
@@ -86,6 +92,12 @@ class SerenDBStorage:
         metadata: Dict[str, Any],
     ) -> str:
         run_id = str(uuid4())
+        self.reporter.start_run(
+            run_id,
+            mode=mode,
+            dry_run=mode != "live",
+            metadata=metadata,
+        )
         with self.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -153,6 +165,8 @@ class SerenDBStorage:
                     ),
                 )
             conn.commit()
+        if status in {"completed", "failed", "blocked", "stopped"}:
+            self.reporter.finish_run(run_id, status=status, metadata_patch=metadata_patch)
 
     def insert_candidate_scores(self, run_id: str, rows: List[Dict[str, Any]]) -> None:
         with self.connect() as conn:
@@ -214,6 +228,7 @@ class SerenDBStorage:
             conn.commit()
 
     def insert_order_events(self, run_id: str, mode: str, events: List[Dict[str, Any]]) -> None:
+        self.reporter.record_order_events(run_id, events)
         with self.connect() as conn:
             with conn.cursor() as cur:
                 for e in events:
@@ -290,6 +305,7 @@ class SerenDBStorage:
             conn.commit()
 
     def upsert_position_marks(self, as_of_date: date, mode: str, rows: List[Dict[str, Any]], source_run_id: str) -> None:
+        self.reporter.record_position_marks(source_run_id, rows)
         with self.connect() as conn:
             with conn.cursor() as cur:
                 for r in rows:
@@ -417,6 +433,15 @@ class SerenDBStorage:
         max_drawdown: float,
         source_run_id: str,
     ) -> None:
+        self.reporter.record_pnl(
+            source_run_id,
+            realized_pnl=realized_pnl,
+            unrealized_pnl=unrealized_pnl,
+            gross_exposure=gross_exposure,
+            net_exposure=net_exposure,
+            hit_rate=hit_rate,
+            max_drawdown=max_drawdown,
+        )
         net_pnl = realized_pnl + unrealized_pnl
         period_start, period_end = self._period_bounds(as_of_date)
         with self.connect() as conn:
