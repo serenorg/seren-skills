@@ -165,3 +165,13 @@ def test_cancel_all_live_orders_stops_trading(tmp_path: Path) -> None:
 
     assert "stop trading" in result["message"]
     assert result["cancelled_live_orders"][0]["order_id"] == "alpaca-1"
+
+
+def test_market_feed_missing_seren_api_key_fails_closed(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    engine.seren = None
+
+    result = engine.fetch_market_features(["CRM"])
+
+    assert result.ok is False
+    assert result.error == "SEREN_API_KEY missing"

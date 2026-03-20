@@ -312,3 +312,18 @@ def test_stop_trading_cancels_pending_orders_from_state(tmp_path: Path, monkeypa
 
     assert "stop trading" in result["message"]
     assert cancelled == ["order-1", "order-2"]
+
+
+def test_stop_trading_reports_missing_coinbase_credentials(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "config.json"
+    _write_config(config, "single_asset")
+
+    body = json.loads(config.read_text(encoding="utf-8"))
+    body["dry_run"] = False
+    config.write_text(json.dumps(body), encoding="utf-8")
+
+    result = agent.stop_trading(config_path=str(config))
+
+    assert result["status"] == "error"
+    assert "missing" in result["message"]

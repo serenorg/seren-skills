@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
+
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -105,3 +107,23 @@ def test_stop_trading_emits_sell_side_unwind_handoff() -> None:
     assert result["liquidate_position"] is True
     assert result["execution_handoff"]["side"] == "sell"
     assert "stop trading" in result["message"]
+
+
+def test_stop_trading_requires_pt_address() -> None:
+    with pytest.raises(module.ConfigError, match="inputs.pt_address is required"):
+        module.run_stop_trading(
+            config={
+                "inputs": {
+                    "chain": "base",
+                    "wallet_mode": "delegated",
+                    "side": "buy",
+                    "capital_usd": 100,
+                    "top_n": 3,
+                    "min_liquidity_usd": 1_000,
+                    "max_price_impact_pct": 1.0,
+                    "target_maturity_days_min": 7,
+                    "target_maturity_days_max": 30,
+                },
+                "execution": {"executor": {"type": "manual"}},
+            }
+        )
