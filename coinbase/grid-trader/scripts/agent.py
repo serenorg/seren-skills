@@ -72,6 +72,19 @@ def _build_store_from_env() -> SerenDBStore:
     )
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return path
+
+
 class CoinbaseGridTrader:
     """Coinbase Exchange Grid Trading Bot"""
 
@@ -192,7 +205,7 @@ class CoinbaseGridTrader:
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load and validate configuration"""
-        with open(config_path, 'r') as f:
+        with open(_bootstrap_config_path(config_path), 'r') as f:
             config = json.load(f)
 
         for field in ['campaign_name', 'trading_pair', 'strategy', 'risk_management']:

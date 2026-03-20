@@ -523,6 +523,19 @@ class TradingAgent:
         print()
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return path
+
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description='Polymarket Trading Agent')
@@ -544,9 +557,11 @@ def main():
 
     args = parser.parse_args()
 
+    config_path = _bootstrap_config_path(args.config)
+
     # Check config exists
-    if not os.path.exists(args.config):
-        print(f"Error: Config file not found: {args.config}")
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found: {config_path}")
         sys.exit(1)
 
     if not args.dry_run and not args.yes_live:
@@ -558,7 +573,7 @@ def main():
 
     # Initialize agent
     try:
-        agent = TradingAgent(args.config, dry_run=args.dry_run)
+        agent = TradingAgent(str(config_path), dry_run=args.dry_run)
     except Exception as e:
         print(f"Error initializing agent: {e}")
         sys.exit(1)

@@ -206,8 +206,19 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
-def load_config(path: str) -> dict[str, Any]:
+def _bootstrap_config_path(path: str) -> Path:
     config_path = Path(path)
+    if config_path.exists():
+        return config_path
+    example_path = config_path.with_name("config.example.json")
+    if example_path.exists():
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+    return config_path
+
+
+def load_config(path: str) -> dict[str, Any]:
+    config_path = _bootstrap_config_path(path)
     if not config_path.exists():
         raise ConfigError(f"Config file not found: {path}")
     try:

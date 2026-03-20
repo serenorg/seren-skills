@@ -1480,11 +1480,22 @@ def _require_live_confirmation(mode: str, allow_live: bool) -> None:
         )
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+    return path
+
+
 def main() -> None:
     args = parse_args()
     config: Dict[str, Any] = {}
     if args.config:
-        with open(args.config, "r", encoding="utf-8") as f:
+        with open(_bootstrap_config_path(args.config), "r", encoding="utf-8") as f:
             config = json.load(f)
 
     dsn = resolve_dsn(

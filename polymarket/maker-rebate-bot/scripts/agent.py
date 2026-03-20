@@ -183,8 +183,21 @@ def load_json_file(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return path
+
+
 def load_config(config_path: str) -> dict[str, Any]:
-    return load_json_file(Path(config_path))
+    return load_json_file(_bootstrap_config_path(config_path))
 
 
 def _clone_config(config: dict[str, Any]) -> dict[str, Any]:

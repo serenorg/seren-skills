@@ -201,8 +201,21 @@ def load_json(path: Path) -> dict[str, Any] | list[Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return path
+
+
 def load_config(config_path: str) -> dict[str, Any]:
-    payload = load_json(Path(config_path))
+    payload = load_json(_bootstrap_config_path(config_path))
     return payload if isinstance(payload, dict) else {}
 
 
