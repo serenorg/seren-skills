@@ -9,6 +9,7 @@ import pytest
 
 _SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 _MODULES_TO_CLEAR = (
+    "adaptive_runtime",
     "agent",
     "grid_manager",
     "logger",
@@ -61,6 +62,24 @@ def _build_trader(tmp_path, monkeypatch) -> KrakenGridTrader:
     trader.running = True
     trader.session_id = "session"
     trader.store = None
+    trader.tracker = type(
+        "Tracker",
+        (),
+        {
+            "btc_balance": 0.0,
+            "remove_open_order": lambda *args, **kwargs: None,
+        },
+    )()
+    trader.adaptive_store = type(
+        "AdaptiveStore",
+        (),
+        {"state": {}, "save": lambda *args, **kwargs: None},
+    )()
+    trader.current_adaptive_decision = type(
+        "Decision",
+        (),
+        {"accepted_params": {"max_open_orders": 40}},
+    )()
     trader.logger = type("Logger", (), {"log_error": lambda *args, **kwargs: None})()
     trader._cycle_deadline_at = None
     trader._store_call = lambda context, fn: None
@@ -70,7 +89,7 @@ def _build_trader(tmp_path, monkeypatch) -> KrakenGridTrader:
 def test_quote_reserve_skips_buy_orders(tmp_path, monkeypatch) -> None:
     trader = _build_trader(tmp_path, monkeypatch)
     placed: list[tuple[str, float, float]] = []
-    trader._place_order = lambda pair, side, price, volume: placed.append((side, price, volume))
+    trader._place_order = lambda pair, side, price, volume: (placed.append((side, price, volume)) or True)
 
     trader._place_grid_orders(
         {"buy": [{"price": 95.0, "volume": 10.0}, {"price": 10.0, "volume": 1.0}], "sell": []},
@@ -79,6 +98,39 @@ def test_quote_reserve_skips_buy_orders(tmp_path, monkeypatch) -> None:
     )
 
     assert placed == [("buy", 10.0, 1.0)]
+
+
+def test_open_order_cap_blocks_new_orders(tmp_path, monkeypatch) -> None:
+    trader = _build_trader(tmp_path, monkeypatch)
+    trader.current_adaptive_decision.accepted_params = {"max_open_orders": 1}
+    trader._place_order = lambda *args, **kwargs: pytest.fail("should not place new orders")
+
+    summary = trader._place_grid_orders(
+        {"buy": [{"price": 95.0, "volume": 0.1}], "sell": []},
+        {"existing": {"descr": {"type": "buy", "price": "96.0"}, "vol": "0.1"}},
+        1000.0,
+    )
+
+    assert summary["placed_buy"] == 0
+    assert summary["skipped_buy"] == 1
+
+
+def test_position_cap_blocks_incremental_buys(tmp_path, monkeypatch) -> None:
+    trader = _build_trader(tmp_path, monkeypatch)
+    trader.config["risk_management"]["max_position_size"] = 0.5
+    placed: list[tuple[str, float, float]] = []
+    trader._place_order = lambda pair, side, price, volume: (placed.append((side, price, volume)) or True)
+
+    summary = trader._place_grid_orders(
+        {"buy": [{"price": 95.0, "volume": 0.1}], "sell": []},
+        {},
+        1000.0,
+        base_balance=0.45,
+    )
+
+    assert placed == []
+    assert summary["placed_buy"] == 0
+    assert summary["skipped_buy"] == 1
 
 
 def test_drawdown_guard_persists_peak_and_blocks(tmp_path, monkeypatch) -> None:
