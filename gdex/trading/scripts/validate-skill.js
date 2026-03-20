@@ -112,7 +112,6 @@ function parseKeyValue(line) {
   if (rest.startsWith('"')) {
     // Double-quoted: consume until the closing unescaped "
     const inner = rest.slice(1);
-    value = inner.replace(/\\(["\\nrt])/g, (_, c) => ({ '"': '"', '\\': '\\', n: '\n', r: '\r', t: '\t' }[c] || c));
     const closeIdx = findClosingQuote(inner, '"');
     value = closeIdx === -1 ? inner : inner.slice(0, closeIdx);
     // Unescape standard backslash sequences
