@@ -25,6 +25,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 from polymarket_live import (
     DEFAULT_STALE_ORDER_MAX_AGE_SECONDS,
     DEFAULT_UNWIND_BEFORE_RESOLUTION_SECONDS,
+    build_marketable_sell_order,
     DirectClobTrader,
     cancel_stale_orders,
     execute_single_market_quotes,
@@ -2346,19 +2347,31 @@ def run_unwind_all(config: dict[str, Any]) -> dict[str, Any]:
             if shares <= 0:
                 continue
             try:
-                from polymarket_live import fetch_midpoint
-                mid = fetch_midpoint(token_id, fallback_mid=0.5)
-                sell_price = round(max(0.01, mid * 0.95), 4)
+                sell_plan = build_marketable_sell_order(token_id, shares)
                 response = trader.create_order(
                     token_id=token_id,
                     side="SELL",
-                    price=sell_price,
+                    price=sell_plan["price"],
                     size=shares,
-                    tick_size="0.01",
-                    neg_risk=False,
-                    fee_rate_bps=0,
+                    tick_size=sell_plan["tick_size"],
+                    neg_risk=sell_plan["neg_risk"],
+                    fee_rate_bps=sell_plan["fee_rate_bps"],
                 )
-                sell_results.append({"token_id": token_id, "shares": shares, "price": sell_price, "response": response})
+                sell_results.append(
+                    {
+                        "token_id": token_id,
+                        "shares": round(shares, 6),
+                        "price": sell_plan["price"],
+                        "best_bid": sell_plan["best_bid"],
+                        "best_ask": sell_plan["best_ask"],
+                        "estimated_exit_value_usd": sell_plan["estimated_exit_value_usd"],
+                        "estimated_fill_size": sell_plan["estimated_fill_size"],
+                        "estimated_unfilled_size": sell_plan["estimated_unfilled_size"],
+                        "estimated_average_price": sell_plan["estimated_average_price"],
+                        "execution_style": sell_plan["execution_style"],
+                        "response": response,
+                    }
+                )
             except Exception as sell_exc:
                 sell_results.append({"token_id": token_id, "shares": shares, "error": str(sell_exc)})
         results["sell_results"] = sell_results
