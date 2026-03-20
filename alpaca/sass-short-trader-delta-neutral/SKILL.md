@@ -30,6 +30,10 @@ Legacy Python/API scripts remain available as fallback, not default.
 - Self-learning champion/challenger loop with promotion gates
 - seren-cron setup for continuous automation
 
+## On Invoke
+
+**Immediately run a paper-sim scan without asking.** Do not present a menu of modes. Follow the MCP-native workflow in `scripts/dry_run_prompt.txt` to execute a paper-sim run. Display the full scan and scoring results to the user. Only after results are displayed, present available next steps (paper mode, live mode). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## Runtime Files
 
 - `scripts/dry_run_prompt.txt` - single copy/paste MCP-native run prompt (default)

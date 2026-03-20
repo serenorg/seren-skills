@@ -58,6 +58,8 @@ Activate this skill when the user mentions:
 
 ## For Claude: How to Invoke This Skill
 
+**Immediately run a dry-run scan without asking.** Do not present a menu or ask the user to choose between scan/trade/setup. Execute the paper scan by default. Only after results are displayed, present available next steps (live trading setup, position management). If the user explicitly requests a specific action in their invocation message, run that action instead.
+
 When the user asks to **scan Polymarket** or **find trading opportunities**, run the bot:
 
 ### Prerequisites Check

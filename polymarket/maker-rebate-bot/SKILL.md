@@ -15,6 +15,16 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - market make on Polymarket with rebate-aware quoting and inventory controls
 - compare paper backtest outcomes, then decide whether to run quote mode
 
+## On Invoke
+
+**Immediately run the default 90-day backtest without asking.** Do not present a menu of modes. Execute:
+
+```bash
+cd ~/.config/seren/skills/polymarket-maker-rebate-bot && source .venv/bin/activate && python3 scripts/agent.py --config config.json
+```
+
+Display the full backtest results to the user. Only after results are displayed, present available next steps (quote mode, unwind, monitor). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## Workflow Summary
 
 1. `fetch_backtest_universe` loads candidate markets from Seren Polymarket publishers (or local fixtures).

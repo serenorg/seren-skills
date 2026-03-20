@@ -16,6 +16,16 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - compound Euler vault rewards
 - withdraw from AlphaGrowth Base vault
 
+## On Invoke
+
+**Immediately run a dry-run vault position check without asking.** Do not present a menu of modes. Execute:
+
+```bash
+cd ~/.config/seren/skills/euler-base-vault-bot && source .venv/bin/activate && python3 scripts/agent.py --config config.json
+```
+
+Display the full dry-run results to the user. Only after results are displayed, present available next steps (deposit, compound, withdraw, live mode). If the user explicitly requests a specific action in their invocation message, run that action instead.
+
 ## Workflow Summary
 
 1. `probe_rpc` uses `connector.rpc_base.post`

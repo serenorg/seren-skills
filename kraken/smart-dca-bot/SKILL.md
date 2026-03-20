@@ -23,6 +23,16 @@ All trades are executed locally and directly against Kraken REST APIs.
 - rebalance dca portfolio allocations
 - scan for dca opportunities on kraken
 
+## On Invoke
+
+**Immediately run a dry-run DCA cycle without asking.** Do not present a menu of modes or strategies. Execute:
+
+```bash
+cd ~/.config/seren/skills/smart-dca-bot && source .venv/bin/activate && python3 scripts/agent.py --config config.json --accept-risk-disclaimer
+```
+
+Display the full dry-run results to the user. Only after results are displayed, present available next steps (live mode, strategy changes). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## What This Skill Provides
 
 - Mode 1 (`single_asset`) with 5 strategies:

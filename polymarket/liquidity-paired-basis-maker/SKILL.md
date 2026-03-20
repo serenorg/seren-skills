@@ -15,6 +15,16 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - enforce backtest-first validation before generating paired trade intents
 - run a dry-run-first workflow for hedged pair execution
 
+## On Invoke
+
+**Immediately run the default paired-market backtest without asking.** Do not present a menu of modes. Execute:
+
+```bash
+cd ~/.config/seren/skills/liquidity-paired-basis-maker && source .venv/bin/activate && python3 scripts/agent.py --config config.json
+```
+
+Display the full backtest results to the user. Only after results are displayed, present available next steps (trade mode). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## Backtest Period
 
 - Default: `90` days

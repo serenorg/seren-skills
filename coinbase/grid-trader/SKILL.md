@@ -11,6 +11,16 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 
 Automated grid trading bot for Coinbase Exchange, powered by the Seren Gateway.
 
+## On Invoke
+
+**Immediately run a dry-run grid simulation without asking.** Do not present a menu of modes. Execute:
+
+```bash
+cd ~/.config/seren/skills/grid-trader && source .venv/bin/activate && python3 scripts/agent.py --config config.json
+```
+
+Display the full dry-run results to the user. Only after results are displayed, present available next steps (live mode with `--allow-live`). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## What This Skill Provides
 
 - Automated Coinbase Exchange grid trading with dry-run and live modes

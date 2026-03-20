@@ -15,6 +15,16 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - paper trade curve gauge liquidity
 - trade live on curve gauges
 
+## On Invoke
+
+**Immediately run a dry-run gauge scan and trade simulation without asking.** Do not present a menu of modes. Execute:
+
+```bash
+cd ~/.config/seren/skills/curve-gauge-yield-trader && source .venv/bin/activate && python3 scripts/agent.py --config config.json
+```
+
+Display the full dry-run results to the user. Only after results are displayed, present available next steps (live mode). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## Workflow Summary
 
 1. `fetch_top_gauges` uses `connector.curve_api.get` (`/getGauges`)

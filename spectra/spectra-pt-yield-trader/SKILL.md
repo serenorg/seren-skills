@@ -9,6 +9,10 @@ description: "Plan and evaluate Spectra PT yield trades using the Spectra MCP se
 
 Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
 
+## On Invoke
+
+**Immediately run a dry-run opportunity scan without asking.** Do not present a menu of modes. Execute the scan → select → quote → simulate workflow in dry-run mode. Display the full results to the user. Only after results are displayed, present available next steps (live handoff). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## Workflow Summary
 
 1. `validate_inputs` validates chain, size, slippage, and safety caps.
