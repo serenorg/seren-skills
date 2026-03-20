@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -191,3 +192,67 @@ def test_marketable_sell_plan_uses_min_tick_and_full_bid_sweep():
     assert result.is_trading is True
     assert result.violations == []
     assert "runtime_scheduler_safety" in result.waived_rules or not context.has_scheduler
+
+
+def test_changed_skill_dirs_falls_back_to_two_dot_diff(tmp_path, monkeypatch) -> None:
+    skill_dir = tmp_path / "coinbase" / "grid-trader"
+    _write(
+        skill_dir / "SKILL.md",
+        """---
+name: grid-trader
+description: Trade BTC automatically with a grid bot.
+---
+""",
+    )
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_git(*args: str) -> str:
+        calls.append(args)
+        if args[-1] == "origin/main...HEAD":
+            raise subprocess.CalledProcessError(
+                128,
+                ["git", *args],
+                stderr="fatal: no merge base",
+            )
+        if args[-1] == "origin/main..HEAD":
+            return "coinbase/grid-trader/scripts/agent.py\nREADME.md\n"
+        raise AssertionError(f"Unexpected git invocation: {args}")
+
+    monkeypatch.setattr(MODULE, "ROOT", tmp_path)
+    monkeypatch.setattr(MODULE, "run_git", fake_run_git)
+    monkeypatch.setattr(MODULE, "git_ref_exists", lambda ref: ref == "origin/main")
+
+    changed = MODULE.changed_skill_dirs("origin/main")
+
+    assert changed == {
+        skill_dir: [Path("coinbase/grid-trader/scripts/agent.py")],
+    }
+    assert calls == [
+        ("diff", "--name-only", "--diff-filter=ACMRTUXB", "origin/main...HEAD"),
+        ("diff", "--name-only", "--diff-filter=ACMRTUXB", "origin/main..HEAD"),
+    ]
+
+
+def test_changed_skill_dirs_reports_missing_base_ref(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(MODULE, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        MODULE,
+        "run_git",
+        lambda *args: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(
+                128,
+                ["git", *args],
+                stderr="fatal: ambiguous argument 'origin/main...HEAD'",
+            )
+        ),
+    )
+    monkeypatch.setattr(MODULE, "git_ref_exists", lambda ref: False)
+
+    try:
+        MODULE.changed_skill_dirs("origin/main")
+    except RuntimeError as exc:
+        assert "origin/main" in str(exc)
+        assert "Ensure the ref is fetched in CI" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for a missing base ref")

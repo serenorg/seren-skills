@@ -295,6 +295,17 @@ def run_git(*args: str) -> str:
     return completed.stdout
 
 
+def git_ref_exists(ref: str) -> bool:
+    completed = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.returncode == 0
+
+
 def discover_skill_dirs() -> list[Path]:
     return sorted(path.parent for path in ROOT.glob("*/*/SKILL.md"))
 
@@ -310,7 +321,17 @@ def skill_dir_from_path(path_str: str) -> Path | None:
 
 
 def changed_skill_dirs(base_ref: str) -> dict[Path, list[Path]]:
-    stdout = run_git("diff", "--name-only", "--diff-filter=ACMRTUXB", f"{base_ref}...HEAD")
+    diff_args = ("diff", "--name-only", "--diff-filter=ACMRTUXB")
+    try:
+        stdout = run_git(*diff_args, f"{base_ref}...HEAD")
+    except subprocess.CalledProcessError as exc:
+        if not git_ref_exists(base_ref):
+            stderr = (exc.stderr or exc.stdout or "").strip()
+            detail = f": {stderr}" if stderr else "."
+            raise RuntimeError(
+                f"Unable to diff against base ref `{base_ref}`. Ensure the ref is fetched in CI{detail}"
+            ) from exc
+        stdout = run_git(*diff_args, f"{base_ref}..HEAD")
     changed: dict[Path, list[Path]] = {}
     for raw in stdout.splitlines():
         skill_dir = skill_dir_from_path(raw)
@@ -786,7 +807,11 @@ def main() -> int:
         skill_dirs = discover_skill_dirs()
         changed_map = {skill_dir: [] for skill_dir in skill_dirs}
     elif args.base_ref:
-        changed_map = changed_skill_dirs(args.base_ref)
+        try:
+            changed_map = changed_skill_dirs(args.base_ref)
+        except RuntimeError as exc:
+            print(f"Git error: {exc}", file=sys.stderr)
+            return 2
         skill_dirs = sorted(changed_map)
     else:
         print("Choose `--all`, `--base-ref`, or one or more `--skill` values.", file=sys.stderr)

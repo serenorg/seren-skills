@@ -33,7 +33,7 @@ jobs:
 
       - name: Fetch pull request base branch
         if: github.event_name == 'pull_request'
-        run: git fetch origin "${{ github.base_ref }}" --depth=1
+        run: git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}" --depth=1
 
       - name: Validate changed trading skills
         if: github.event_name == 'pull_request'
