@@ -18,13 +18,22 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; }
 die()     { error "$*"; exit 1; }
+usage()   { echo "Usage: bash scripts/install.sh [--version <tag>]"; exit 1; }
 
 # ─── Parse args ──────────────────────────────────────────────────────────────
 VERSION=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --version) VERSION="$2"; shift 2 ;;
-    *)         die "Unknown argument: $1" ;;
+    --version)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        die "Missing value for --version. Usage: bash scripts/install.sh --version <tag>"
+      fi
+      VERSION="$2"
+      shift 2
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
   esac
 done
 
