@@ -715,6 +715,89 @@ gclaw gateway --config coordinator.json
 
 ---
 
+## Trade Execution Contract
+
+When the user says **sell**, **close**, **exit**, **unwind**, or **flatten**, execute the requested action immediately. Ask only the minimum clarifying question if the target position or asset is ambiguous.
+
+---
+
+## Pre-Trade Checklist
+
+Before any trade is submitted the agent must complete the following preflight steps:
+
+1. **Fetch** the latest portfolio snapshot and token prices via GDEX SDK.
+2. **Snap** prices to the chain's minimum tick size where applicable.
+3. **Verify** that all required dependencies are loaded (GDEX SDK, LLM provider, wallet credentials).
+4. **Reachability check** — confirm that the target chain RPC and GDEX API are reachable.
+5. **Fail closed** — if any step above fails, abort the trade and surface an actionable remediation message to the operator.
+
+---
+
+## Dependency Validation
+
+The following credentials and libraries are required for live trading. The agent must verify they are installed and configured before executing any trade, and fail closed with an actionable remediation message when they are missing.
+
+| Dependency | Environment Variable | Remediation |
+|-----------|---------------------|-------------|
+| GDEX API key | `GDEX_API_KEY` | Set `GDEX_API_KEY` in `.env` or `config.json` |
+| Control wallet private key | `CONTROL_WALLET_PRIVATE_KEY` | Set `CONTROL_WALLET_PRIVATE_KEY` in `.env` or `config.json` |
+| LLM provider credential | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / etc. | Set at least one LLM provider API key |
+| GDEX SDK library | `@gdexsdk/gdex-skill` or Go GDEX module | Install via `go get` or verify the gclaw binary bundles it |
+| Chain RPC endpoint | (per-chain config) | Ensure the target chain RPC is reachable |
+
+If any required credential or library is missing, the agent **must stop** and print an error such as:
+
+```
+RuntimeError: GDEX_API_KEY is required — set it in .env or config.json
+```
+
+---
+
+## Execution Modes
+
+Gclaw supports two execution modes:
+
+| Mode | Description |
+|------|-------------|
+| **Dry-run** (default) | Simulates trades without submitting on-chain transactions. No funds at risk. |
+| **Live** | Submits real on-chain transactions via GDEX SDK. Requires explicit opt-in. |
+
+### Live Safety Opt-In
+
+Live execution requires **both** of the following:
+
+1. The config flag `execution.live_mode` set to `true` in `config.json`.
+2. The explicit CLI confirmation flag `--yes-live` passed at startup.
+
+Config-only gating is **not** sufficient. The `--yes-live` flag is required as an explicit operator approval for live trading.
+
+```bash
+# Dry-run (default — no flag needed)
+gclaw agent -m "Buy 10 USDC of SOL on Solana"
+
+# Live execution (requires both config + flag)
+gclaw agent --yes-live -m "Buy 10 USDC of SOL on Solana"
+```
+
+---
+
+## Emergency Exit
+
+To cancel all open orders and liquidate all held inventory in an emergency:
+
+```bash
+gclaw agent --unwind-all --yes-live
+```
+
+This will:
+1. **Cancel all open orders** across all chains.
+2. **Market-sell all held positions** to the chain's native stablecoin.
+3. **Report** the final portfolio state and any residual balances.
+
+For programmatic use, call `scripts/agent.py --unwind-all --yes-live`.
+
+---
+
 ## Critical Notes / Gotchas
 
 1. **Never commit real private keys** — always use `${ENV_VAR}` references in config.json
