@@ -28,7 +28,7 @@ With 15 fills per day: **$252/day or $7,560/month** (75.6% monthly return)
 - **Risk Management**: Stop-loss, daily loss caps, position limits, open-order caps, and cooldowns after loss streaks
 - **Cost Efficient**: 0.16% maker fees via Kraken
 - **Always Active**: Always has opportunities (unlike prediction markets)
-- **Audit Trail**: JSONL logs for setup, metrics, fills, reviews, and alerts
+- **Audit Trail**: JSONL logs for core trading activity plus SerenDB-backed adaptive runtime telemetry
 - **Dry-Run Adaptive Path**: Test adaptive decisions without placing real orders
 
 ## Quick Start
@@ -107,7 +107,7 @@ Bot will:
 - Place buy orders below current price
 - Place sell orders above current price
 - Automatically replace filled orders
-- Log all trades to `logs/` directory
+- Log core trade activity to `logs/` and adaptive runtime telemetry to SerenDB
 - Stop if bankroll drops below stop-loss threshold
 
 Press `Ctrl+C` to stop trading.
@@ -217,7 +217,7 @@ python scripts/agent.py stop --config config.json
 
 ## Logs
 
-All operations logged to `logs/` directory as JSONL files:
+Core trading operations are logged to `logs/` as JSONL files:
 
 - `grid_setup.jsonl` - Grid initialization
 - `orders.jsonl` - Order placements/cancellations
@@ -225,7 +225,7 @@ All operations logged to `logs/` directory as JSONL files:
 - `positions.jsonl` - Position snapshots
 - `errors.jsonl` - Errors and warnings
 
-Adaptive runtime state, telemetry, review references, and the shared cron lease now persist in SerenDB. This includes accepted parameters, shadow scores, recent cycles, known open orders, `live_risk_state`, runtime events, and the lock record used to fail closed on overlapping one-shot invocations.
+Adaptive runtime state, telemetry, review references, and alert events persist in SerenDB. This includes accepted parameters, shadow scores, recent cycles, known open orders, `live_risk_state`, runtime events, and the lock record used to fail closed on overlapping one-shot invocations.
 
 ## SerenDB Persistence
 
@@ -240,7 +240,7 @@ When `seren-mcp` is available, the bot persists to SerenDB:
 - `trading.runtime_events`
 - `trading.runtime_locks`
 
-Adaptive mode requires SerenDB persistence. If the MCP-backed store is unavailable, the adaptive runtime fails closed instead of silently falling back to local state files.
+Adaptive mode requires SerenDB persistence. If the MCP-backed store is unavailable, the adaptive runtime fails closed instead of silently falling back to local state files, runtime lock files, or local review/alert telemetry artifacts.
 
 ## Safety Features
 
@@ -248,7 +248,7 @@ Adaptive mode requires SerenDB persistence. If the MCP-backed store is unavailab
 2. **Daily Loss Caps + Cooldowns**: New buys pause after loss streaks or daily drawdown breaches
 3. **Position/Open Order Limits**: Prevents overexposure and runaway order spam
 4. **Shadow Promotion Gate**: Candidate settings must outperform the baseline before promotion
-5. **Audit Trail**: Every cycle, review, fill, alert, and runtime lease transition is persisted
+5. **Audit Trail**: Every cycle, review, fill, alert, and runtime lease transition is persisted, with adaptive telemetry stored in SerenDB
 6. **Graceful Shutdown**: Cancels all orders on exit
 
 ## seren-cron

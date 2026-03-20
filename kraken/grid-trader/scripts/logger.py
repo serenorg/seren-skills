@@ -1,5 +1,5 @@
 """
-Kraken Grid Trader Logger - Logs all trading activity
+Kraken Grid Trader Logger - Logs core trading activity.
 
 Maintains JSONL log files:
 1. grid_setup.jsonl - Grid initialization and updates
@@ -203,22 +203,6 @@ class GridTraderLogger:
             'error_message': error_message,
             'context': context or {}
         }, extra))
-
-    def log_metrics_snapshot(self, payload: Dict[str, Any]) -> None:
-        self._append_jsonl('metrics.jsonl', {**payload, 'phase': 'metrics'})
-
-    def log_review_report(self, payload: Dict[str, Any]) -> None:
-        self._append_jsonl('weekly_reviews.jsonl', {**payload, 'phase': 'review'})
-
-    def log_alert(self, alert_type: str, payload: Dict[str, Any]) -> None:
-        self._append_jsonl(
-            'alerts.jsonl',
-            {
-                'phase': 'alert',
-                'alert_type': alert_type,
-                **payload,
-            },
-        )
 
     def get_recent_logs(self, log_type: str, limit: int = 10) -> list:
         """

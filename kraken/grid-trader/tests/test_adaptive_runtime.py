@@ -130,6 +130,26 @@ def test_store_persists_state_and_review_via_backend() -> None:
     assert store.state["review_reports"][-1]["reference"] == reference
 
 
+def test_store_persists_alert_events_via_backend() -> None:
+    persistence = FakeAdaptivePersistence()
+    store = adaptive_runtime.AdaptiveStateStore(
+        adaptive_runtime.resolve_adaptive_settings(
+            {"adaptive": {"max_failure_count_before_alert": 2}}
+        ),
+        persistence=persistence,
+    )
+
+    store.note_incident("daily_loss_cap", {"cap_usd": 50.0})
+    store.register_failure("kraken request failed")
+    store.register_failure("kraken request failed again")
+    store.save()
+
+    assert persistence.state["risk_incidents"][-1]["incident_type"] == "daily_loss_cap"
+    assert [event["type"] for event in persistence.events] == ["alert", "alert"]
+    assert persistence.events[0]["payload"]["kind"] == "risk_incident"
+    assert persistence.events[1]["payload"]["kind"] == "repeated_failures"
+
+
 def test_runtime_lock_uses_backend_lease() -> None:
     persistence = FakeAdaptivePersistence()
 
