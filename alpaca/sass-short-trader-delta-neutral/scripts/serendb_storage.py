@@ -6,13 +6,17 @@ SerenDB persistence helpers for SaaS short strategy bot.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
+
+
+SKILL_SLUG = "alpaca-sass-short-trader-delta-neutral"
+STRATEGY_NAME = "sass-short-trader-delta-neutral"
 
 
 class SerenDBStorage:
@@ -32,6 +36,24 @@ class SerenDBStorage:
     def ensure_schemas(self, base_sql: Path, learning_sql: Path) -> None:
         self.apply_sql_file(base_sql)
         self.apply_sql_file(learning_sql)
+
+    @staticmethod
+    def _period_bounds(as_of_date: date) -> Tuple[str, str]:
+        start = datetime.combine(as_of_date, datetime.min.time(), tzinfo=timezone.utc)
+        end = datetime.combine(as_of_date, datetime.max.time(), tzinfo=timezone.utc)
+        return start.isoformat(), end.isoformat()
+
+    @staticmethod
+    def _position_side(net_exposure: Any) -> Optional[str]:
+        try:
+            value = float(net_exposure)
+        except (TypeError, ValueError):
+            return None
+        if value < 0:
+            return "SELL"
+        if value > 0:
+            return "BUY"
+        return None
 
     def check_overlap(self, mode: str, run_type: str, window_hours: int = 6) -> Optional[str]:
         with self.connect() as conn:
@@ -69,18 +91,31 @@ class SerenDBStorage:
                 cur.execute(
                     """
                     INSERT INTO trading.strategy_runs
-                      (run_id, strategy_name, mode, run_date, status, universe, max_names_scored, max_names_orders, min_conviction, metadata)
+                      (run_id, skill_slug, venue, strategy_name, mode, status, dry_run, started_at,
+                       run_date, universe, max_names_scored, max_names_orders, min_conviction, config, summary, metadata)
                     VALUES
-                      (%s, 'sass-short-trader-delta-neutral', %s, CURRENT_DATE, %s, %s::text[], %s, %s, %s, %s::jsonb)
+                      (%s, %s, 'alpaca', %s, %s, %s, %s, NOW(),
+                       CURRENT_DATE, %s::text[], %s, %s, %s, %s::jsonb, '{}'::jsonb, %s::jsonb)
                     """,
                     (
                         run_id,
+                        SKILL_SLUG,
+                        STRATEGY_NAME,
                         mode,
                         status,
+                        mode != "live",
                         universe,
                         max_names_scored,
                         max_names_orders,
                         min_conviction,
+                        json.dumps(
+                            {
+                                "universe": universe,
+                                "max_names_scored": max_names_scored,
+                                "max_names_orders": max_names_orders,
+                                "min_conviction": min_conviction,
+                            }
+                        ),
                         json.dumps(metadata),
                     ),
                 )
@@ -88,16 +123,34 @@ class SerenDBStorage:
         return run_id
 
     def update_run_status(self, run_id: str, status: str, metadata_patch: Dict[str, Any]) -> None:
+        error_message = str(metadata_patch.get("error") or "").strip() or None
+        error_code = status if error_message else None
         with self.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     UPDATE trading.strategy_runs
                     SET status = %s,
-                        metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
+                        completed_at = CASE
+                            WHEN %s IN ('completed', 'failed', 'blocked', 'stopped')
+                            THEN COALESCE(completed_at, NOW())
+                            ELSE completed_at
+                        END,
+                        summary = COALESCE(summary, '{}'::jsonb) || %s::jsonb,
+                        metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb,
+                        error_code = COALESCE(%s, error_code),
+                        error_message = COALESCE(%s, error_message)
                     WHERE run_id = %s
                     """,
-                    (status, json.dumps(metadata_patch), run_id),
+                    (
+                        status,
+                        status,
+                        json.dumps(metadata_patch),
+                        json.dumps(metadata_patch),
+                        error_code,
+                        error_message,
+                        run_id,
+                    ),
                 )
             conn.commit()
 
@@ -164,39 +217,93 @@ class SerenDBStorage:
         with self.connect() as conn:
             with conn.cursor() as cur:
                 for e in events:
+                    details = e.get("details", {})
+                    quantity = e["qty"]
+                    price = e.get("limit_price") or details.get("entry_price")
+                    notional = details.get("planned_notional_usd")
+                    if notional is None and price is not None:
+                        try:
+                            notional = float(price) * float(quantity)
+                        except (TypeError, ValueError):
+                            notional = None
                     cur.execute(
                         """
                         INSERT INTO trading.order_events
-                          (run_id, mode, order_ref, broker, ticker, side, order_type, status,
-                           qty, limit_price, stop_price, filled_qty, filled_avg_price, is_simulated, details)
+                          (run_id, mode, order_ref, order_id, instrument_id, symbol, broker, ticker, side, order_type,
+                           event_type, status, qty, quantity, price, limit_price, stop_price,
+                           filled_qty, filled_avg_price, notional_usd, is_simulated, details, metadata)
                         VALUES
-                          (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                          (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
                         ON CONFLICT (run_id, order_ref, event_time) DO NOTHING
                         """,
                         (
                             run_id,
                             mode,
                             e["order_ref"],
+                            e["order_ref"],
+                            e["ticker"],
+                            e["ticker"],
                             e.get("broker", "alpaca"),
                             e["ticker"],
                             e.get("side", "SELL"),
                             e.get("order_type", "limit"),
                             e.get("status", "planned"),
+                            e.get("status", "planned"),
                             e["qty"],
+                            quantity,
+                            price,
                             e.get("limit_price"),
                             e.get("stop_price"),
                             e.get("filled_qty"),
                             e.get("filled_avg_price"),
+                            notional,
                             bool(e.get("is_simulated", True)),
-                            json.dumps(e.get("details", {})),
+                            json.dumps(details),
+                            json.dumps(details),
                         ),
                     )
+                    filled_qty = e.get("filled_qty")
+                    filled_price = e.get("filled_avg_price")
+                    if filled_qty is not None and filled_price is not None:
+                        realized_pnl = details.get("realized_pnl")
+                        cur.execute(
+                            """
+                            INSERT INTO trading.fills
+                              (run_id, order_id, instrument_id, symbol, side, fill_price, fill_quantity,
+                               notional_usd, realized_pnl_usd, metadata)
+                            VALUES
+                              (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                            """,
+                            (
+                                run_id,
+                                e["order_ref"],
+                                e["ticker"],
+                                e["ticker"],
+                                e.get("side", "SELL"),
+                                filled_price,
+                                filled_qty,
+                                float(filled_qty) * float(filled_price),
+                                realized_pnl,
+                                json.dumps(details),
+                            ),
+                        )
             conn.commit()
 
     def upsert_position_marks(self, as_of_date: date, mode: str, rows: List[Dict[str, Any]], source_run_id: str) -> None:
         with self.connect() as conn:
             with conn.cursor() as cur:
                 for r in rows:
+                    side = self._position_side(r.get("net_exposure"))
+                    status = "closed" if abs(float(r["qty"])) <= 1e-9 else "open"
+                    period_start, _ = self._period_bounds(as_of_date)
+                    metadata_json = json.dumps(
+                        {
+                            "as_of_date": as_of_date.isoformat(),
+                            "mode": mode,
+                            "gross_exposure": r.get("gross_exposure"),
+                            "net_exposure": r.get("net_exposure"),
+                        }
+                    )
                     cur.execute(
                         """
                         INSERT INTO trading.position_marks_daily
@@ -230,6 +337,72 @@ class SerenDBStorage:
                             source_run_id,
                         ),
                     )
+                    cur.execute(
+                        """
+                        INSERT INTO trading.positions
+                          (run_id, position_key, instrument_id, symbol, side, quantity, entry_price,
+                           cost_basis_usd, market_price, market_value_usd, unrealized_pnl_usd,
+                           realized_pnl_usd, status, opened_at, closed_at, metadata)
+                        VALUES
+                          (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                        ON CONFLICT (run_id, position_key) DO UPDATE
+                        SET instrument_id = EXCLUDED.instrument_id,
+                            symbol = EXCLUDED.symbol,
+                            side = EXCLUDED.side,
+                            quantity = EXCLUDED.quantity,
+                            entry_price = EXCLUDED.entry_price,
+                            cost_basis_usd = EXCLUDED.cost_basis_usd,
+                            market_price = EXCLUDED.market_price,
+                            market_value_usd = EXCLUDED.market_value_usd,
+                            unrealized_pnl_usd = EXCLUDED.unrealized_pnl_usd,
+                            realized_pnl_usd = EXCLUDED.realized_pnl_usd,
+                            status = EXCLUDED.status,
+                            opened_at = COALESCE(trading.positions.opened_at, EXCLUDED.opened_at),
+                            closed_at = EXCLUDED.closed_at,
+                            metadata = EXCLUDED.metadata
+                        """,
+                        (
+                            source_run_id,
+                            r["ticker"],
+                            r["ticker"],
+                            r["ticker"],
+                            side,
+                            r["qty"],
+                            r["avg_entry_price"],
+                            abs(float(r["avg_entry_price"]) * float(r["qty"])),
+                            r["mark_price"],
+                            r["market_value"],
+                            r.get("unrealized_pnl", 0.0),
+                            r.get("realized_pnl", 0.0),
+                            status,
+                            period_start,
+                            period_start if status == "closed" else None,
+                            metadata_json,
+                        ),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO trading.position_marks
+                          (run_id, position_key, instrument_id, symbol, side, quantity,
+                           mark_price, market_value_usd, unrealized_pnl_usd, realized_pnl_usd, mark_time, metadata)
+                        VALUES
+                          (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                        """,
+                        (
+                            source_run_id,
+                            r["ticker"],
+                            r["ticker"],
+                            r["ticker"],
+                            side,
+                            r["qty"],
+                            r["mark_price"],
+                            r["market_value"],
+                            r.get("unrealized_pnl", 0.0),
+                            r.get("realized_pnl", 0.0),
+                            period_start,
+                            metadata_json,
+                        ),
+                    )
             conn.commit()
 
     def upsert_pnl_daily(
@@ -245,6 +418,7 @@ class SerenDBStorage:
         source_run_id: str,
     ) -> None:
         net_pnl = realized_pnl + unrealized_pnl
+        period_start, period_end = self._period_bounds(as_of_date)
         with self.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -275,6 +449,34 @@ class SerenDBStorage:
                         hit_rate,
                         max_drawdown,
                         source_run_id,
+                    ),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO trading.pnl_periods
+                      (run_id, period_type, period_start, period_end, realized_pnl_usd, unrealized_pnl_usd,
+                       gross_pnl_usd, net_pnl_usd, metadata)
+                    VALUES
+                      (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                    """,
+                    (
+                        source_run_id,
+                        "daily",
+                        period_start,
+                        period_end,
+                        realized_pnl,
+                        unrealized_pnl,
+                        net_pnl,
+                        net_pnl,
+                        json.dumps(
+                            {
+                                "mode": mode,
+                                "gross_exposure": gross_exposure,
+                                "net_exposure": net_exposure,
+                                "hit_rate": hit_rate,
+                                "max_drawdown": max_drawdown,
+                            }
+                        ),
                     ),
                 )
             conn.commit()

@@ -10,6 +10,8 @@ import os
 import sys
 from urllib.request import Request, urlopen
 
+from normalized_trade_store import NormalizedTradingStore
+
 
 DEFAULT_DRY_RUN = True
 AVAILABLE_CONNECTORS = ['rpc_base']
@@ -179,15 +181,60 @@ def _check_serenbucks_balance(api_key: str) -> float:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
 
+
+def _persist_normalized_result(config: dict, result: dict, *, run_type: str) -> None:
+    store = NormalizedTradingStore(
+        os.getenv("SERENDB_URL"),
+        skill_slug="euler-base-vault-bot",
+        venue="euler",
+        strategy_name="euler-base-vault-bot",
+    )
+    if not store.enabled:
+        return
+    inputs = config.get("inputs", {}) if isinstance(config.get("inputs"), dict) else {}
+    action = str(inputs.get("action", "status"))
+    order_events = [
+        {
+            "order_id": action,
+            "instrument_id": str(inputs.get("vault_address") or inputs.get("asset") or "euler-vault"),
+            "symbol": str(inputs.get("asset") or inputs.get("underlying_symbol") or "EULER-VAULT"),
+            "side": "EXIT" if run_type == "emergency_exit" else action.upper(),
+            "order_type": "vault_action",
+            "event_type": "vault_workflow",
+            "status": result.get("status", "ok"),
+            "notional_usd": inputs.get("capital_usd"),
+            "metadata": {"dependencies": result.get("dependencies", {})},
+        }
+    ]
+    try:
+        store.persist_completed_run(
+            mode=str(result.get("mode") or action),
+            dry_run=bool(result.get("dry_run", True)),
+            config=config,
+            status=str(result.get("status", "ok")),
+            summary={
+                "live_requested": result.get("live_requested"),
+                "connectors": result.get("connectors", []),
+            },
+            order_events=order_events,
+            metadata={"run_type": run_type},
+            error_code=result.get("error_code"),
+            error_message=result.get("message"),
+        )
+    finally:
+        store.close()
+
 def main() -> int:
     args = parse_args()
     try:
         config = load_config(args.config)
         if args.emergency_exit:
             result = run_emergency_exit(config=config)
+            _persist_normalized_result(config, result, run_type="emergency_exit")
         else:
             dry_run = bool(config.get("dry_run", DEFAULT_DRY_RUN))
             result = run_once(config=config, dry_run=dry_run, allow_live=bool(args.allow_live))
+            _persist_normalized_result(config, result, run_type="run_once")
     except (ConfigError, RuntimeError, ValueError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1

@@ -69,6 +69,8 @@ class TradingAgent:
         if not self.storage.setup_database():
             print("⚠️  Warning: SerenDB setup failed, falling back to file storage")
             self.storage = None
+        else:
+            self.storage.set_run_mode(self.dry_run)
 
         # Initialize position tracker and logger with SerenDB
         self.positions = PositionTracker(serendb_storage=self.storage)

@@ -35,6 +35,7 @@ from polymarket_live import (
     positions_by_key,
     single_market_inventory_notional,
 )
+from normalized_trade_store import NormalizedTradingStore
 
 SEREN_POLYMARKET_PUBLISHER_HOST = "api.serendb.com"
 SEREN_PUBLISHERS_PREFIX = "/publishers/"
@@ -2847,6 +2848,173 @@ def run_quote(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
     return run_once(config=config, markets=markets, yes_live=yes_live)
 
 
+def _normalized_inventory_rows(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for market_id, raw_value in inventory.items():
+        value = _safe_float(raw_value, 0.0)
+        rows.append(
+            {
+                "position_key": str(market_id),
+                "instrument_id": str(market_id),
+                "symbol": str(market_id),
+                "side": "LONG" if value >= 0 else "SHORT",
+                "quantity": abs(value),
+                "market_value_usd": abs(value),
+                "status": "open" if abs(value) > 0 else "flat",
+                "metadata": {"inventory_notional_usd": value},
+            }
+        )
+    return rows
+
+
+def _normalized_market_quotes(result: dict[str, Any]) -> list[dict[str, Any]]:
+    quotes = result.get("quotes", [])
+    if not isinstance(quotes, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for quote in quotes:
+        if not isinstance(quote, dict):
+            continue
+        rows.append(
+            {
+                "order_id": quote.get("market_id"),
+                "instrument_id": quote.get("market_id"),
+                "symbol": quote.get("market_id"),
+                "side": quote.get("trade_bias"),
+                "order_type": "quote",
+                "event_type": "quote_generated",
+                "status": quote.get("status", "quoted"),
+                "price": quote.get("bid_price") or quote.get("ask_price") or quote.get("mid_price"),
+                "quantity": quote.get("quote_notional_usd"),
+                "notional_usd": quote.get("quote_notional_usd"),
+                "metadata": quote,
+            }
+        )
+    live_execution = result.get("live_execution", {})
+    if isinstance(live_execution, dict):
+        for order in live_execution.get("orders_submitted", []):
+            if not isinstance(order, dict):
+                continue
+            rows.append(
+                {
+                    "order_id": order.get("id") or order.get("order_id"),
+                    "instrument_id": order.get("token_id"),
+                    "symbol": order.get("token_id"),
+                    "side": order.get("side"),
+                    "order_type": "limit",
+                    "event_type": "order_submitted",
+                    "status": "submitted",
+                    "price": order.get("price"),
+                    "quantity": order.get("size") or order.get("shares"),
+                    "metadata": order,
+                }
+            )
+    return rows
+
+
+def _normalized_unwind_events(result: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for order in result.get("sell_results", []):
+        if not isinstance(order, dict):
+            continue
+        rows.append(
+            {
+                "order_id": order.get("token_id"),
+                "instrument_id": order.get("token_id"),
+                "symbol": order.get("token_id"),
+                "side": "SELL",
+                "order_type": "marketable_limit",
+                "event_type": "unwind_submitted",
+                "status": "submitted" if "error" not in order else "error",
+                "price": order.get("price"),
+                "quantity": order.get("shares"),
+                "notional_usd": order.get("estimated_exit_value_usd"),
+                "metadata": order,
+            }
+        )
+    return rows
+
+
+def _normalized_backtest_pnl(result: dict[str, Any]) -> list[dict[str, Any]]:
+    metrics = result.get("results", {})
+    if not isinstance(metrics, dict):
+        return []
+    starting = _safe_float(metrics.get("starting_bankroll_usd"), 0.0)
+    total_pnl = _safe_float(metrics.get("total_pnl_usd"), 0.0)
+    return [
+        {
+            "period_type": "backtest",
+            "net_pnl_usd": total_pnl,
+            "gross_pnl_usd": total_pnl,
+            "equity_start_usd": starting,
+            "equity_end_usd": starting + total_pnl,
+            "metadata": {
+                "return_pct": metrics.get("return_pct"),
+                "events": metrics.get("events"),
+                "filled_notional_usd": metrics.get("filled_notional_usd"),
+            },
+        }
+    ]
+
+
+def _persist_normalized_result(config: dict[str, Any], result: dict[str, Any], *, run_type: str) -> None:
+    store = NormalizedTradingStore(
+        os.getenv("SERENDB_URL"),
+        skill_slug="polymarket-maker-rebate-bot",
+        venue="polymarket",
+        strategy_name="maker-rebate-bot",
+    )
+    if not store.enabled:
+        return
+    try:
+        summary: dict[str, Any]
+        order_events: list[dict[str, Any]] = []
+        positions: list[dict[str, Any]] = []
+        position_marks: list[dict[str, Any]] = []
+        pnl_periods: list[dict[str, Any]] = []
+        if run_type == "backtest":
+            summary = {
+                "backtest_summary": result.get("backtest_summary", {}),
+                "results": result.get("results", {}),
+            }
+            pnl_periods = _normalized_backtest_pnl(result)
+        elif run_type == "quote":
+            summary = dict(result.get("strategy_summary", {}))
+            order_events = _normalized_market_quotes(result)
+            state = result.get("state", {})
+            if isinstance(state, dict):
+                positions = _normalized_inventory_rows(state.get("inventory", {}))
+                position_marks = _normalized_inventory_rows(state.get("inventory", {}))
+            live_execution = result.get("live_execution", {})
+            if isinstance(live_execution, dict) and isinstance(live_execution.get("live_risk"), dict):
+                pnl_periods.append(
+                    {
+                        "period_type": "live_risk",
+                        "equity_end_usd": live_execution["live_risk"].get("current_equity_usd"),
+                        "metadata": live_execution["live_risk"],
+                    }
+                )
+        else:
+            summary = {"positions_unwound": result.get("positions_unwound", 0)}
+            order_events = _normalized_unwind_events(result)
+        store.persist_completed_run(
+            mode=_safe_str(result.get("mode"), run_type),
+            dry_run=bool(result.get("dry_run", run_type != "live")),
+            config=config,
+            status=_safe_str(result.get("status"), "ok"),
+            summary=summary,
+            order_events=order_events,
+            positions=positions,
+            position_marks=position_marks,
+            pnl_periods=pnl_periods,
+            metadata={"run_type": run_type},
+            error_code=result.get("error_code"),
+            error_message=result.get("message"),
+        )
+    finally:
+        store.close()
+
+
 def main() -> int:
     args = parse_args()
     config = load_config(args.config)
@@ -2860,6 +3028,7 @@ def main() -> int:
             }
         else:
             result = run_unwind_all(config=config)
+        _persist_normalized_result(config, result, run_type="unwind-all")
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("status") == "ok" else 1
 
@@ -2875,6 +3044,7 @@ def main() -> int:
                 _write_config(args.config, config)
             except Exception as exc:  # pragma: no cover - defensive runtime path
                 result["config_writeback_warning"] = str(exc)
+        _persist_normalized_result(config, result, run_type="backtest")
     else:
         result = run_quote(config=config, markets_file=args.markets_file, yes_live=args.yes_live)
         if isinstance(result.get("state"), dict):
@@ -2886,6 +3056,7 @@ def main() -> int:
                 _persist_runtime_state(args.config, config, state)
             except Exception as exc:  # pragma: no cover - defensive runtime path
                 result["state_writeback_warning"] = str(exc)
+        _persist_normalized_result(config, result, run_type="quote")
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("status") == "ok" else 1
 

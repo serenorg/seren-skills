@@ -7,6 +7,8 @@ import json
 from dataclasses import asdict
 from typing import Any
 
+from normalized_trade_store import NormalizedTradingStore
+
 try:
     import psycopg
 except ImportError:  # pragma: no cover
@@ -91,6 +93,12 @@ class SerenDBStore:
     def __init__(self, dsn: str | None) -> None:
         self.dsn = (dsn or "").strip()
         self.conn = None
+        self.normalized = NormalizedTradingStore(
+            self.dsn,
+            skill_slug="coinbase-smart-dca-bot",
+            venue="coinbase",
+            strategy_name="smart-dca-bot",
+        )
 
     @property
     def enabled(self) -> bool:
@@ -106,6 +114,7 @@ class SerenDBStore:
         if self.conn is not None:
             self.conn.close()
             self.conn = None
+        self.normalized.close()
 
     def ensure_schema(self) -> bool:
         if not self.enabled:
@@ -115,6 +124,7 @@ class SerenDBStore:
         with self.conn.cursor() as cur:
             cur.execute(SCHEMA_SQL)
         self.conn.commit()
+        self.normalized.ensure_schema()
         return True
 
     def create_session(self, session_id: str, mode: str, config: dict[str, Any]) -> None:
@@ -132,6 +142,14 @@ class SerenDBStore:
                 (session_id, mode, json.dumps(config)),
             )
         self.conn.commit()
+        self.normalized.start_run(
+            run_id=session_id,
+            mode=mode,
+            dry_run=bool(config.get("dry_run", True)),
+            config=config,
+            status="running",
+            metadata={"session_kind": "dca"},
+        )
 
     def close_session(
         self,
@@ -157,6 +175,15 @@ class SerenDBStore:
                 (status, total_invested_usd, total_savings_bps, session_id),
             )
         self.conn.commit()
+        self.normalized.finish_run(
+            run_id=session_id,
+            status=status,
+            summary={
+                "total_invested_usd": total_invested_usd,
+                "total_savings_bps": total_savings_bps,
+            },
+            metadata={"session_kind": "dca"},
+        )
 
     def persist_execution(self, row: dict[str, Any]) -> None:
         if not self.enabled:
@@ -191,6 +218,43 @@ class SerenDBStore:
                 },
             )
         self.conn.commit()
+        session_id = self._normalized_session_id(row)
+        if session_id:
+            quantity = None
+            if row.get("executed_amount_usd") and row.get("executed_price"):
+                quantity = float(row["executed_amount_usd"]) / max(float(row["executed_price"]), 1e-9)
+            order_event = {
+                "order_id": row.get("coinbase_order_id"),
+                "instrument_id": row.get("asset"),
+                "symbol": row.get("asset"),
+                "side": self._normalized_side(row),
+                "order_type": self._normalized_order_type(row),
+                "event_type": "execution_filled" if row.get("executed_at") else "execution_planned",
+                "status": row.get("status"),
+                "price": row.get("executed_price") or row.get("vwap_at_execution"),
+                "quantity": quantity,
+                "notional_usd": row.get("executed_amount_usd") or row.get("target_amount_usd"),
+                "event_time": row.get("executed_at") or row.get("window_end"),
+                "metadata": row.get("metadata", {}),
+            }
+            self.normalized.insert_order_events(session_id, [order_event])
+            if row.get("executed_at") and row.get("executed_amount_usd") and row.get("executed_price"):
+                self.normalized.insert_fills(
+                    session_id,
+                    [
+                        {
+                            "order_id": row.get("coinbase_order_id"),
+                            "instrument_id": row.get("asset"),
+                            "symbol": row.get("asset"),
+                            "side": self._normalized_side(row),
+                            "price": row.get("executed_price"),
+                            "quantity": quantity,
+                            "notional_usd": row.get("executed_amount_usd"),
+                            "fill_time": row.get("executed_at"),
+                            "metadata": row.get("metadata", {}),
+                        }
+                    ],
+                )
 
     def persist_portfolio_snapshot(self, row: dict[str, Any]) -> None:
         if not self.enabled:
@@ -214,6 +278,11 @@ class SerenDBStore:
                 ),
             )
         self.conn.commit()
+        session_id = self._normalized_session_id(row)
+        if session_id:
+            positions, marks = self._allocation_rows(row)
+            self.normalized.upsert_positions(session_id, positions)
+            self.normalized.insert_position_marks(session_id, marks)
 
     def persist_scanner_signal(self, row: dict[str, Any], user_action: str | None = None) -> None:
         if not self.enabled:
@@ -242,6 +311,29 @@ class SerenDBStore:
                 ),
             )
         self.conn.commit()
+        session_id = self._normalized_session_id(row)
+        if session_id:
+            self.normalized.insert_order_events(
+                session_id,
+                [
+                    {
+                        "order_id": row.get("signal_id"),
+                        "instrument_id": row.get("asset"),
+                        "symbol": row.get("asset"),
+                        "event_type": "scanner_signal",
+                        "status": user_action or "recorded",
+                        "event_time": row.get("created_at"),
+                        "metadata": {
+                            "signal_type": row.get("signal_type"),
+                            "confidence_pct": row.get("confidence_pct"),
+                            "trigger_data": row.get("trigger_data"),
+                            "suggestion": row.get("suggestion"),
+                            "reallocation_pct": row.get("reallocation_pct"),
+                            "user_action": user_action,
+                        },
+                    }
+                ],
+            )
 
     def persist_cost_basis_lot(self, row: dict[str, Any]) -> None:
         if not self.enabled:
@@ -263,3 +355,78 @@ class SerenDBStore:
                 row,
             )
         self.conn.commit()
+
+    @staticmethod
+    def _normalized_session_id(row: dict[str, Any]) -> str | None:
+        metadata = row.get("metadata", {})
+        if isinstance(metadata, dict):
+            session_id = metadata.get("session_id")
+            if session_id:
+                return str(session_id)
+        session_id = row.get("session_id")
+        return str(session_id) if session_id else None
+
+    @staticmethod
+    def _normalized_side(row: dict[str, Any]) -> str:
+        metadata = row.get("metadata", {})
+        if isinstance(metadata, dict):
+            decision = metadata.get("decision", {})
+            if isinstance(decision, dict):
+                raw = str(decision.get("side") or decision.get("direction") or "").strip().upper()
+                if raw in {"BUY", "SELL"}:
+                    return raw
+        return "BUY"
+
+    @staticmethod
+    def _normalized_order_type(row: dict[str, Any]) -> str:
+        metadata = row.get("metadata", {})
+        if isinstance(metadata, dict):
+            decision = metadata.get("decision", {})
+            if isinstance(decision, dict):
+                raw = str(decision.get("order_type") or "").strip().lower()
+                if raw:
+                    return raw
+        return "market"
+
+    @staticmethod
+    def _allocation_rows(row: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        allocations = row.get("allocations", {})
+        targets = row.get("target_allocations", {})
+        total_value = float(row.get("total_value_usd", 0.0) or 0.0)
+        if not isinstance(allocations, dict):
+            return [], []
+        total_weight = sum(abs(float(value or 0.0)) for value in allocations.values())
+        scale = 1.0 if total_weight <= 1.01 else 0.01
+        positions: list[dict[str, Any]] = []
+        marks: list[dict[str, Any]] = []
+        mark_time = row.get("created_at")
+        for asset, raw_weight in allocations.items():
+            weight = float(raw_weight or 0.0)
+            market_value = total_value * weight * scale
+            metadata = {
+                "allocation_weight": weight,
+                "target_weight": float(targets.get(asset, 0.0) or 0.0),
+                "snapshot_id": row.get("snapshot_id"),
+                "drift_max_pct": row.get("drift_max_pct"),
+            }
+            positions.append(
+                {
+                    "position_key": str(asset),
+                    "symbol": str(asset),
+                    "side": "LONG",
+                    "market_value_usd": market_value,
+                    "status": "open",
+                    "metadata": metadata,
+                }
+            )
+            marks.append(
+                {
+                    "position_key": str(asset),
+                    "symbol": str(asset),
+                    "side": "LONG",
+                    "market_value_usd": market_value,
+                    "mark_time": mark_time,
+                    "metadata": metadata,
+                }
+            )
+        return positions, marks

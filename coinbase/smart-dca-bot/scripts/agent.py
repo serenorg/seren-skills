@@ -1291,6 +1291,7 @@ def _portfolio_mode(
         "allocations": current,
         "target_allocations": targets,
         "drift_max_pct": round(_float(plan.get("max_abs_drift_pct", 0.0)), 4),
+        "metadata": {"session_id": session_id},
     }
     store.persist_portfolio_snapshot(snapshot_row)
     logger.log_portfolio(snapshot_row)
@@ -1567,6 +1568,7 @@ def _opportunity_scanner_mode(
             approval_state = "pending_approval"
 
     for payload in signal_payloads:
+        payload["metadata"] = {"session_id": session_id}
         store.persist_scanner_signal(payload, user_action=approval_state)
         logger.log_scanner(payload)
 

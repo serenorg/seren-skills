@@ -10,6 +10,8 @@ import os
 import sys
 from urllib.request import Request, urlopen
 
+from normalized_trade_store import NormalizedTradingStore
+
 
 DEFAULT_DRY_RUN = True
 SUPPORTED_CHAINS = {
@@ -477,14 +479,60 @@ def _check_serenbucks_balance(api_key: str) -> float:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
 
+
+def _persist_normalized_result(config: dict, result: dict, *, run_type: str) -> None:
+    store = NormalizedTradingStore(
+        os.getenv("SERENDB_URL"),
+        skill_slug="spectra-pt-yield-trader",
+        venue="spectra",
+        strategy_name="spectra-pt-yield-trader",
+    )
+    if not store.enabled:
+        return
+    order_events = []
+    for step in result.get("mcp_plan", []):
+        if not isinstance(step, dict):
+            continue
+        order_events.append(
+            {
+                "order_id": step.get("step"),
+                "instrument_id": step.get("tool"),
+                "symbol": step.get("tool"),
+                "side": run_type.upper(),
+                "order_type": "workflow_step",
+                "event_type": "planned_step",
+                "status": result.get("status", "ok"),
+                "metadata": step,
+            }
+        )
+    try:
+        store.persist_completed_run(
+            mode=str(result.get("mode") or run_type),
+            dry_run=bool(result.get("dry_run", True)),
+            config=config,
+            status=str(result.get("status", "ok")),
+            summary={
+                "workflow_step_count": result.get("workflow_step_count"),
+                "execution_handoff": result.get("execution_handoff", {}),
+            },
+            order_events=order_events,
+            metadata={"run_type": run_type},
+            error_code=result.get("error_code"),
+            error_message=result.get("message"),
+        )
+    finally:
+        store.close()
+
 def main() -> int:
     args = parse_args()
     try:
         config = load_config(args.config)
         if args.stop_trading:
             result = run_stop_trading(config=config)
+            _persist_normalized_result(config, result, run_type="stop_trading")
         else:
             result = run_once(config=config, yes_live=bool(args.yes_live))
+            _persist_normalized_result(config, result, run_type="run_once")
     except ConfigError as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1
