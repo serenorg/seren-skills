@@ -951,36 +951,78 @@ def _eth_call_via_public_polygon_rpc(
     return safe_str(response.get("result"), "0x0")
 
 
+def _eth_get_transaction_count_via_seren_polygon(
+    wallet_address: str,
+    *,
+    publisher: str,
+    path: str,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> int:
+    response = _extract_rpc_result(
+        call_publisher_json(
+            publisher=publisher,
+            method="POST",
+            path=path,
+            body={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_getTransactionCount",
+                "params": [wallet_address, "latest"],
+            },
+            timeout_seconds=timeout_seconds,
+        ),
+        source=f"{publisher}{path or '(root)'}",
+    )
+    return _parse_rpc_int(response.get("result"), field="transaction_count")
+
+
+def _eth_get_transaction_count_via_public_polygon_rpc(
+    wallet_address: str,
+    *,
+    rpc_url: str = POLYGON_PUBLIC_RPC_URL,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> int:
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionCount",
+        "id": 1,
+        "params": [wallet_address, "latest"],
+    }).encode()
+    req = Request(rpc_url, data=payload, headers={"Content-Type": "application/json"})
+    with urlopen(req, timeout=timeout_seconds) as resp:
+        body = json.loads(resp.read())
+    response = _extract_rpc_result(body, source=rpc_url)
+    return _parse_rpc_int(response.get("result"), field="transaction_count")
+
+
 def _resolve_polygon_rpc_transport(
     *,
     rpc_url: str = POLYGON_PUBLIC_RPC_URL,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     balance = get_seren_prepaid_balance(timeout_seconds=timeout_seconds)
-    if balance >= SEREN_MIN_PUBLISHER_BALANCE_USD:
-        publisher = discover_seren_polygon_publisher(timeout_seconds=timeout_seconds)
-        if publisher:
-            try:
-                target = _probe_seren_polygon_rpc_target(
-                    publisher,
-                    timeout_seconds=timeout_seconds,
-                )
-                return {
-                    "rpc_transport": "seren-publisher",
-                    "rpc_publisher": publisher,
-                    "rpc_path": safe_str(target.get("path"), "/") or "/",
-                    "seren_balance_usd": balance,
-                }
-            except Exception as exc:
-                fallback_reason = (
-                    f"Seren Polygon publisher '{publisher}' probe failed: {exc}"
-                )
-        else:
-            fallback_reason = "No Polygon RPC publisher was discovered in the Seren catalog."
+    publisher = discover_seren_polygon_publisher(timeout_seconds=timeout_seconds)
+    if publisher:
+        try:
+            target = _probe_seren_polygon_rpc_target(
+                publisher,
+                timeout_seconds=timeout_seconds,
+            )
+            return {
+                "rpc_transport": "seren-publisher",
+                "rpc_publisher": publisher,
+                "rpc_path": safe_str(target.get("path"), "/") or "/",
+                "seren_balance_usd": balance,
+            }
+        except Exception as exc:
+            fallback_reason = (
+                f"Seren Polygon publisher '{publisher}' probe failed: {exc}"
+            )
     else:
         fallback_reason = (
-            f"Seren prepaid balance ${balance:.2f} is below the "
-            f"${SEREN_MIN_PUBLISHER_BALANCE_USD:.2f} minimum."
+            "No Polygon RPC publisher was discovered in the Seren catalog. "
+            f"Seren prepaid balance was ${balance:.2f}, but read-only publisher RPC "
+            "resolution is attempted regardless of balance."
         )
 
     return {
@@ -1021,6 +1063,28 @@ def _eth_call_with_transport(
                 f"Polygon RPC read failed via public fallback. {fallback_reason} | public-rpc: {exc}"
             ) from exc
         raise RuntimeError(f"Polygon RPC read failed via public fallback: {exc}") from exc
+
+
+def _eth_get_transaction_count_with_transport(
+    wallet_address: str,
+    *,
+    rpc_transport: dict[str, Any],
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> int:
+    mode = safe_str(rpc_transport.get("rpc_transport"), "public")
+    if mode == "seren-publisher":
+        return _eth_get_transaction_count_via_seren_polygon(
+            wallet_address,
+            publisher=safe_str(rpc_transport.get("rpc_publisher"), ""),
+            path=safe_str(rpc_transport.get("rpc_path"), ""),
+            timeout_seconds=timeout_seconds,
+        )
+
+    return _eth_get_transaction_count_via_public_polygon_rpc(
+        wallet_address,
+        rpc_url=safe_str(rpc_transport.get("rpc_url"), POLYGON_PUBLIC_RPC_URL),
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def current_machine_label() -> str:
@@ -1869,6 +1933,30 @@ def check_neg_risk_approvals(
     except (ValueError, TypeError):
         ct_approved = False
     results["ct_approved"] = ct_approved
+
+    if (
+        results["rpc_transport"] == "public"
+        and not results["usdc_approved"]
+        and not results["ct_approved"]
+    ):
+        try:
+            wallet_nonce = _eth_get_transaction_count_with_transport(
+                wallet_address,
+                rpc_transport=rpc_transport,
+                timeout_seconds=timeout_seconds,
+            )
+            results["wallet_nonce"] = wallet_nonce
+        except Exception:
+            wallet_nonce = 0
+
+        if wallet_nonce > 0:
+            results["errors"].append(
+                "Public Polygon RPC fallback returned an all-zero approval state for a "
+                f"wallet with nonce {wallet_nonce}. This fallback can be stale or "
+                "rate-limited and is not being treated as authoritative. Re-run with "
+                "a working Seren Polygon publisher or configure a reliable Polygon RPC."
+            )
+            return results
 
     if not results["usdc_approved"]:
         results["errors"].append(

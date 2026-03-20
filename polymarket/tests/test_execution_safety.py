@@ -194,18 +194,70 @@ def test_neg_risk_approval_check_prefers_seren_polygon_publisher_when_funded(
 
 
 @pytest.mark.parametrize("skill_slug", sorted(LIVE_MODULE_PATHS))
-def test_neg_risk_approval_check_falls_back_to_public_polygon_rpc_without_seren_funding(
+def test_neg_risk_approval_check_uses_seren_polygon_publisher_even_without_seren_funding(
     skill_slug: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _load_module(
-        f"{skill_slug.replace('-', '_')}_public_polygon_test",
+        f"{skill_slug.replace('-', '_')}_seren_polygon_zero_balance_test",
+        LIVE_MODULE_PATHS[skill_slug],
+        clear_modules=("polymarket_live",),
+    )
+    publisher_calls: list[tuple[str, str, str, str]] = []
+
+    monkeypatch.setattr(module, "get_seren_prepaid_balance", lambda **kwargs: 0.0)
+    monkeypatch.setattr(
+        module,
+        "discover_seren_polygon_publisher",
+        lambda **kwargs: "seren-polygon",
+    )
+
+    def fake_call_publisher_json(
+        publisher: str,
+        method: str,
+        path: str,
+        headers=None,
+        body=None,
+        timeout_seconds: float = 30.0,
+    ):
+        rpc_method = body["method"]
+        publisher_calls.append((publisher, method, path, rpc_method))
+        if rpc_method == "eth_chainId":
+            return {"jsonrpc": "2.0", "id": 1, "result": "0x89"}
+        if body["params"][0]["to"] == module.POLYGON_USDC_E:
+            return {"jsonrpc": "2.0", "id": 1, "result": hex(2 * (10 ** module.USDC_DECIMALS))}
+        return {"jsonrpc": "2.0", "id": 1, "result": "0x1"}
+
+    monkeypatch.setattr(module, "call_publisher_json", fake_call_publisher_json)
+    monkeypatch.setattr(
+        module,
+        "urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("public fallback should not be used")),
+    )
+
+    result = module.check_neg_risk_approvals("0x" + ("2" * 40))
+
+    assert result["checks_passed"] is True
+    assert result["rpc_transport"] == "seren-publisher"
+    assert result["rpc_publisher"] == "seren-polygon"
+    assert all(call[0] == "seren-polygon" for call in publisher_calls)
+    assert [call[3] for call in publisher_calls] == ["eth_chainId", "eth_call", "eth_call"]
+
+
+@pytest.mark.parametrize("skill_slug", sorted(LIVE_MODULE_PATHS))
+def test_neg_risk_approval_check_flags_public_rpc_zero_state_as_non_authoritative(
+    skill_slug: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_module(
+        f"{skill_slug.replace('-', '_')}_public_polygon_warning_test",
         LIVE_MODULE_PATHS[skill_slug],
         clear_modules=("polymarket_live",),
     )
     public_rpc_methods: list[str] = []
 
     monkeypatch.setattr(module, "get_seren_prepaid_balance", lambda **kwargs: 0.0)
+    monkeypatch.setattr(module, "discover_seren_polygon_publisher", lambda **kwargs: "")
     monkeypatch.setattr(
         module,
         "call_publisher_json",
@@ -215,18 +267,20 @@ def test_neg_risk_approval_check_falls_back_to_public_polygon_rpc_without_seren_
     def fake_urlopen(request, timeout: float = 10.0):
         payload = json.loads(request.data.decode("utf-8"))
         public_rpc_methods.append(payload["method"])
-        if payload["params"][0]["to"] == module.POLYGON_USDC_E:
-            return _JsonResponse({"jsonrpc": "2.0", "id": 1, "result": hex(2 * (10 ** module.USDC_DECIMALS))})
-        return _JsonResponse({"jsonrpc": "2.0", "id": 1, "result": "0x1"})
+        if payload["method"] == "eth_getTransactionCount":
+            return _JsonResponse({"jsonrpc": "2.0", "id": 1, "result": "0x3"})
+        return _JsonResponse({"jsonrpc": "2.0", "id": 1, "result": "0x0"})
 
     monkeypatch.setattr(module, "urlopen", fake_urlopen)
 
     result = module.check_neg_risk_approvals("0x" + ("2" * 40))
 
-    assert result["checks_passed"] is True
+    assert result["checks_passed"] is False
     assert result["rpc_transport"] == "public"
-    assert result["rpc_url"] == module.POLYGON_PUBLIC_RPC_URL
-    assert public_rpc_methods == ["eth_call", "eth_call"]
+    assert result["wallet_nonce"] == 3
+    assert any("not being treated as authoritative" in error for error in result["errors"])
+    assert public_rpc_methods == ["eth_call", "eth_call", "eth_getTransactionCount"]
+    assert not any("not approved" in error.lower() for error in result["errors"])
 
 
 @pytest.mark.parametrize("skill_slug", sorted(LIVE_MODULE_PATHS))
