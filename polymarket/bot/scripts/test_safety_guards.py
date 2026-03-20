@@ -4,6 +4,7 @@ Tests for #220 — annualized return gate, resolution date filter, exit liquidit
 
 import sys
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -52,12 +53,16 @@ class TestResolutionDateFilter:
         agent.rank_candidates = types.MethodType(TradingAgent.rank_candidates, agent)
         return agent
 
+    @staticmethod
+    def _iso(days_from_now: int) -> str:
+        return (datetime.now(timezone.utc) + timedelta(days=days_from_now)).isoformat().replace('+00:00', 'Z')
+
     def test_filters_2028_markets(self):
         agent = self._make_agent_with_config(max_resolution_days=180)
         markets = [
-            {'question': 'Near market', 'end_date': '2026-06-01T00:00:00Z',
+            {'question': 'Near market', 'end_date': self._iso(30),
              'liquidity': 1000, 'volume': 5000, 'token_id': 'tok1'},
-            {'question': '2028 market', 'end_date': '2028-11-01T00:00:00Z',
+            {'question': '2028 market', 'end_date': self._iso(960),
              'liquidity': 1000, 'volume': 5000, 'token_id': 'tok2'},
         ]
         result = agent.rank_candidates(markets, limit=10)
@@ -68,11 +73,36 @@ class TestResolutionDateFilter:
     def test_keeps_near_term_markets(self):
         agent = self._make_agent_with_config(max_resolution_days=365)
         markets = [
-            {'question': 'Soon', 'end_date': '2026-05-01T00:00:00Z',
+            {'question': 'Soon', 'end_date': self._iso(30),
              'liquidity': 500, 'volume': 1000, 'token_id': 'tok1'},
         ]
         result = agent.rank_candidates(markets, limit=10)
         assert len(result) == 1
+
+    def test_rejects_missing_end_date(self):
+        agent = self._make_agent_with_config(max_resolution_days=180)
+        markets = [
+            {'question': 'Missing date', 'liquidity': 1000, 'volume': 5000, 'token_id': 'tok1'},
+            {'question': 'Near market', 'end_date': self._iso(30),
+             'liquidity': 1000, 'volume': 5000, 'token_id': 'tok2'},
+        ]
+        result = agent.rank_candidates(markets, limit=10)
+        questions = [m['question'] for m in result]
+        assert 'Missing date' not in questions
+        assert questions == ['Near market']
+
+    def test_rejects_unparseable_end_date(self):
+        agent = self._make_agent_with_config(max_resolution_days=180)
+        markets = [
+            {'question': 'Bad date', 'end_date': 'not-a-date',
+             'liquidity': 1000, 'volume': 5000, 'token_id': 'tok1'},
+            {'question': 'Near market', 'end_date': self._iso(30),
+             'liquidity': 1000, 'volume': 5000, 'token_id': 'tok2'},
+        ]
+        result = agent.rank_candidates(markets, limit=10)
+        questions = [m['question'] for m in result]
+        assert 'Bad date' not in questions
+        assert questions == ['Near market']
 
 
 class TestEvaluateOpportunityGuards:
@@ -138,6 +168,18 @@ class TestEvaluateOpportunityGuards:
             'market_id': 'mkt3', 'price': 0.40, 'question': 'No liquidity',
             'token_id': 'tok1', 'no_token_id': 'tok2',
             'days_to_resolution': 30,
+        }
+        result = agent.evaluate_opportunity(
+            market, 'research', fair_value=0.60, confidence='high'
+        )
+        assert result is None
+
+    def test_rejects_missing_resolution_horizon(self):
+        agent = self._make_agent()
+        market = {
+            'market_id': 'mkt4', 'price': 0.40, 'question': 'Missing horizon',
+            'token_id': 'tok1', 'no_token_id': 'tok2',
+            'days_to_resolution': 0,
         }
         result = agent.evaluate_opportunity(
             market, 'research', fair_value=0.60, confidence='high'

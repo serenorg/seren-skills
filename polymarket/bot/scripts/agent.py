@@ -192,17 +192,21 @@ class TradingAgent:
         time_filtered = []
         for m in ranked:
             end_date_str = m.get('end_date', '')
-            if end_date_str:
-                try:
-                    end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
-                    days_to_resolution = (end_dt - now).days
-                    m['days_to_resolution'] = max(days_to_resolution, 0)
-                    if days_to_resolution > self.max_resolution_days:
-                        continue  # skip far-out markets
-                except (ValueError, TypeError):
-                    m['days_to_resolution'] = 0
-            else:
-                m['days_to_resolution'] = 0
+            if not end_date_str:
+                continue
+
+            try:
+                end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+            except (ValueError, TypeError):
+                continue
+
+            days_to_resolution = (end_dt - now).days
+            if days_to_resolution <= 0:
+                continue
+
+            m['days_to_resolution'] = days_to_resolution
+            if days_to_resolution > self.max_resolution_days:
+                continue  # skip far-out markets
             time_filtered.append(m)
 
         if len(ranked) - len(time_filtered) > 0:
@@ -308,7 +312,11 @@ class TradingAgent:
 
         # Annualized return gate: edge must justify the lockup period
         days_to_resolution = market.get('days_to_resolution', 0)
-        years_to_resolution = max(days_to_resolution / 365.0, 1.0 / 365.0)
+        if days_to_resolution <= 0:
+            print(f"    ✗ Missing or invalid resolution date; cannot annualize return")
+            return None
+
+        years_to_resolution = days_to_resolution / 365.0
         annualized_return = kelly.calculate_annualized_return(edge, years_to_resolution)
         if annualized_return < self.min_annualized_return:
             print(f"    ✗ Annualized return {annualized_return * 100:.1f}% below {self.min_annualized_return * 100:.0f}% hurdle ({days_to_resolution}d to resolution)")
