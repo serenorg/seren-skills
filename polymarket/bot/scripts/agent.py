@@ -81,6 +81,11 @@ class TradingAgent:
         self.max_positions = int(self.config['max_positions'])
         self.stop_loss_bankroll = float(self.config.get('stop_loss_bankroll', 0.0))
 
+        # Safety guards (configurable, with backward-compatible defaults)
+        self.min_annualized_return = float(self.config.get('min_annualized_return', 0.25))
+        self.max_resolution_days = int(self.config.get('max_resolution_days', 180))
+        self.min_exit_bid_depth_ratio = float(self.config.get('min_exit_bid_depth_ratio', 0.5))
+
         # Scan pipeline limits (configurable, with backward-compatible defaults)
         self.scan_limit = int(self.config.get('scan_limit', 100))
         self.candidate_limit = int(self.config.get('candidate_limit', 20))
@@ -178,7 +183,30 @@ class TradingAgent:
             return liq_score + vol_score * 2
 
         ranked = sorted(markets, key=score, reverse=True)
-        pre_selected = ranked[:limit]
+
+        # Filter out markets resolving too far in the future
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        time_filtered = []
+        for m in ranked:
+            end_date_str = m.get('end_date', '')
+            if end_date_str:
+                try:
+                    end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                    days_to_resolution = (end_dt - now).days
+                    m['days_to_resolution'] = max(days_to_resolution, 0)
+                    if days_to_resolution > self.max_resolution_days:
+                        continue  # skip far-out markets
+                except (ValueError, TypeError):
+                    m['days_to_resolution'] = 0
+            else:
+                m['days_to_resolution'] = 0
+            time_filtered.append(m)
+
+        if len(ranked) - len(time_filtered) > 0:
+            print(f"  Filtered {len(ranked) - len(time_filtered)} markets resolving >{self.max_resolution_days} days out")
+
+        pre_selected = time_filtered[:limit]
 
         # Enrich with live CLOB midpoint prices
         enriched = []
@@ -274,6 +302,26 @@ class TradingAgent:
         # Check if edge exceeds threshold
         if edge < self.mispricing_threshold:
             print(f"    ✗ Edge {edge * 100:.1f}% below threshold {self.mispricing_threshold * 100:.1f}%")
+            return None
+
+        # Annualized return gate: edge must justify the lockup period
+        days_to_resolution = market.get('days_to_resolution', 0)
+        years_to_resolution = max(days_to_resolution / 365.0, 1.0 / 365.0)
+        annualized_return = kelly.calculate_annualized_return(edge, years_to_resolution)
+        if annualized_return < self.min_annualized_return:
+            print(f"    ✗ Annualized return {annualized_return * 100:.1f}% below {self.min_annualized_return * 100:.0f}% hurdle ({days_to_resolution}d to resolution)")
+            return None
+
+        # Exit liquidity check: ensure we can sell what we buy
+        try:
+            token_to_check = market.get('no_token_id') or market.get('token_id')
+            if token_to_check:
+                bid_price = self.polymarket.get_price(token_to_check, 'SELL')
+                if bid_price <= 0:
+                    print(f"    ✗ No exit liquidity: zero bids on order book")
+                    return None
+        except Exception:
+            print(f"    ✗ Could not verify exit liquidity")
             return None
 
         # Reject low confidence estimates

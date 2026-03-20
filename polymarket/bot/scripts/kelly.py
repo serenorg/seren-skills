@@ -139,6 +139,22 @@ def calculate_expected_value(
     return round(ev, 2)
 
 
+def calculate_annualized_return(edge: float, years_to_resolution: float) -> float:
+    """
+    Calculate annualized return from edge and time to resolution.
+
+    Args:
+        edge: Absolute edge (e.g. 0.13 for 13%)
+        years_to_resolution: Time until market resolves in years
+
+    Returns:
+        Annualized return (e.g. 0.52 for 52%/year)
+    """
+    if years_to_resolution <= 0:
+        return float('inf')
+    return edge / years_to_resolution
+
+
 # Example usage and tests
 if __name__ == '__main__':
     # Test case 1: Underpriced market (BUY)
