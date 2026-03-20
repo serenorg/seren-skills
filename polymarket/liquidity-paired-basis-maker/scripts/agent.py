@@ -1267,9 +1267,19 @@ def _check_serenbucks_balance(api_key: str) -> float:
         )
         with urlopen(request, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
-            sb = data.get("data") or data.get("serenbucks") or {}
-            raw = sb.get("balance_usd") or sb.get("funded_balance_usd") or "0"
-            return _safe_float(str(raw).replace("$", "").replace(",", ""), 0.0)
+            if not isinstance(data, dict):
+                return 0.0
+            sb = data.get("data")
+            if not isinstance(sb, dict):
+                sb = data.get("serenbucks")
+            if not isinstance(sb, dict):
+                sb = data
+            for field in ("funded_balance_usd", "balance_usd"):
+                raw = sb.get(field)
+                parsed = _safe_float(str(raw).replace("$", "").replace(",", ""), -1.0)
+                if parsed >= 0.0:
+                    return parsed
+            return 0.0
     except Exception as exc:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0

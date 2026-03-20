@@ -163,6 +163,24 @@ def test_trade_mode_fetches_live_pairs_when_config_markets_is_empty(monkeypatch)
     assert any("/publishers/polymarket-data/markets?" in url for url in fetched_urls)
 
 
+def test_check_serenbucks_balance_uses_nested_funded_balance(monkeypatch) -> None:
+    module = _load_agent_module()
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"data": {"funded_balance_usd": "$20.33"}}).encode("utf-8")
+
+    monkeypatch.setattr(module, "urlopen", lambda request, timeout=10: _Response())
+
+    assert module._check_serenbucks_balance("test-key") == 20.33
+
+
 def test_live_trade_mode_uses_live_pair_loader_and_executor(monkeypatch) -> None:
     module = _load_agent_module()
     load_calls: list[dict[str, object]] = []

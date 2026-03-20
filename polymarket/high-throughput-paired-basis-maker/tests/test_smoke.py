@@ -226,6 +226,24 @@ def test_backtest_optimizer_selects_targeted_pair_subset_and_tuned_config(monkey
     assert [target["market_id"] for target in output["optimization_summary"]["target_pairs"]] == ["M0", "M1"]
 
 
+def test_check_serenbucks_balance_uses_nested_funded_balance(monkeypatch) -> None:
+    module = _load_agent_module()
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"data": {"funded_balance_usd": "$20.33"}}).encode("utf-8")
+
+    monkeypatch.setattr(module, "urlopen", lambda request, timeout=10: _Response())
+
+    assert module._check_serenbucks_balance("test-key") == 20.33
+
+
 def test_main_applies_backtest_config_updates_before_trade(monkeypatch, tmp_path: Path) -> None:
     module = _load_agent_module()
     config_path = tmp_path / "config.json"
