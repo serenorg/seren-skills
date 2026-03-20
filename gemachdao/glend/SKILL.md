@@ -297,10 +297,11 @@ const ERC20_ABI = [
 #### 1. Set Up viem Clients
 
 ```typescript
-import { createPublicClient, createWalletClient, http } from 'viem';
+import { createPublicClient, createWalletClient, http, type Chain } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { mainnet, base } from 'viem/chains';
 
-const pharosTestnet = {
+const pharosTestnet: Chain = {
   id: 688688,
   name: 'Pharos Testnet',
   nativeCurrency: { name: 'PHRS', symbol: 'PHRS', decimals: 18 },
@@ -310,28 +311,44 @@ const pharosTestnet = {
   blockExplorers: {
     default: { name: 'Pharos Explorer', url: 'https://testnet.pharosscan.xyz' },
   },
-} as const;
+};
 
-const DEPLOYMENTS = {
+const CHAIN_CONFIG: Record<number, { chain: Chain; rpc: string; pool: `0x${string}`; protocol: string }> = {
   688688: {
+    chain: pharosTestnet,
+    rpc: 'https://testnet.dplabs-internal.com',
+    pool: '0xe838eb8011297024bca9c09d4e83e2d3cd74b7d0',
     protocol: 'aave-v3',
-    pool: '0xe838eb8011297024bca9c09d4e83e2d3cd74b7d0' as `0x${string}`,
-    wethGateway: '0xa8e550710bf113db6a1b38472118b8d6d5176d12' as `0x${string}`,
-    faucet: '0x2e9d89d372837f71cb529e5ba85bfbc1785c69cd' as `0x${string}`,
-    tokens: {
-      WETH: { address: '0x8d3e82e914271dfc98727c8f4db18ba5c3a7d3a3' as `0x${string}`, decimals: 18 },
-      USDT: { address: '0x4b2d8b441f7e7a6e9c5c3a3b2e1f0d9c8b7a6f5e' as `0x${string}`, decimals: 6 },
-      USDC: { address: '0x1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b' as `0x${string}`, decimals: 6 },
-      BTC:  { address: '0x9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e' as `0x${string}`, decimals: 8 },
-    },
   },
-} as const;
+  1: {
+    chain: mainnet,
+    rpc: 'https://eth.llamarpc.com',
+    pool: '0x4a4c2A16b58bD63d37e999fDE50C2eBfE3182D58',
+    protocol: 'compound-v2',
+  },
+  8453: {
+    chain: base,
+    rpc: 'https://mainnet.base.org',
+    pool: '0x4a4c2A16b58bD63d37e999fDE50C2eBfE3182D58',
+    protocol: 'compound-v2',
+  },
+};
+
+const PHAROS_TOKENS = {
+  WETH: { address: '0x8d3e82e914271dfc98727c8f4db18ba5c3a7d3a3' as `0x${string}`, decimals: 18 },
+  USDT: { address: '0x4b2d8b441f7e7a6e9c5c3a3b2e1f0d9c8b7a6f5e' as `0x${string}`, decimals: 6 },
+  USDC: { address: '0x1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b' as `0x${string}`, decimals: 6 },
+  BTC:  { address: '0x9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e' as `0x${string}`, decimals: 8 },
+};
 
 const chainId = Number(process.env.GLEND_CHAIN_ID ?? '688688');
-const rpcUrl  = process.env.GLEND_RPC_URL ?? 'https://testnet.dplabs-internal.com';
+const config = CHAIN_CONFIG[chainId];
+if (!config) throw new Error(`Unsupported GLEND_CHAIN_ID: ${chainId}. Supported: 688688, 1, 8453`);
+
+const rpcUrl = process.env.GLEND_RPC_URL ?? config.rpc;
 
 const publicClient = createPublicClient({
-  chain: pharosTestnet,
+  chain: config.chain,
   transport: http(rpcUrl),
 });
 
@@ -341,13 +358,11 @@ const account = privateKeyToAccount(
 
 const walletClient = createWalletClient({
   account,
-  chain: pharosTestnet,
+  chain: config.chain,
   transport: http(rpcUrl),
 });
 
-const POOL_ADDRESS = (
-  process.env.GLEND_POOL_ADDRESS ?? DEPLOYMENTS[688688].pool
-) as `0x${string}`;
+const POOL_ADDRESS = (process.env.GLEND_POOL_ADDRESS ?? config.pool) as `0x${string}`;
 ```
 
 #### 2. Approve ERC-20
@@ -684,19 +699,21 @@ async function compoundSupply(
   // Approve the gToken contract to spend underlying tokens
   await approveToken(underlyingAddress, gTokenAddress, amount);
 
-  const { request } = await publicClient.simulateContract({
+  const { request, result } = await publicClient.simulateContract({
     address: gTokenAddress,
     abi: GTOKEN_ABI,
     functionName: 'mint',
     args: [amount],
     account,
   });
-  const hash = await walletClient.writeContract(request);
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
-  // Check return value — 0 = success
-  // The mint function emits a Failure event if non-zero
-  return receipt;
+  // Compound V2 returns an error code — 0 means success
+  if (result !== 0n) {
+    throw new Error(`Compound mint failed with error code: ${result}`);
+  }
+
+  const hash = await walletClient.writeContract(request);
+  return publicClient.waitForTransactionReceipt({ hash });
 }
 ```
 
@@ -812,7 +829,7 @@ async function getCompoundMarketRates(gTokenAddress: `0x${string}`) {
 
   // Approximate APY (assuming ~2,102,400 blocks/year on Ethereum)
   const BLOCKS_PER_YEAR = 2102400n;
-  const MANTISSA = BigInt(1e18);
+  const MANTISSA = 10n ** 18n;
   const supplyAPY = (supplyRatePerBlock * BLOCKS_PER_YEAR * 100n) / MANTISSA;
   const borrowAPY = (borrowRatePerBlock * BLOCKS_PER_YEAR * 100n) / MANTISSA;
 

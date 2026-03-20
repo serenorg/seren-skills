@@ -226,10 +226,11 @@ if [[ -f "$SKILL_MD" ]]; then
   check_contains "688688" "Contains Pharos Testnet chain ID (688688)"
   check_contains "8453"   "Contains Base chain ID (8453)"
   # Chain ID 1 appears in many patterns, check with quotes or context
-  if echo "$SKILL_CONTENT" | grep -qE '(Chain ID.*\b1\b|\b1\b.*Ethereum|Chain ID: \`1\`)'; then
+  if echo "$SKILL_CONTENT" | grep -qE '(Chain ID.*\b1\b|\b1\b.*Ethereum|Chain ID: `1`)'; then
     pass "Contains Ethereum chain ID (1)"
   else
-    pass "Contains Ethereum chain ID (1)"  # present as part of addresses/URLs — allow
+    fail "Contains Ethereum chain ID (1)" \
+      "No explicit Ethereum chain ID reference found in SKILL.md"
   fi
 
   # Contract addresses
@@ -292,18 +293,18 @@ if [[ "$SECRETS_FOUND" == "false" ]]; then
   pass "No private keys committed in skill files"
 fi
 
-# .env file is not committed
-if [[ -f "$SKILL_ROOT/.env" ]]; then
+# .env file is not committed (not tracked by git)
+if git -C "$SKILL_ROOT" ls-files --error-unmatch ".env" >/dev/null 2>&1; then
   fail ".env file is NOT committed (gitignored)" \
-    "$SKILL_ROOT/.env exists and should not be committed"
+    "$SKILL_ROOT/.env is tracked by git and should not be committed"
 else
   pass ".env file is NOT committed"
 fi
 
-# node_modules is not committed
-if [[ -d "$SKILL_ROOT/node_modules" ]]; then
+# node_modules is not committed (no files tracked under node_modules/)
+if git -C "$SKILL_ROOT" ls-files "node_modules" 2>/dev/null | grep -q .; then
   fail "node_modules/ is NOT committed" \
-    "$SKILL_ROOT/node_modules/ directory should not be committed"
+    "Files under $SKILL_ROOT/node_modules/ are tracked and should not be committed"
 else
   pass "node_modules/ is NOT committed"
 fi
