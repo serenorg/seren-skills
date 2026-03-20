@@ -206,11 +206,7 @@ def test_neg_risk_approval_check_uses_seren_polygon_publisher_even_without_seren
     publisher_calls: list[tuple[str, str, str, str]] = []
 
     monkeypatch.setattr(module, "get_seren_prepaid_balance", lambda **kwargs: 0.0)
-    monkeypatch.setattr(
-        module,
-        "discover_seren_polygon_publisher",
-        lambda **kwargs: "seren-polygon",
-    )
+    monkeypatch.setattr(module, "discover_seren_polygon_publisher", lambda **kwargs: "seren-polygon")
 
     def fake_call_publisher_json(
         publisher: str,
@@ -245,6 +241,43 @@ def test_neg_risk_approval_check_uses_seren_polygon_publisher_even_without_seren
 
 
 @pytest.mark.parametrize("skill_slug", sorted(LIVE_MODULE_PATHS))
+def test_neg_risk_approval_check_blocks_unfunded_public_rpc_without_explicit_opt_in(
+    skill_slug: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_module(
+        f"{skill_slug.replace('-', '_')}_public_polygon_opt_in_required_test",
+        LIVE_MODULE_PATHS[skill_slug],
+        clear_modules=("polymarket_live",),
+    )
+    monkeypatch.setattr(module, "get_seren_prepaid_balance", lambda **kwargs: 0.0)
+    monkeypatch.setattr(module, "discover_seren_polygon_publisher", lambda **kwargs: "")
+    monkeypatch.delenv(module.POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK_ENV, raising=False)
+    monkeypatch.setattr(
+        module,
+        "call_publisher_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Seren publisher should not be used")),
+    )
+    monkeypatch.setattr(
+        module,
+        "urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("public fallback should not be used without opt-in")),
+    )
+
+    result = module.check_neg_risk_approvals("0x" + ("4" * 40))
+
+    assert result["checks_passed"] is False
+    assert result["rpc_transport"] == "public-disabled"
+    assert result["rpc_public_opt_in_required"] is True
+    assert any("https://serendb.com/serenbucks" in error for error in result["errors"])
+    assert any("https://console.serendb.com" in error for error in result["errors"])
+    assert any("$5.00" in error for error in result["errors"])
+    assert any("verified email" in error for error in result["errors"])
+    assert any("POST /wallet/deposit" in error for error in result["errors"])
+    assert any(module.POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK_ENV in error for error in result["errors"])
+
+
+@pytest.mark.parametrize("skill_slug", sorted(LIVE_MODULE_PATHS))
 def test_neg_risk_approval_check_flags_public_rpc_zero_state_as_non_authoritative(
     skill_slug: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -258,6 +291,7 @@ def test_neg_risk_approval_check_flags_public_rpc_zero_state_as_non_authoritativ
 
     monkeypatch.setattr(module, "get_seren_prepaid_balance", lambda **kwargs: 0.0)
     monkeypatch.setattr(module, "discover_seren_polygon_publisher", lambda **kwargs: "")
+    monkeypatch.setenv(module.POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK_ENV, "1")
     monkeypatch.setattr(
         module,
         "call_publisher_json",

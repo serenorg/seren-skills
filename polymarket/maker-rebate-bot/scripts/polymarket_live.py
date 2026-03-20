@@ -37,6 +37,7 @@ SEREN_MIN_PUBLISHER_BALANCE_USD = 1.0
 DEFAULT_SEREN_CRON_POLL_INTERVAL_SECONDS = 30
 POLYGON_PUBLIC_RPC_URL = "https://polygon-rpc.com"
 POLYGON_RPC_PROBE_PATHS = ("/", "", "/rpc")
+POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK_ENV = "POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK"
 
 # Polymarket contract addresses on Polygon mainnet
 POLYGON_USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
@@ -739,6 +740,33 @@ def get_seren_prepaid_balance(
     return 0.0
 
 
+def _allow_public_polygon_rpc_fallback() -> bool:
+    raw = safe_str(os.getenv(POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK_ENV), "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _build_polygon_rpc_public_fallback_message(
+    *,
+    seren_balance_usd: float,
+    fallback_reason: str,
+    rpc_url: str,
+) -> str:
+    reason = fallback_reason.strip() or "Seren Polygon RPC is unavailable."
+    message = (
+        f"{reason} Public Polygon RPC at {rpc_url} can be stale or rate-limited for approval reads."
+    )
+    if seren_balance_usd <= 0.0:
+        message = (
+            f"{message} Fund paid Polygon RPC with SerenBucks at https://serendb.com/serenbucks "
+            "or https://console.serendb.com. Stripe deposits start at $5.00 and require a "
+            "verified email. API-first funding is available via POST /wallet/deposit."
+        )
+    return (
+        f"{message} If you still want to continue with the public fallback, set "
+        f"{POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK_ENV}=1 and rerun."
+    )
+
+
 def list_seren_publishers(
     *,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
@@ -1001,6 +1029,7 @@ def _resolve_polygon_rpc_transport(
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     balance = get_seren_prepaid_balance(timeout_seconds=timeout_seconds)
+    allow_public_fallback = _allow_public_polygon_rpc_fallback()
     publisher = discover_seren_polygon_publisher(timeout_seconds=timeout_seconds)
     if publisher:
         try:
@@ -1025,10 +1054,30 @@ def _resolve_polygon_rpc_transport(
             "resolution is attempted regardless of balance."
         )
 
+    if balance <= 0.0 and not allow_public_fallback:
+        return {
+            "rpc_transport": "public-disabled",
+            "rpc_url": rpc_url,
+            "rpc_fallback_reason": fallback_reason,
+            "seren_balance_usd": balance,
+            "rpc_public_opt_in_required": True,
+            "rpc_user_action_message": _build_polygon_rpc_public_fallback_message(
+                seren_balance_usd=balance,
+                fallback_reason=fallback_reason,
+                rpc_url=rpc_url,
+            ),
+        }
+
     return {
         "rpc_transport": "public",
         "rpc_url": rpc_url,
         "rpc_fallback_reason": fallback_reason,
+        "seren_balance_usd": balance,
+        "rpc_warning": _build_polygon_rpc_public_fallback_message(
+            seren_balance_usd=balance,
+            fallback_reason=fallback_reason,
+            rpc_url=rpc_url,
+        ),
     }
 
 
@@ -1896,6 +1945,14 @@ def check_neg_risk_approvals(
         timeout_seconds=timeout_seconds,
     )
     results.update(rpc_transport)
+    if safe_str(results.get("rpc_transport"), "") == "public-disabled":
+        results["errors"].append(
+            safe_str(
+                results.get("rpc_user_action_message"),
+                "Polygon RPC fallback requires explicit user confirmation.",
+            )
+        )
+        return results
 
     # Check USDC.e allowance to NegRiskAdapter
     usdc_data = f"0x{ERC20_ALLOWANCE_ABI_FRAGMENT[2:]}{wallet_padded}{adapter_padded}"
