@@ -25,6 +25,49 @@ class DBTarget:
     endpoint_id: Optional[str] = None
 
 
+@dataclass
+class AdaptiveRuntimePersistence:
+    store: "SerenDBStore"
+    runtime_key: str
+    lock_key: str
+    skill_slug: str = "kraken-grid-trader"
+
+    def load_state(self) -> Dict[str, Any]:
+        return self.store.load_runtime_state(skill_slug=self.skill_slug, runtime_key=self.runtime_key)
+
+    def save_state(self, state: Dict[str, Any]) -> None:
+        self.store.save_runtime_state(
+            skill_slug=self.skill_slug,
+            runtime_key=self.runtime_key,
+            state=state,
+        )
+
+    def append_event(self, event_type: str, payload: Dict[str, Any]) -> str:
+        event_id = self.store.append_runtime_event(
+            skill_slug=self.skill_slug,
+            runtime_key=self.runtime_key,
+            event_type=event_type,
+            payload=payload,
+        )
+        return f"serendb://trading.runtime_events/{event_id}"
+
+    def acquire_lock(self, *, lock_key: str, owner_id: str, ttl_seconds: int) -> bool:
+        return self.store.acquire_runtime_lock(
+            skill_slug=self.skill_slug,
+            lock_key=lock_key,
+            owner_id=owner_id,
+            ttl_seconds=ttl_seconds,
+            metadata={"runtime_key": self.runtime_key},
+        )
+
+    def release_lock(self, *, lock_key: str, owner_id: str) -> None:
+        self.store.release_runtime_lock(
+            skill_slug=self.skill_slug,
+            lock_key=lock_key,
+            owner_id=owner_id,
+        )
+
+
 class _SerenMCPClient:
     def __init__(self, api_key: str, mcp_command: str = "seren-mcp", timeout_seconds: int = 30):
         self.api_key = api_key
@@ -399,6 +442,39 @@ class SerenDBStore:
 
         CREATE INDEX IF NOT EXISTS idx_pnl_periods_run_end
             ON trading.pnl_periods (run_id, period_end DESC);
+
+        CREATE TABLE IF NOT EXISTS trading.runtime_state (
+            skill_slug TEXT NOT NULL,
+            runtime_key TEXT NOT NULL,
+            state JSONB NOT NULL DEFAULT '{}'::jsonb,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (skill_slug, runtime_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_runtime_state_skill_updated
+            ON trading.runtime_state (skill_slug, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS trading.runtime_events (
+            id BIGSERIAL PRIMARY KEY,
+            skill_slug TEXT NOT NULL,
+            runtime_key TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_runtime_events_key_time
+            ON trading.runtime_events (skill_slug, runtime_key, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS trading.runtime_locks (
+            skill_slug TEXT NOT NULL,
+            lock_key TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (skill_slug, lock_key)
+        );
         """
         self._execute_sql(ddl)
 
@@ -680,6 +756,113 @@ class SerenDBStore:
             """
         self._execute_sql(query)
 
+    def adaptive_runtime(self, *, runtime_key: str, lock_key: str) -> AdaptiveRuntimePersistence:
+        return AdaptiveRuntimePersistence(store=self, runtime_key=runtime_key, lock_key=lock_key)
+
+    def load_runtime_state(self, *, skill_slug: str, runtime_key: str) -> Dict[str, Any]:
+        query = f"""
+        SELECT state
+        FROM trading.runtime_state
+        WHERE skill_slug = {self._sql_text(skill_slug)}
+          AND runtime_key = {self._sql_text(runtime_key)}
+        LIMIT 1;
+        """
+        rows = self._extract_rows(self._query_sql(query))
+        if not rows:
+            return {}
+        payload = rows[0].get("state", {})
+        if isinstance(payload, str):
+            try:
+                decoded = json.loads(payload)
+            except json.JSONDecodeError:
+                return {}
+            return decoded if isinstance(decoded, dict) else {}
+        return payload if isinstance(payload, dict) else {}
+
+    def save_runtime_state(self, *, skill_slug: str, runtime_key: str, state: Dict[str, Any]) -> None:
+        query = f"""
+        INSERT INTO trading.runtime_state (skill_slug, runtime_key, state, updated_at)
+        VALUES (
+            {self._sql_text(skill_slug)},
+            {self._sql_text(runtime_key)},
+            {self._sql_json(state)},
+            NOW()
+        )
+        ON CONFLICT (skill_slug, runtime_key) DO UPDATE SET
+            state = EXCLUDED.state,
+            updated_at = NOW();
+        """
+        self._execute_sql(query)
+
+    def append_runtime_event(
+        self,
+        *,
+        skill_slug: str,
+        runtime_key: str,
+        event_type: str,
+        payload: Dict[str, Any],
+    ) -> int:
+        query = f"""
+        INSERT INTO trading.runtime_events (skill_slug, runtime_key, event_type, payload)
+        VALUES (
+            {self._sql_text(skill_slug)},
+            {self._sql_text(runtime_key)},
+            {self._sql_text(event_type)},
+            {self._sql_json(payload)}
+        )
+        RETURNING id;
+        """
+        rows = self._extract_rows(self._query_sql(query))
+        if not rows:
+            raise SerenMCPError("runtime event insert returned no rows")
+        return int(rows[0].get("id", 0))
+
+    def acquire_runtime_lock(
+        self,
+        *,
+        skill_slug: str,
+        lock_key: str,
+        owner_id: str,
+        ttl_seconds: int,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        query = f"""
+        WITH attempted AS (
+            INSERT INTO trading.runtime_locks (skill_slug, lock_key, owner_id, expires_at, metadata, updated_at)
+            VALUES (
+                {self._sql_text(skill_slug)},
+                {self._sql_text(lock_key)},
+                {self._sql_text(owner_id)},
+                NOW() + ({int(ttl_seconds)} * INTERVAL '1 second'),
+                {self._sql_json(metadata or {})},
+                NOW()
+            )
+            ON CONFLICT (skill_slug, lock_key) DO UPDATE SET
+                owner_id = EXCLUDED.owner_id,
+                expires_at = EXCLUDED.expires_at,
+                metadata = EXCLUDED.metadata,
+                updated_at = NOW()
+            WHERE trading.runtime_locks.expires_at <= NOW()
+               OR trading.runtime_locks.owner_id = EXCLUDED.owner_id
+            RETURNING 1 AS acquired
+        )
+        SELECT COALESCE(MAX(acquired), 0) AS acquired
+        FROM attempted;
+        """
+        rows = self._extract_rows(self._query_sql(query))
+        if not rows:
+            return False
+        return int(rows[0].get("acquired", 0)) == 1
+
+    def release_runtime_lock(self, *, skill_slug: str, lock_key: str, owner_id: str) -> None:
+        query = f"""
+        DELETE FROM trading.runtime_locks
+        WHERE skill_slug = {self._sql_text(skill_slug)}
+          AND lock_key = {self._sql_text(lock_key)}
+          AND owner_id = {self._sql_text(owner_id)};
+        """
+        self._execute_sql(query)
+
     def _execute_sql(self, query: str) -> None:
         target = self._resolve_target()
         last_error: Optional[Exception] = None
@@ -700,6 +883,26 @@ class SerenDBStore:
                 self._attempt_endpoint_recovery(target)
                 time.sleep(2)
         raise SerenMCPError(f"run_sql failed after retries: {last_error}")
+
+    def _query_sql(self, query: str) -> Dict[str, Any]:
+        target = self._resolve_target()
+        last_error: Optional[Exception] = None
+        for _ in range(3):
+            try:
+                return self._mcp.call_tool(
+                    "run_sql",
+                    {
+                        "project_id": target.project_id,
+                        "branch_id": target.branch_id,
+                        "database": target.database,
+                        "query": query,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                self._attempt_endpoint_recovery(target)
+                time.sleep(2)
+        raise SerenMCPError(f"run_sql query failed after retries: {last_error}")
 
     def _resolve_target(self) -> DBTarget:
         if self._target is not None:
@@ -942,6 +1145,25 @@ class SerenDBStore:
     def _sql_json(value: Any) -> str:
         encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False).replace("'", "''")
         return f"'{encoded}'::jsonb"
+
+    @staticmethod
+    def _extract_rows(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not isinstance(result, dict):
+            return []
+        body = result.get("body", result)
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError:
+                return []
+        if isinstance(body, dict):
+            for key in ("rows", "data", "result"):
+                value = body.get(key)
+                if isinstance(value, list):
+                    return [row for row in value if isinstance(row, dict)]
+        if isinstance(body, list):
+            return [row for row in body if isinstance(row, dict)]
+        return []
 
     @staticmethod
     def _normalize_name(value: Any) -> str:

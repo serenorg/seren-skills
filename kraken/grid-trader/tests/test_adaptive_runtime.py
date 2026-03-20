@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 
 _SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -37,21 +40,46 @@ def _load_local_module(module_name: str):
 adaptive_runtime = _load_local_module("adaptive_runtime")
 
 
-def test_shadow_gate_promotes_better_candidate(tmp_path) -> None:
+class FakeAdaptivePersistence:
+    def __init__(self, initial_state=None) -> None:
+        self.state = dict(initial_state or {})
+        self.events = []
+        self.locks = {}
+
+    def load_state(self):
+        return json.loads(json.dumps(self.state))
+
+    def save_state(self, state):
+        self.state = json.loads(json.dumps(state))
+
+    def append_event(self, event_type, payload):
+        ref = f"event:{len(self.events) + 1}"
+        self.events.append({"type": event_type, "payload": payload, "reference": ref})
+        return ref
+
+    def acquire_lock(self, *, lock_key, owner_id, ttl_seconds):
+        del ttl_seconds
+        existing = self.locks.get(lock_key)
+        if existing is not None and existing != owner_id:
+            return False
+        self.locks[lock_key] = owner_id
+        return True
+
+    def release_lock(self, *, lock_key, owner_id):
+        if self.locks.get(lock_key) == owner_id:
+            self.locks.pop(lock_key, None)
+
+
+def test_shadow_gate_promotes_better_candidate() -> None:
     settings = adaptive_runtime.resolve_adaptive_settings(
         {
             "adaptive": {
-                "state_path": str(tmp_path / "state" / "adaptive_state.json"),
-                "metrics_log_path": str(tmp_path / "logs" / "metrics.jsonl"),
-                "review_log_path": str(tmp_path / "logs" / "reviews.jsonl"),
-                "review_output_dir": str(tmp_path / "logs" / "reviews"),
-                "alert_log_path": str(tmp_path / "logs" / "alerts.jsonl"),
                 "shadow_min_samples": 2,
                 "shadow_improvement_threshold_pct": 0.0,
             }
         }
     )
-    store = adaptive_runtime.AdaptiveStateStore(settings)
+    store = adaptive_runtime.AdaptiveStateStore(settings, persistence=FakeAdaptivePersistence())
     store.state["recent_cycles"] = [
         {"market_price": 100.0, "fill_rate": 1.0, "net_pnl_usd": 15.0},
         {"market_price": 102.0, "fill_rate": 0.9, "net_pnl_usd": 12.0},
@@ -85,19 +113,50 @@ def test_shadow_gate_promotes_better_candidate(tmp_path) -> None:
     assert store.state["last_accepted_params"]["grid_spacing_percent"] == decision.candidate_params["grid_spacing_percent"]
 
 
-def test_review_report_uses_rolling_50_and_200_windows(tmp_path) -> None:
-    settings = adaptive_runtime.resolve_adaptive_settings(
-        {
-            "adaptive": {
-                "state_path": str(tmp_path / "state" / "adaptive_state.json"),
-                "metrics_log_path": str(tmp_path / "logs" / "metrics.jsonl"),
-                "review_log_path": str(tmp_path / "logs" / "reviews.jsonl"),
-                "review_output_dir": str(tmp_path / "logs" / "reviews"),
-                "alert_log_path": str(tmp_path / "logs" / "alerts.jsonl"),
-            }
-        }
+def test_store_persists_state_and_review_via_backend() -> None:
+    persistence = FakeAdaptivePersistence()
+    store = adaptive_runtime.AdaptiveStateStore(
+        adaptive_runtime.resolve_adaptive_settings({"adaptive": {}}),
+        persistence=persistence,
     )
-    store = adaptive_runtime.AdaptiveStateStore(settings)
+    store.state["last_accepted_params"] = {"grid_spacing_percent": 2.25}
+    store.save()
+    store.record_metric({"timestamp": "2026-03-20T00:00:00Z", "market_price": 101.0})
+    reference = store.record_review({"generated_at": "2026-03-20T00:00:00Z", "cycle_count": 1})
+    store.save()
+
+    assert persistence.state["last_accepted_params"]["grid_spacing_percent"] == 2.25
+    assert [event["type"] for event in persistence.events] == ["metrics", "review"]
+    assert store.state["review_reports"][-1]["reference"] == reference
+
+
+def test_runtime_lock_uses_backend_lease() -> None:
+    persistence = FakeAdaptivePersistence()
+
+    with adaptive_runtime.runtime_lock(
+        persistence=persistence,
+        lock_key="adaptive:Grid_2026:XBTUSD",
+        owner_id="owner-a",
+        ttl_seconds=120,
+    ):
+        assert persistence.locks["adaptive:Grid_2026:XBTUSD"] == "owner-a"
+        with pytest.raises(adaptive_runtime.RuntimeLockError):
+            with adaptive_runtime.runtime_lock(
+                persistence=persistence,
+                lock_key="adaptive:Grid_2026:XBTUSD",
+                owner_id="owner-b",
+                ttl_seconds=120,
+            ):
+                pass
+
+    assert "adaptive:Grid_2026:XBTUSD" not in persistence.locks
+
+
+def test_review_report_uses_rolling_50_and_200_windows() -> None:
+    store = adaptive_runtime.AdaptiveStateStore(
+        adaptive_runtime.resolve_adaptive_settings({"adaptive": {}}),
+        persistence=FakeAdaptivePersistence(),
+    )
 
     for idx in range(60):
         adaptive_runtime.update_cycle_state(

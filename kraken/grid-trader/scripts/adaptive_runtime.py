@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import fcntl
-import json
 import math
-import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from statistics import mean
 from typing import Any, Iterator
 
@@ -19,8 +15,6 @@ ROUND_TRIP_FEE_PCT = 0.32
 
 DEFAULT_ADAPTIVE_SETTINGS: dict[str, Any] = {
     "enabled": True,
-    "state_path": "state/adaptive_state.json",
-    "lock_path": "state/runtime.lock",
     "slippage_buffer_pct": 0.2,
     "min_spacing_percent": 0.0,
     "max_spacing_multiplier": 2.5,
@@ -34,11 +28,8 @@ DEFAULT_ADAPTIVE_SETTINGS: dict[str, Any] = {
     "shadow_min_samples": 5,
     "shadow_improvement_threshold_pct": 5.0,
     "shadow_rollback_degradation_pct": 10.0,
-    "metrics_log_path": "logs/metrics.jsonl",
-    "review_log_path": "logs/weekly_reviews.jsonl",
-    "review_output_dir": "logs/reviews",
-    "alert_log_path": "logs/alerts.jsonl",
     "max_failure_count_before_alert": 3,
+    "lock_ttl_seconds": 120,
 }
 
 
@@ -74,24 +65,12 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _json_append(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, sort_keys=True) + "\n")
-
-
 def resolve_adaptive_settings(config: dict[str, Any]) -> dict[str, Any]:
     raw = config.get("adaptive", {})
     settings = dict(DEFAULT_ADAPTIVE_SETTINGS)
     if isinstance(raw, dict):
         settings.update(raw)
     settings["enabled"] = bool(settings.get("enabled", True))
-    settings["state_path"] = str(settings.get("state_path", DEFAULT_ADAPTIVE_SETTINGS["state_path"]))
-    settings["lock_path"] = str(settings.get("lock_path", DEFAULT_ADAPTIVE_SETTINGS["lock_path"]))
-    settings["metrics_log_path"] = str(settings.get("metrics_log_path", DEFAULT_ADAPTIVE_SETTINGS["metrics_log_path"]))
-    settings["review_log_path"] = str(settings.get("review_log_path", DEFAULT_ADAPTIVE_SETTINGS["review_log_path"]))
-    settings["review_output_dir"] = str(settings.get("review_output_dir", DEFAULT_ADAPTIVE_SETTINGS["review_output_dir"]))
-    settings["alert_log_path"] = str(settings.get("alert_log_path", DEFAULT_ADAPTIVE_SETTINGS["alert_log_path"]))
     settings["slippage_buffer_pct"] = _safe_float(settings.get("slippage_buffer_pct"), 0.2)
     settings["min_spacing_percent"] = _safe_float(settings.get("min_spacing_percent"), 0.0)
     settings["max_spacing_multiplier"] = max(_safe_float(settings.get("max_spacing_multiplier"), 2.5), 1.0)
@@ -123,28 +102,27 @@ def resolve_adaptive_settings(config: dict[str, Any]) -> dict[str, Any]:
     settings["max_failure_count_before_alert"] = max(
         int(_safe_float(settings.get("max_failure_count_before_alert"), 3)), 1
     )
+    settings["lock_ttl_seconds"] = max(int(_safe_float(settings.get("lock_ttl_seconds"), 120)), 30)
     return settings
 
 
 @contextmanager
-def runtime_lock(lock_path: str | Path) -> Iterator[None]:
-    path = Path(lock_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+", encoding="utf-8") as handle:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise RuntimeLockError(f"another kraken-grid-trader adaptive run is already active ({path})") from exc
-        handle.seek(0)
-        handle.truncate()
-        handle.write(json.dumps({"pid": os.getpid(), "acquired_at": _now_iso()}, sort_keys=True))
-        handle.flush()
-        try:
-            yield
-        finally:
-            handle.seek(0)
-            handle.truncate()
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+def runtime_lock(*, persistence: Any, lock_key: str, owner_id: str, ttl_seconds: int) -> Iterator[None]:
+    if persistence is None:
+        raise RuntimeLockError("adaptive runtime requires SerenDB-backed persistence")
+    acquired = bool(
+        persistence.acquire_lock(
+            lock_key=lock_key,
+            owner_id=owner_id,
+            ttl_seconds=ttl_seconds,
+        )
+    )
+    if not acquired:
+        raise RuntimeLockError(f"another kraken-grid-trader adaptive run is already active ({lock_key})")
+    try:
+        yield
+    finally:
+        persistence.release_lock(lock_key=lock_key, owner_id=owner_id)
 
 
 def _default_state() -> dict[str, Any]:
@@ -169,28 +147,24 @@ def _default_state() -> dict[str, Any]:
         "daily_pnl": {"date": None, "equity_start_usd": None, "equity_end_usd": None, "net_change_usd": 0.0},
         "failure_state": {"count": 0, "last_error": "", "last_failure_at": None},
         "review_reports": [],
+        "live_risk_state": {},
     }
 
 
 class AdaptiveStateStore:
     """Persist adaptive trading state across grid-trader restarts."""
 
-    def __init__(self, settings: dict[str, Any]) -> None:
+    def __init__(self, settings: dict[str, Any], persistence: Any | None = None) -> None:
         self.settings = settings
-        self.path = Path(settings["state_path"])
-        self.metrics_log_path = Path(settings["metrics_log_path"])
-        self.review_log_path = Path(settings["review_log_path"])
-        self.review_output_dir = Path(settings["review_output_dir"])
-        self.alert_log_path = Path(settings["alert_log_path"])
+        self.persistence = persistence
         self.state = self._load()
 
     def _load(self) -> dict[str, Any]:
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            payload = {}
-        except json.JSONDecodeError:
-            payload = {}
+        payload = {}
+        if self.persistence is not None:
+            loaded = self.persistence.load_state()
+            if isinstance(loaded, dict):
+                payload = loaded
         state = _default_state()
         if isinstance(payload, dict):
             state.update(payload)
@@ -205,12 +179,13 @@ class AdaptiveStateStore:
         state.setdefault("daily_pnl", {"date": None, "equity_start_usd": None, "equity_end_usd": None, "net_change_usd": 0.0})
         state.setdefault("baseline_summary", {"scores": [], "rolling_score": 0.0})
         state.setdefault("candidate_summary", {"scores": [], "rolling_score": 0.0, "candidate_params": {}})
+        state.setdefault("live_risk_state", {})
         return state
 
     def save(self) -> None:
         self.state["updated_at"] = _now_iso()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.state, sort_keys=True, indent=2), encoding="utf-8")
+        if self.persistence is not None:
+            self.persistence.save_state(self.state)
 
     def accepted_params(self, fallback: dict[str, Any]) -> dict[str, Any]:
         params = self.state.get("last_accepted_params")
@@ -218,6 +193,14 @@ class AdaptiveStateStore:
             params = dict(fallback)
             self.state["last_accepted_params"] = dict(params)
         return dict(params)
+
+    def record_event(self, event_type: str, payload: dict[str, Any]) -> str | None:
+        if self.persistence is None:
+            return None
+        return self.persistence.append_event(event_type, payload)
+
+    def record_metric(self, payload: dict[str, Any]) -> str | None:
+        return self.record_event("metrics", payload)
 
     def append_fill(self, fill_event: dict[str, Any]) -> None:
         recent_fills = list(self.state.get("recent_fills", []))
@@ -228,7 +211,7 @@ class AdaptiveStateStore:
         recent_cycles = list(self.state.get("recent_cycles", []))
         recent_cycles.append(cycle_snapshot)
         self.state["recent_cycles"] = recent_cycles[-200:]
-        _json_append(self.metrics_log_path, cycle_snapshot)
+        self.record_metric(cycle_snapshot)
 
     def note_incident(self, incident_type: str, payload: dict[str, Any]) -> None:
         incidents = list(self.state.get("risk_incidents", []))
@@ -240,8 +223,8 @@ class AdaptiveStateStore:
             }
         )
         self.state["risk_incidents"] = incidents[-100:]
-        _json_append(
-            self.alert_log_path,
+        self.record_event(
+            "alert",
             {
                 "recorded_at": _now_iso(),
                 "kind": "risk_incident",
@@ -262,8 +245,8 @@ class AdaptiveStateStore:
         )
         self.state["failure_state"] = failure_state
         if count >= int(self.settings["max_failure_count_before_alert"]):
-            _json_append(
-                self.alert_log_path,
+            self.record_event(
+                "alert",
                 {
                     "recorded_at": _now_iso(),
                     "kind": "repeated_failures",
@@ -305,15 +288,12 @@ class AdaptiveStateStore:
     def clear_cooldown(self) -> None:
         self.state["cooldown_until"] = None
 
-    def record_review(self, report: dict[str, Any]) -> Path:
-        self.review_output_dir.mkdir(parents=True, exist_ok=True)
-        report_path = self.review_output_dir / f"weekly_review_{_now().strftime('%Y%m%dT%H%M%SZ')}.json"
-        report_path.write_text(json.dumps(report, sort_keys=True, indent=2), encoding="utf-8")
-        _json_append(self.review_log_path, report)
+    def record_review(self, report: dict[str, Any]) -> str:
+        reference = self.record_event("review", report) or f"review:{report['generated_at']}"
         review_reports = list(self.state.get("review_reports", []))
-        review_reports.append({"generated_at": report["generated_at"], "path": str(report_path)})
+        review_reports.append({"generated_at": report["generated_at"], "reference": reference})
         self.state["review_reports"] = review_reports[-20:]
-        return report_path
+        return reference
 
 
 @dataclass
