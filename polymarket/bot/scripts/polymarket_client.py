@@ -142,15 +142,23 @@ class PolymarketClient:
         order_type: str = 'GTC',
     ) -> Dict:
         """Place an order via py-clob-client (local EIP-712 signing)."""
+        del order_type
+        from polymarket_live import fetch_book, fetch_fee_rate_bps, snap_price
+
         trader = self._require_trader()
+        book = fetch_book(token_id)
+        tick_size = str(book.get("tick_size", "0.01"))
+        neg_risk = bool(book.get("neg_risk", False))
+        fee_rate_bps = fetch_fee_rate_bps(token_id)
+        snapped_price = snap_price(price, tick_size, side)
         return trader.create_order(
             token_id=token_id,
             side=side,
-            price=price,
+            price=snapped_price,
             size=size,
-            tick_size="0.01",
-            neg_risk=False,
-            fee_rate_bps=0,
+            tick_size=tick_size,
+            neg_risk=neg_risk,
+            fee_rate_bps=fee_rate_bps,
         )
 
     def cancel_order(self, order_id: str) -> Dict:

@@ -228,6 +228,90 @@ def parse_book_payload(payload: Any) -> dict[str, Any]:
     }
 
 
+def _book_levels(payload: Any, side: str) -> list[tuple[float, float]]:
+    if isinstance(payload, dict):
+        key = "asks" if side.upper() == "BUY" else "bids"
+        payload = payload.get(key)
+    if not isinstance(payload, list):
+        return []
+
+    levels: list[tuple[float, float]] = []
+    for level in payload:
+        if isinstance(level, dict):
+            price = safe_float(level.get("price"), 0.0)
+            size = safe_float(
+                level.get(
+                    "size",
+                    level.get("quantity", level.get("amount", level.get("shares", 0.0))),
+                ),
+                0.0,
+            )
+        elif isinstance(level, (list, tuple)) and len(level) >= 2:
+            price = safe_float(level[0], 0.0)
+            size = safe_float(level[1], 0.0)
+        else:
+            price = 0.0
+            size = 0.0
+        if price > 0.0 and size > 0.0:
+            levels.append((price, size))
+    return levels
+
+
+def estimate_book_fill_value(payload: Any, *, side: str, size: float) -> dict[str, float]:
+    requested_size = max(0.0, size)
+    remaining = requested_size
+    gross_value = 0.0
+    filled_size = 0.0
+    for level_price, level_size in _book_levels(payload, side):
+        take_size = min(remaining, level_size)
+        gross_value += take_size * level_price
+        filled_size += take_size
+        remaining -= take_size
+        if remaining <= 1e-9:
+            break
+    average_price = gross_value / filled_size if filled_size > 0.0 else 0.0
+    return {
+        "requested_size": round(requested_size, 6),
+        "fillable_size": round(filled_size, 6),
+        "unfilled_size": round(max(0.0, remaining), 6),
+        "gross_value": round(gross_value, 6),
+        "average_price": round(average_price, 6),
+    }
+
+
+def build_marketable_sell_order(
+    token_id: str,
+    shares: float,
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    book = fetch_book(token_id, timeout_seconds=timeout_seconds)
+    tick_size = safe_str(book.get("tick_size"), "0.01")
+    tick_price = snap_price(safe_float(tick_size, 0.01), tick_size, "SELL")
+    best_bid = safe_float(book.get("best_bid"), 0.0)
+    best_ask = safe_float(book.get("best_ask"), 0.0)
+    estimate = estimate_book_fill_value(book.get("raw"), side="SELL", size=shares)
+    if best_bid <= 0.0 or estimate["fillable_size"] <= 0.0:
+        raise RuntimeError(
+            "no_bid_liquidity: order book has no executable bids for an immediate exit."
+        )
+    return {
+        "token_id": token_id,
+        "shares": round(max(0.0, shares), 6),
+        "price": tick_price,
+        "tick_size": tick_size,
+        "neg_risk": bool(book.get("neg_risk", False)),
+        "fee_rate_bps": fetch_fee_rate_bps(token_id, timeout_seconds=timeout_seconds),
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "estimated_exit_value_usd": estimate["gross_value"],
+        "estimated_fill_size": estimate["fillable_size"],
+        "estimated_unfilled_size": estimate["unfilled_size"],
+        "estimated_average_price": estimate["average_price"],
+        "execution_style": "marketable-limit-min-tick",
+    }
+
+
 def extract_token_id(raw_market: dict[str, Any]) -> str:
     token_ids = json_to_list(raw_market.get("clobTokenIds"))
     if token_ids:
@@ -2433,34 +2517,45 @@ def sell_held_inventory(
         if shares <= 0 or token_id in covered_token_ids:
             continue
         try:
-            book = fetch_book(token_id, timeout_seconds=timeout_seconds)
-            ask_price = safe_float(book.get("best_ask"), 0.0)
-            tick_size = safe_str(book.get("tick_size"), "0.01")
-            neg_risk = bool(book.get("neg_risk", False))
-            if ask_price <= 0.0:
-                continue
-            ask_price = snap_price(ask_price, tick_size, "SELL")
-            size = shares
-            fee_rate_bps = fetch_fee_rate_bps(token_id, timeout_seconds=timeout_seconds)
+            sell_plan = build_marketable_sell_order(
+                token_id,
+                shares,
+                timeout_seconds=timeout_seconds,
+            )
             response = trader.create_order(
                 token_id=token_id,
                 side="SELL",
-                price=ask_price,
-                size=size,
-                tick_size=tick_size,
-                neg_risk=neg_risk,
-                fee_rate_bps=fee_rate_bps,
+                price=sell_plan["price"],
+                size=shares,
+                tick_size=sell_plan["tick_size"],
+                neg_risk=sell_plan["neg_risk"],
+                fee_rate_bps=sell_plan["fee_rate_bps"],
             )
             sells.append(
                 {
                     "token_id": token_id,
                     "side": "SELL",
-                    "price": ask_price,
-                    "size": round(size, 6),
+                    "price": sell_plan["price"],
+                    "size": round(shares, 6),
+                    "best_bid": sell_plan["best_bid"],
+                    "best_ask": sell_plan["best_ask"],
+                    "estimated_exit_value_usd": sell_plan["estimated_exit_value_usd"],
+                    "estimated_fill_size": sell_plan["estimated_fill_size"],
+                    "estimated_unfilled_size": sell_plan["estimated_unfilled_size"],
+                    "estimated_average_price": sell_plan["estimated_average_price"],
+                    "execution_style": sell_plan["execution_style"],
                     "source": "held-inventory-unwind",
                     "response": response,
                 }
             )
-        except Exception:
-            continue
+        except Exception as exc:
+            sells.append(
+                {
+                    "token_id": token_id,
+                    "side": "SELL",
+                    "size": round(shares, 6),
+                    "source": "held-inventory-unwind",
+                    "error": str(exc),
+                }
+            )
     return sells
