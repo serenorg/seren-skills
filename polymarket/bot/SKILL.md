@@ -14,7 +14,6 @@ Autonomous trading agent for prediction markets integrating the Seren ecosystem.
 
 ### Geographic Restrictions - CRITICAL
 ⚠️ **Polymarket access depends on jurisdiction, account eligibility, and current network environment**.
-⚠️ **If the current environment cannot reach the CLOB API, stop and surface the restriction instead of suggesting workarounds or bypasses**.
 ⚠️ **You are responsible for verifying that prediction market trading is legal in your jurisdiction**.
 
 ### Regulatory Status
