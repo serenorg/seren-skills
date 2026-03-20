@@ -2285,8 +2285,6 @@ def _persist_normalized_result(config: dict[str, Any], result: dict[str, Any], *
         venue="polymarket",
         strategy_name="high-throughput-paired-basis-maker",
     )
-    if not store.enabled:
-        return
     try:
         mode = run_type
         dry_run = run_type != "live"

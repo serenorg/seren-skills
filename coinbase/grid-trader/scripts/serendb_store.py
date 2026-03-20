@@ -10,6 +10,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from trade_reporting import CycleTradeReportEmitter
+
 
 class SerenMCPError(RuntimeError):
     """Raised when a local seren-mcp tool call fails."""
@@ -199,6 +201,22 @@ class SerenDBStore:
         self._target: Optional[DBTarget] = None
         self._mcp = _SerenMCPClient(api_key=api_key, mcp_command=mcp_command)
         self._mcp.start()
+        self._reporter = CycleTradeReportEmitter(
+            skill_slug="coinbase-grid-trader",
+            venue="coinbase",
+            strategy_name="grid-trader",
+        )
+
+    def _ensure_reporter(self) -> CycleTradeReportEmitter:
+        reporter = getattr(self, "_reporter", None)
+        if reporter is None:
+            reporter = CycleTradeReportEmitter(
+                skill_slug="coinbase-grid-trader",
+                venue="coinbase",
+                strategy_name="grid-trader",
+            )
+            self._reporter = reporter
+        return reporter
 
     def close(self) -> None:
         self._mcp.close()
@@ -385,6 +403,13 @@ class SerenDBStore:
         self._execute_sql(ddl)
 
     def create_session(self, session_id: str, campaign_name: str, trading_pair: str, dry_run: bool) -> None:
+        self._ensure_reporter().start_session(
+            session_id,
+            mode="paper" if dry_run else "live",
+            dry_run=dry_run,
+            instrument_id=trading_pair,
+            metadata={"campaign_name": campaign_name},
+        )
         query = f"""
         INSERT INTO coinbase_grid_sessions (session_id, campaign_name, trading_pair, dry_run)
         VALUES (
@@ -428,6 +453,15 @@ class SerenDBStore:
         status: str,
         payload: Optional[Dict[str, Any]] = None,
     ) -> None:
+        self._ensure_reporter().record_order(
+            session_id,
+            order_id=order_id,
+            side=side,
+            price=price,
+            quantity=size,
+            status=status,
+            metadata=payload or {},
+        )
         query = f"""
         INSERT INTO coinbase_grid_orders (session_id, order_id, side, price, size, status, payload)
         VALUES (
@@ -472,6 +506,15 @@ class SerenDBStore:
         cost: float,
         payload: Optional[Dict[str, Any]] = None,
     ) -> None:
+        self._ensure_reporter().record_fill(
+            session_id,
+            order_id=order_id,
+            side=side,
+            price=price,
+            quantity=size,
+            fee_usd=fee,
+            metadata=payload or {},
+        )
         query = f"""
         INSERT INTO coinbase_grid_fills (session_id, order_id, side, price, size, fee, cost, payload)
         VALUES (
@@ -514,6 +557,15 @@ class SerenDBStore:
         unrealized_pnl: float,
         open_orders: int,
     ) -> None:
+        self._ensure_reporter().record_position(
+            session_id,
+            instrument_id=trading_pair,
+            base_balance=base_balance,
+            quote_balance=quote_balance,
+            total_value_usd=total_value_usd,
+            unrealized_pnl_usd=unrealized_pnl,
+            open_orders=open_orders,
+        )
         query = f"""
         INSERT INTO coinbase_grid_positions (
             session_id,
@@ -588,6 +640,8 @@ class SerenDBStore:
         self._execute_sql(query)
 
     def save_event(self, session_id: str, event_type: str, payload: Dict[str, Any]) -> None:
+        terminal_status = self._normalized_terminal_status(event_type)
+        self._ensure_reporter().record_event(session_id, event_type=event_type, payload=payload, status=terminal_status)
         query = f"""
         INSERT INTO coinbase_grid_events (session_id, event_type, payload)
         VALUES (
@@ -608,7 +662,6 @@ class SerenDBStore:
             {self._sql_json(payload)}
         );
         """
-        terminal_status = self._normalized_terminal_status(event_type)
         if terminal_status:
             query += f"""
             UPDATE trading.strategy_runs

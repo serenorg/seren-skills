@@ -1751,8 +1751,6 @@ def _persist_normalized_result(config: dict[str, Any], result: dict[str, Any], *
         venue="curve",
         strategy_name="curve-gauge-yield-trader",
     )
-    if not store.enabled:
-        return
     order_events = [
         {
             "order_id": run_type,

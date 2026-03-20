@@ -128,6 +128,14 @@ class SerenDBStore:
         return True
 
     def create_session(self, session_id: str, mode: str, config: dict[str, Any]) -> None:
+        self.normalized.start_run(
+            run_id=session_id,
+            mode=mode,
+            dry_run=bool(config.get("dry_run", True)),
+            config=config,
+            status="running",
+            metadata={"session_kind": "dca"},
+        )
         if not self.enabled:
             return
         self.connect()
@@ -142,14 +150,6 @@ class SerenDBStore:
                 (session_id, mode, json.dumps(config)),
             )
         self.conn.commit()
-        self.normalized.start_run(
-            run_id=session_id,
-            mode=mode,
-            dry_run=bool(config.get("dry_run", True)),
-            config=config,
-            status="running",
-            metadata={"session_kind": "dca"},
-        )
 
     def close_session(
         self,
@@ -159,22 +159,21 @@ class SerenDBStore:
         total_invested_usd: float,
         total_savings_bps: int,
     ) -> None:
-        if not self.enabled:
-            return
-        self.connect()
-        assert self.conn is not None
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE dca_sessions
-                SET ended_at = NOW(), status = %s,
-                    total_invested_usd = %s,
-                    total_savings_bps = %s
-                WHERE session_id = %s
-                """,
-                (status, total_invested_usd, total_savings_bps, session_id),
-            )
-        self.conn.commit()
+        if self.enabled:
+            self.connect()
+            assert self.conn is not None
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE dca_sessions
+                    SET ended_at = NOW(), status = %s,
+                        total_invested_usd = %s,
+                        total_savings_bps = %s
+                    WHERE session_id = %s
+                    """,
+                    (status, total_invested_usd, total_savings_bps, session_id),
+                )
+            self.conn.commit()
         self.normalized.finish_run(
             run_id=session_id,
             status=status,
@@ -186,38 +185,37 @@ class SerenDBStore:
         )
 
     def persist_execution(self, row: dict[str, Any]) -> None:
-        if not self.enabled:
-            return
-        self.connect()
-        assert self.conn is not None
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO dca_executions (
-                    execution_id, mode, asset, target_amount_usd,
-                    executed_amount_usd, executed_price, vwap_at_execution,
-                    savings_vs_naive_bps, strategy, window_start, window_end,
-                    executed_at, status, kraken_order_id, metadata
-                ) VALUES (
-                    %(execution_id)s, %(mode)s, %(asset)s, %(target_amount_usd)s,
-                    %(executed_amount_usd)s, %(executed_price)s, %(vwap_at_execution)s,
-                    %(savings_vs_naive_bps)s, %(strategy)s, %(window_start)s, %(window_end)s,
-                    %(executed_at)s, %(status)s, %(kraken_order_id)s, %(metadata)s
+        if self.enabled:
+            self.connect()
+            assert self.conn is not None
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO dca_executions (
+                        execution_id, mode, asset, target_amount_usd,
+                        executed_amount_usd, executed_price, vwap_at_execution,
+                        savings_vs_naive_bps, strategy, window_start, window_end,
+                        executed_at, status, kraken_order_id, metadata
+                    ) VALUES (
+                        %(execution_id)s, %(mode)s, %(asset)s, %(target_amount_usd)s,
+                        %(executed_amount_usd)s, %(executed_price)s, %(vwap_at_execution)s,
+                        %(savings_vs_naive_bps)s, %(strategy)s, %(window_start)s, %(window_end)s,
+                        %(executed_at)s, %(status)s, %(kraken_order_id)s, %(metadata)s
+                    )
+                    ON CONFLICT (execution_id) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        executed_amount_usd = EXCLUDED.executed_amount_usd,
+                        executed_price = EXCLUDED.executed_price,
+                        executed_at = EXCLUDED.executed_at,
+                        kraken_order_id = EXCLUDED.kraken_order_id,
+                        metadata = EXCLUDED.metadata
+                    """,
+                    {
+                        **row,
+                        "metadata": json.dumps(row.get("metadata", {})),
+                    },
                 )
-                ON CONFLICT (execution_id) DO UPDATE SET
-                    status = EXCLUDED.status,
-                    executed_amount_usd = EXCLUDED.executed_amount_usd,
-                    executed_price = EXCLUDED.executed_price,
-                    executed_at = EXCLUDED.executed_at,
-                    kraken_order_id = EXCLUDED.kraken_order_id,
-                    metadata = EXCLUDED.metadata
-                """,
-                {
-                    **row,
-                    "metadata": json.dumps(row.get("metadata", {})),
-                },
-            )
-        self.conn.commit()
+            self.conn.commit()
         session_id = self._normalized_session_id(row)
         if session_id:
             quantity = None
@@ -257,27 +255,26 @@ class SerenDBStore:
                 )
 
     def persist_portfolio_snapshot(self, row: dict[str, Any]) -> None:
-        if not self.enabled:
-            return
-        self.connect()
-        assert self.conn is not None
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO portfolio_snapshots (
-                    snapshot_id, total_value_usd, allocations, target_allocations, drift_max_pct
-                ) VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (snapshot_id) DO NOTHING
-                """,
-                (
-                    row["snapshot_id"],
-                    row["total_value_usd"],
-                    json.dumps(row["allocations"]),
-                    json.dumps(row["target_allocations"]),
-                    row["drift_max_pct"],
-                ),
-            )
-        self.conn.commit()
+        if self.enabled:
+            self.connect()
+            assert self.conn is not None
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO portfolio_snapshots (
+                        snapshot_id, total_value_usd, allocations, target_allocations, drift_max_pct
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (snapshot_id) DO NOTHING
+                    """,
+                    (
+                        row["snapshot_id"],
+                        row["total_value_usd"],
+                        json.dumps(row["allocations"]),
+                        json.dumps(row["target_allocations"]),
+                        row["drift_max_pct"],
+                    ),
+                )
+            self.conn.commit()
         session_id = self._normalized_session_id(row)
         if session_id:
             positions, marks = self._allocation_rows(row)
@@ -285,32 +282,31 @@ class SerenDBStore:
             self.normalized.insert_position_marks(session_id, marks)
 
     def persist_scanner_signal(self, row: dict[str, Any], user_action: str | None = None) -> None:
-        if not self.enabled:
-            return
-        self.connect()
-        assert self.conn is not None
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO scanner_signals (
-                    signal_id, signal_type, asset, confidence_pct,
-                    trigger_data, suggestion, reallocation_pct, user_action
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (signal_id) DO UPDATE SET
-                    user_action = EXCLUDED.user_action
-                """,
-                (
-                    row["signal_id"],
-                    row["signal_type"],
-                    row["asset"],
-                    row["confidence_pct"],
-                    json.dumps(row["trigger_data"]),
-                    row["suggestion"],
-                    row["reallocation_pct"],
-                    user_action,
-                ),
-            )
-        self.conn.commit()
+        if self.enabled:
+            self.connect()
+            assert self.conn is not None
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO scanner_signals (
+                        signal_id, signal_type, asset, confidence_pct,
+                        trigger_data, suggestion, reallocation_pct, user_action
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (signal_id) DO UPDATE SET
+                        user_action = EXCLUDED.user_action
+                    """,
+                    (
+                        row["signal_id"],
+                        row["signal_type"],
+                        row["asset"],
+                        row["confidence_pct"],
+                        json.dumps(row["trigger_data"]),
+                        row["suggestion"],
+                        row["reallocation_pct"],
+                        user_action,
+                    ),
+                )
+            self.conn.commit()
         session_id = self._normalized_session_id(row)
         if session_id:
             self.normalized.insert_order_events(
