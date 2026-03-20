@@ -15,6 +15,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+from normalized_trade_store import NormalizedTradingStore
 import sys
 
 DEFAULT_DRY_RUN = True
@@ -1707,6 +1709,88 @@ def _check_serenbucks_balance(api_key: str) -> float:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
 
+
+def _normalized_curve_positions(result: dict[str, Any]) -> list[dict[str, Any]]:
+    sync = result.get("position_sync", {})
+    if not isinstance(sync, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    lp_token = sync.get("lp_token_address")
+    if lp_token:
+        rows.append(
+            {
+                "position_key": str(lp_token),
+                "instrument_id": str(lp_token),
+                "symbol": str(lp_token),
+                "side": "LONG",
+                "quantity": sync.get("lp_balance_wei"),
+                "status": "open",
+                "metadata": sync,
+            }
+        )
+    gauge = sync.get("gauge_address")
+    if gauge:
+        rows.append(
+            {
+                "position_key": str(gauge),
+                "instrument_id": str(gauge),
+                "symbol": str(gauge),
+                "side": "LONG",
+                "quantity": sync.get("staked_balance_wei"),
+                "status": "open",
+                "metadata": sync,
+            }
+        )
+    return rows
+
+
+def _persist_normalized_result(config: dict[str, Any], result: dict[str, Any], *, run_type: str) -> None:
+    store = NormalizedTradingStore(
+        os.getenv("SERENDB_URL"),
+        skill_slug="curve-gauge-yield-trader",
+        venue="curve",
+        strategy_name="curve-gauge-yield-trader",
+    )
+    if not store.enabled:
+        return
+    order_events = [
+        {
+            "order_id": run_type,
+            "instrument_id": result.get("chain"),
+            "symbol": result.get("chain"),
+            "side": "SELL" if run_type == "unwind-all" else "BUY",
+            "order_type": "curve_workflow",
+            "event_type": "trade_plan_generated",
+            "status": result.get("status", "ok"),
+            "metadata": {
+                "trade_plan": result.get("trade_plan", {}),
+                "preflight": result.get("preflight", {}),
+                "live_execution": result.get("live_execution", {}),
+            },
+        }
+    ]
+    positions = _normalized_curve_positions(result)
+    try:
+        store.persist_completed_run(
+            mode=str(result.get("mode") or run_type),
+            dry_run=bool(result.get("mode") != "live"),
+            config=config,
+            status=str(result.get("status", "ok")),
+            summary={
+                "chain": result.get("chain"),
+                "signer_mode": result.get("signer_mode"),
+                "rpc_capability": result.get("rpc_capability", {}),
+            },
+            order_events=order_events,
+            positions=positions,
+            position_marks=positions,
+            metadata={"run_type": run_type},
+            error_code=result.get("error_code"),
+            error_message=result.get("message"),
+        )
+    finally:
+        store.close()
+
 def main() -> int:
     args = parse_args()
     wallet_path = Path(args.wallet_path)
@@ -1735,12 +1819,14 @@ def main() -> int:
         config = load_config(args.config)
         if args.unwind_all:
             result = run_unwind_all(config=config, ledger_address=args.ledger_address.strip())
+            _persist_normalized_result(config, result, run_type="unwind-all")
         else:
             result = run_once(
                 config=config,
                 yes_live=bool(args.yes_live),
                 ledger_address=args.ledger_address.strip(),
             )
+            _persist_normalized_result(config, result, run_type="run_once")
     except (ConfigError, PublisherError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1

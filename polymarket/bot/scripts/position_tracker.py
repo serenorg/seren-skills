@@ -11,7 +11,7 @@ Tracks:
 import json
 import os
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 try:
@@ -160,7 +160,7 @@ class PositionTracker:
                 'positions': [pos.to_dict() for pos in self.positions.values()],
                 'total_unrealized_pnl': self.get_total_unrealized_pnl(),
                 'position_count': len(self.positions),
-                'last_updated': datetime.utcnow().isoformat() + 'Z'
+                'last_updated': datetime.now(timezone.utc).isoformat()
             }
 
             with open(self.positions_file, 'w') as f:
@@ -196,7 +196,7 @@ class PositionTracker:
             side=side,
             entry_price=entry_price,
             size=size,
-            opened_at=datetime.utcnow().isoformat() + 'Z'
+            opened_at=datetime.now(timezone.utc).isoformat()
         )
 
         self.positions[market_id] = pos
@@ -317,7 +317,7 @@ class PositionTracker:
                             side=api_pos.get('side', 'BUY').upper(),
                             entry_price=float(api_pos.get('entry_price', 0) or api_pos.get('price', 0)),
                             size=float(api_pos.get('size', 0) or api_pos.get('amount', 0)),
-                            opened_at=api_pos.get('created_at', datetime.utcnow().isoformat() + 'Z')
+                            opened_at=api_pos.get('created_at', datetime.now(timezone.utc).isoformat())
                         )
 
                         # Update with current price if available

@@ -257,6 +257,130 @@ class SerenDBStore:
             payload JSONB NOT NULL DEFAULT '{}'::jsonb,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        CREATE SCHEMA IF NOT EXISTS trading;
+
+        CREATE TABLE IF NOT EXISTS trading.strategy_runs (
+            run_id UUID PRIMARY KEY,
+            skill_slug TEXT NOT NULL,
+            venue TEXT NOT NULL,
+            strategy_name TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            dry_run BOOLEAN NOT NULL DEFAULT TRUE,
+            started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            completed_at TIMESTAMPTZ,
+            config JSONB NOT NULL DEFAULT '{}'::jsonb,
+            summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+            error_code TEXT,
+            error_message TEXT,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_strategy_runs_skill_mode_started
+            ON trading.strategy_runs (skill_slug, mode, started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS trading.order_events (
+            id BIGSERIAL PRIMARY KEY,
+            run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+            order_id TEXT,
+            instrument_id TEXT,
+            symbol TEXT,
+            side TEXT,
+            order_type TEXT,
+            event_type TEXT NOT NULL,
+            status TEXT,
+            price NUMERIC(24, 10),
+            quantity NUMERIC(24, 10),
+            notional_usd NUMERIC(24, 10),
+            event_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_order_events_run_time
+            ON trading.order_events (run_id, event_time DESC);
+
+        CREATE TABLE IF NOT EXISTS trading.fills (
+            id BIGSERIAL PRIMARY KEY,
+            run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+            order_id TEXT,
+            venue_fill_id TEXT,
+            instrument_id TEXT,
+            symbol TEXT,
+            side TEXT,
+            fill_price NUMERIC(24, 10),
+            fill_quantity NUMERIC(24, 10),
+            fee_usd NUMERIC(24, 10),
+            notional_usd NUMERIC(24, 10),
+            realized_pnl_usd NUMERIC(24, 10),
+            fill_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_fills_run_time
+            ON trading.fills (run_id, fill_time DESC);
+
+        CREATE TABLE IF NOT EXISTS trading.positions (
+            id BIGSERIAL PRIMARY KEY,
+            run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+            position_key TEXT NOT NULL,
+            instrument_id TEXT,
+            symbol TEXT,
+            side TEXT,
+            quantity NUMERIC(24, 10),
+            entry_price NUMERIC(24, 10),
+            cost_basis_usd NUMERIC(24, 10),
+            market_price NUMERIC(24, 10),
+            market_value_usd NUMERIC(24, 10),
+            unrealized_pnl_usd NUMERIC(24, 10),
+            realized_pnl_usd NUMERIC(24, 10),
+            status TEXT,
+            opened_at TIMESTAMPTZ,
+            closed_at TIMESTAMPTZ,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            UNIQUE (run_id, position_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_positions_run_status
+            ON trading.positions (run_id, status);
+
+        CREATE TABLE IF NOT EXISTS trading.position_marks (
+            id BIGSERIAL PRIMARY KEY,
+            run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+            position_key TEXT NOT NULL,
+            instrument_id TEXT,
+            symbol TEXT,
+            side TEXT,
+            quantity NUMERIC(24, 10),
+            mark_price NUMERIC(24, 10),
+            market_value_usd NUMERIC(24, 10),
+            unrealized_pnl_usd NUMERIC(24, 10),
+            realized_pnl_usd NUMERIC(24, 10),
+            mark_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_position_marks_run_time
+            ON trading.position_marks (run_id, mark_time DESC);
+
+        CREATE TABLE IF NOT EXISTS trading.pnl_periods (
+            id BIGSERIAL PRIMARY KEY,
+            run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+            period_type TEXT NOT NULL,
+            period_start TIMESTAMPTZ,
+            period_end TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            realized_pnl_usd NUMERIC(24, 10),
+            unrealized_pnl_usd NUMERIC(24, 10),
+            fees_usd NUMERIC(24, 10),
+            gross_pnl_usd NUMERIC(24, 10),
+            net_pnl_usd NUMERIC(24, 10),
+            equity_start_usd NUMERIC(24, 10),
+            equity_end_usd NUMERIC(24, 10),
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pnl_periods_run_end
+            ON trading.pnl_periods (run_id, period_end DESC);
         """
         self._execute_sql(ddl)
 
@@ -270,6 +394,27 @@ class SerenDBStore:
             {self._sql_bool(dry_run)}
         )
         ON CONFLICT (session_id) DO NOTHING;
+
+        INSERT INTO trading.strategy_runs (
+            run_id, skill_slug, venue, strategy_name, mode, status,
+            dry_run, config, metadata
+        )
+        VALUES (
+            {self._sql_text(session_id)}::uuid,
+            'coinbase-grid-trader',
+            'coinbase',
+            'grid-trader',
+            {self._sql_text('paper' if dry_run else 'live')},
+            'running',
+            {self._sql_bool(dry_run)},
+            {self._sql_json({'campaign_name': campaign_name, 'trading_pair': trading_pair})},
+            {self._sql_json({'session_type': 'grid_trader'})}
+        )
+        ON CONFLICT (run_id) DO UPDATE SET
+            status = EXCLUDED.status,
+            dry_run = EXCLUDED.dry_run,
+            config = EXCLUDED.config,
+            metadata = trading.strategy_runs.metadata || EXCLUDED.metadata;
         """
         self._execute_sql(query)
 
@@ -294,6 +439,25 @@ class SerenDBStore:
             {self._sql_text(status)},
             {self._sql_json(payload or {})}
         );
+
+        INSERT INTO trading.order_events (
+            run_id, order_id, instrument_id, symbol, side, order_type,
+            event_type, status, price, quantity, notional_usd, metadata
+        )
+        VALUES (
+            {self._sql_text(session_id)}::uuid,
+            {self._sql_text(order_id)},
+            {self._sql_text((payload or {}).get('product_id', ''))},
+            {self._sql_text((payload or {}).get('product_id', ''))},
+            {self._sql_text(side)},
+            {self._sql_text((payload or {}).get('order_type', 'limit'))},
+            {self._sql_text(status or 'order_event')},
+            {self._sql_text(status)},
+            {float(price)},
+            {float(size)},
+            {float(price) * float(size)},
+            {self._sql_json(payload or {})}
+        );
         """
         self._execute_sql(query)
 
@@ -313,6 +477,23 @@ class SerenDBStore:
         VALUES (
             {self._sql_text(session_id)}::uuid,
             {self._sql_text(order_id)},
+            {self._sql_text(side)},
+            {float(price)},
+            {float(size)},
+            {float(fee)},
+            {float(cost)},
+            {self._sql_json(payload or {})}
+        );
+
+        INSERT INTO trading.fills (
+            run_id, order_id, instrument_id, symbol, side,
+            fill_price, fill_quantity, fee_usd, notional_usd, metadata
+        )
+        VALUES (
+            {self._sql_text(session_id)}::uuid,
+            {self._sql_text(order_id)},
+            {self._sql_text((payload or {}).get('product_id', ''))},
+            {self._sql_text((payload or {}).get('product_id', ''))},
             {self._sql_text(side)},
             {float(price)},
             {float(size)},
@@ -352,6 +533,57 @@ class SerenDBStore:
             {float(unrealized_pnl)},
             {int(open_orders)}
         );
+
+        INSERT INTO trading.positions (
+            run_id, position_key, instrument_id, symbol, side, quantity,
+            market_value_usd, unrealized_pnl_usd, status, metadata
+        )
+        VALUES (
+            {self._sql_text(session_id)}::uuid,
+            {self._sql_text(f'portfolio:{trading_pair}')},
+            {self._sql_text(trading_pair)},
+            {self._sql_text(trading_pair)},
+            {self._sql_text('long' if float(base_balance) > 0 else 'flat')},
+            {float(base_balance)},
+            {float(total_value_usd)},
+            {float(unrealized_pnl)},
+            {self._sql_text('open')},
+            {self._sql_json({'quote_balance': quote_balance, 'open_orders': open_orders})}
+        )
+        ON CONFLICT (run_id, position_key) DO UPDATE SET
+            quantity = EXCLUDED.quantity,
+            market_value_usd = EXCLUDED.market_value_usd,
+            unrealized_pnl_usd = EXCLUDED.unrealized_pnl_usd,
+            status = EXCLUDED.status,
+            metadata = EXCLUDED.metadata;
+
+        INSERT INTO trading.position_marks (
+            run_id, position_key, instrument_id, symbol, side, quantity,
+            market_value_usd, unrealized_pnl_usd, metadata
+        )
+        VALUES (
+            {self._sql_text(session_id)}::uuid,
+            {self._sql_text(f'portfolio:{trading_pair}')},
+            {self._sql_text(trading_pair)},
+            {self._sql_text(trading_pair)},
+            {self._sql_text('long' if float(base_balance) > 0 else 'flat')},
+            {float(base_balance)},
+            {float(total_value_usd)},
+            {float(unrealized_pnl)},
+            {self._sql_json({'quote_balance': quote_balance, 'open_orders': open_orders})}
+        );
+
+        INSERT INTO trading.pnl_periods (
+            run_id, period_type, unrealized_pnl_usd, net_pnl_usd, equity_end_usd, metadata
+        )
+        VALUES (
+            {self._sql_text(session_id)}::uuid,
+            'snapshot',
+            {float(unrealized_pnl)},
+            {float(unrealized_pnl)},
+            {float(total_value_usd)},
+            {self._sql_json({'trading_pair': trading_pair, 'quote_balance': quote_balance, 'open_orders': open_orders})}
+        );
         """
         self._execute_sql(query)
 
@@ -363,7 +595,36 @@ class SerenDBStore:
             {self._sql_text(event_type)},
             {self._sql_json(payload)}
         );
+
+        INSERT INTO trading.order_events (
+            run_id, instrument_id, symbol, event_type, status, metadata
+        )
+        VALUES (
+            {self._sql_text(session_id)}::uuid,
+            {self._sql_text(str(payload.get('product_id') or ''))},
+            {self._sql_text(str(payload.get('product_id') or ''))},
+            {self._sql_text(event_type)},
+            {self._sql_text(payload.get('status', event_type))},
+            {self._sql_json(payload)}
+        );
         """
+        terminal_status = self._normalized_terminal_status(event_type)
+        if terminal_status:
+            query += f"""
+            UPDATE trading.strategy_runs
+            SET status = {self._sql_text(terminal_status)},
+                completed_at = NOW(),
+                summary = COALESCE(summary, '{{}}'::jsonb) || {self._sql_json(payload)},
+                error_code = CASE
+                    WHEN {self._sql_text(terminal_status)} = 'failed' THEN {self._sql_text(event_type)}
+                    ELSE error_code
+                END,
+                error_message = CASE
+                    WHEN {self._sql_text(terminal_status)} = 'failed' THEN {self._sql_text(payload.get('error_message', ''))}
+                    ELSE error_message
+                END
+            WHERE run_id = {self._sql_text(session_id)}::uuid;
+            """
         self._execute_sql(query)
 
     def _execute_sql(self, query: str) -> None:
@@ -632,3 +893,13 @@ class SerenDBStore:
     @staticmethod
     def _normalize_name(value: Any) -> str:
         return str(value or "").strip().lower()
+
+    @staticmethod
+    def _normalized_terminal_status(event_type: str) -> Optional[str]:
+        mapping = {
+            "stop_requested": "stopped",
+            "stop_loss_triggered": "stopped",
+            "trading_cycle_error": "failed",
+            "cancel_orders_error": "failed",
+        }
+        return mapping.get(str(event_type or "").strip().lower())
