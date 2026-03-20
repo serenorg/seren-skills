@@ -57,6 +57,17 @@ class TestResolutionDateFilter:
     def _iso(days_from_now: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(days=days_from_now)).isoformat().replace('+00:00', 'Z')
 
+    @staticmethod
+    def _format_end_date(days_from_now: int, variant: str) -> str:
+        dt = datetime.now(timezone.utc) + timedelta(days=days_from_now)
+        if variant == 'z':
+            return dt.isoformat().replace('+00:00', 'Z')
+        if variant == 'naive':
+            return dt.replace(tzinfo=None).isoformat()
+        if variant == 'offset':
+            return dt.isoformat()
+        raise ValueError(f"Unknown variant: {variant}")
+
     def test_filters_2028_markets(self):
         agent = self._make_agent_with_config(max_resolution_days=180)
         markets = [
@@ -103,6 +114,22 @@ class TestResolutionDateFilter:
         questions = [m['question'] for m in result]
         assert 'Bad date' not in questions
         assert questions == ['Near market']
+
+    @pytest.mark.parametrize('variant', ['z', 'naive', 'offset'])
+    def test_accepts_supported_end_date_shapes(self, variant):
+        agent = self._make_agent_with_config(max_resolution_days=180)
+        markets = [
+            {'question': f'Market {variant}',
+             'end_date': self._format_end_date(30, variant),
+             'liquidity': 1000, 'volume': 5000, 'token_id': f'tok-{variant}',
+             'price': 0.18, 'price_source': 'gamma'},
+        ]
+
+        result = agent.rank_candidates(markets, limit=10)
+
+        assert len(result) == 1
+        assert result[0]['question'] == f'Market {variant}'
+        assert result[0]['days_to_resolution'] > 0
 
     def test_skips_fallback_50_price_when_clob_midpoint_unavailable(self):
         agent = self._make_agent_with_config(max_resolution_days=180)

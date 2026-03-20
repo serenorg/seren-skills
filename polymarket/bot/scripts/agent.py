@@ -197,6 +197,8 @@ class TradingAgent:
 
             try:
                 end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                if end_dt.tzinfo is None:
+                    end_dt = end_dt.replace(tzinfo=timezone.utc)
             except (ValueError, TypeError):
                 continue
 
