@@ -1,8 +1,0 @@
-{
-  "status": "error",
-  "skill": "paired-market-basis-maker",
-  "error_code": "connector_failure",
-  "connector": "unknown_connector",
-  "message": "Connector call failed during smoke test.",
-  "connectors": {}
-}

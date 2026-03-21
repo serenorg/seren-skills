@@ -14,7 +14,6 @@ TRADING_SKILLS: list[tuple[str, str]] = [
     ("polymarket/maker-rebate-bot", "backtest"),
     ("polymarket/liquidity-paired-basis-maker", "backtest"),
     ("polymarket/high-throughput-paired-basis-maker", "backtest"),
-    ("polymarket/paired-market-basis-maker", "backtest"),
     ("polymarket/bot", "dry-run"),
     ("kraken/grid-trader", "dry-run"),
     ("kraken/smart-dca-bot", "dry-run"),

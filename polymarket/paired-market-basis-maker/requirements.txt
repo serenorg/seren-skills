@@ -1,2 +1,0 @@
-py-clob-client>=0.34.6
-psycopg[binary]>=3.2.0
