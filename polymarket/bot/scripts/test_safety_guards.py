@@ -307,6 +307,19 @@ class TestStaleGammaPriceRejection:
         assert result[0]['price'] == pytest.approx(0.72, abs=0.001)
         assert result[0]['price_source'] == 'clob_midpoint'
 
+    def test_stale_gamma_rejected_when_clob_confirms_fifty(self):
+        """Market with outcomePrices '0.5,0.5' AND CLOB mid ~0.50 is rejected (#243)."""
+        agent = self._make_agent_with_config()
+        agent.polymarket.get_midpoint.return_value = 0.50
+        markets = [
+            {'question': 'Thin book mirror', 'end_date': self._iso(30),
+             'liquidity': 1000, 'volume': 5000, 'token_id': 'tok1',
+             'outcomePrices': '0.5,0.5',
+             'price': 0.5, 'price_source': 'gamma'},
+        ]
+        result = agent.rank_candidates(markets, limit=10)
+        assert len(result) == 0
+
 
 class TestStalePriceDemotion:
     """Test that markets with 0.5/0.5 outcomePrices are deprioritized in ranking."""

@@ -263,6 +263,14 @@ class TradingAgent:
                 live_mid = None
 
             if live_mid and 0.01 < live_mid < 0.99:
+                # If Gamma seeded this market at 50/50 and the CLOB also returns
+                # ~50%, the midpoint is likely derived from a thin/symmetric book
+                # on a market that has never traded.  Reject it.
+                if stale_gamma_price and abs(live_mid - 0.5) <= 0.03:
+                    stale_gamma_skips += 1
+                    question = m.get('question', '')[:60]
+                    print(f"  Skipping stale 50/50 market (CLOB mid ≈ Gamma seed): {question}")
+                    continue
                 m['price'] = live_mid
                 m['price_source'] = 'clob_midpoint'
                 enriched.append(m)
