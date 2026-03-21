@@ -19,14 +19,12 @@ LIVE_MODULE_PATHS = {
     "polymarket-maker-rebate-bot": POLYMARKET_ROOT / "maker-rebate-bot" / "scripts" / "polymarket_live.py",
     "liquidity-paired-basis-maker": POLYMARKET_ROOT / "liquidity-paired-basis-maker" / "scripts" / "polymarket_live.py",
     "high-throughput-paired-basis-maker": POLYMARKET_ROOT / "high-throughput-paired-basis-maker" / "scripts" / "polymarket_live.py",
-    "paired-market-basis-maker": POLYMARKET_ROOT / "paired-market-basis-maker" / "scripts" / "polymarket_live.py",
 }
 
 UNWIND_AGENT_PATHS = {
     "polymarket-maker-rebate-bot": POLYMARKET_ROOT / "maker-rebate-bot" / "scripts" / "agent.py",
     "liquidity-paired-basis-maker": POLYMARKET_ROOT / "liquidity-paired-basis-maker" / "scripts" / "agent.py",
     "high-throughput-paired-basis-maker": POLYMARKET_ROOT / "high-throughput-paired-basis-maker" / "scripts" / "agent.py",
-    "paired-market-basis-maker": POLYMARKET_ROOT / "paired-market-basis-maker" / "scripts" / "agent.py",
 }
 BOT_AGENT_PATH = POLYMARKET_ROOT / "bot" / "scripts" / "agent.py"
 

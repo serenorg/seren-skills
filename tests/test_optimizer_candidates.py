@@ -14,7 +14,6 @@ SKILLS: list[tuple[str, str]] = [
     ("polymarket/maker-rebate-bot/scripts/agent.py", "_maker_optimization_candidates"),
     ("polymarket/liquidity-paired-basis-maker/scripts/agent.py", "_pair_optimization_candidates"),
     ("polymarket/high-throughput-paired-basis-maker/scripts/agent.py", "_pair_optimization_candidates"),
-    ("polymarket/paired-market-basis-maker/scripts/agent.py", "_pair_optimization_candidates"),
 ]
 
 MIN_CANDIDATES = 14  # 1 baseline + 14 candidates = 15 max_iterations

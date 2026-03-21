@@ -23,7 +23,6 @@ TARGET_FILES = [
     "polymarket/high-throughput-paired-basis-maker/scripts/agent.py",
     "polymarket/liquidity-paired-basis-maker/scripts/agent.py",
     "polymarket/maker-rebate-bot/scripts/agent.py",
-    "polymarket/paired-market-basis-maker/scripts/agent.py",
     "prophet/prophet-adversarial-auditor/scripts/agent.py",
     "prophet/prophet-growth-agent/scripts/agent.py",
     "prophet/prophet-market-seeder/scripts/agent.py",
