@@ -25,6 +25,9 @@ jobs:
       - name: Install pytest
         run: python -m pip install --upgrade pytest
 
+      - name: Verify paired basis maker sidecar modules import correctly
+        run: python -m pytest tests/test_paired_basis_maker_imports.py
+
       - name: Block direct Polymarket Gamma API endpoints (must use Seren publisher)
         run: |
           set -euo pipefail
