@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# install.sh — Install the Gclaw binary from GitHub releases
+# install.sh — Install the Gclaw binary
 # Usage: bash scripts/install.sh [--version <tag>]
+#
+# By default, downloads and runs the canonical installer from the Gclaw repo.
+# Falls back to a local release download when the upstream script is unavailable.
 set -euo pipefail
 
 REPO="GemachDAO/Gclaw"
-INSTALL_DIR="${GCLAW_INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${GCLAW_INSTALL_DIR:-${HOME}/.local/bin}"
 BINARY_NAME="gclaw"
 
 GREEN='\033[0;32m'
@@ -18,7 +21,6 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; }
 die()     { error "$*"; exit 1; }
-usage()   { echo "Usage: bash scripts/install.sh [--version <tag>]"; exit 1; }
 
 # ─── Parse args ──────────────────────────────────────────────────────────────
 VERSION=""
@@ -37,34 +39,50 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ─── Check if already installed ──────────────────────────────────────────────
-if command -v gclaw &>/dev/null; then
-  CURRENT_VERSION=$(gclaw version 2>/dev/null | head -1 || echo "unknown")
-  warn "gclaw is already installed: ${CURRENT_VERSION}"
-  warn "Run with --version <tag> to install a specific version, or remove the existing binary first."
-  exit 0
+# ─── Try canonical upstream installer first ───────────────────────────────────
+UPSTREAM_URL="https://raw.githubusercontent.com/${REPO}/main/install.sh"
+
+if [[ -z "$VERSION" ]]; then
+  info "Running canonical installer from ${REPO}..."
+  if command -v curl &>/dev/null; then
+    if curl -fsSL "$UPSTREAM_URL" -o /tmp/gclaw-install.sh 2>/dev/null; then
+      bash /tmp/gclaw-install.sh
+      rm -f /tmp/gclaw-install.sh
+      exit $?
+    fi
+  elif command -v wget &>/dev/null; then
+    if wget -qO /tmp/gclaw-install.sh "$UPSTREAM_URL" 2>/dev/null; then
+      bash /tmp/gclaw-install.sh
+      rm -f /tmp/gclaw-install.sh
+      exit $?
+    fi
+  fi
+  warn "Could not fetch upstream installer — falling back to local release download"
 fi
 
-# ─── Detect OS and architecture ──────────────────────────────────────────────
+# ─── Fallback: local release download ─────────────────────────────────────────
+
+# Detect OS and architecture
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 
 case "$OS" in
-  linux)  OS_NAME="linux" ;;
-  darwin) OS_NAME="darwin" ;;
+  linux)  OS_NAME="Linux" ;;
+  darwin) OS_NAME="Darwin" ;;
   *)      die "Unsupported OS: $OS. Please build from source: https://github.com/${REPO}" ;;
 esac
 
 case "$ARCH" in
-  x86_64|amd64)  ARCH_NAME="amd64" ;;
+  x86_64|amd64)  ARCH_NAME="x86_64" ;;
   aarch64|arm64) ARCH_NAME="arm64" ;;
+  armv7l)        ARCH_NAME="armv7" ;;
   riscv64)       ARCH_NAME="riscv64" ;;
   *)             die "Unsupported architecture: $ARCH. Please build from source: https://github.com/${REPO}" ;;
 esac
 
 info "Detected platform: ${OS_NAME}/${ARCH_NAME}"
 
-# ─── Resolve version ─────────────────────────────────────────────────────────
+# Resolve version
 if [[ -z "$VERSION" ]]; then
   info "Fetching latest release from GitHub..."
   if command -v curl &>/dev/null; then
@@ -81,15 +99,11 @@ fi
 
 info "Installing Gclaw ${VERSION} for ${OS_NAME}/${ARCH_NAME}..."
 
-# ─── Build download URL ───────────────────────────────────────────────────────
-# Expected asset pattern: gclaw_<version>_<os>_<arch>[.tar.gz]
-# Strip leading 'v' from version for filename matching
-VERSION_CLEAN="${VERSION#v}"
-ASSET_NAME="gclaw_${VERSION_CLEAN}_${OS_NAME}_${ARCH_NAME}"
-TARBALL="${ASSET_NAME}.tar.gz"
+# Build download URL
+TARBALL="${BINARY_NAME}_${OS_NAME}_${ARCH_NAME}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
 
-# ─── Download ─────────────────────────────────────────────────────────────────
+# Download
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -107,7 +121,7 @@ else
   wget -q "$CHECKSUMS_URL" -O "${TMP_DIR}/${CHECKSUMS_FILE}" 2>/dev/null || true
 fi
 
-# ─── Verify checksum ──────────────────────────────────────────────────────────
+# Verify checksum
 if [[ -s "${TMP_DIR}/${CHECKSUMS_FILE}" ]]; then
   info "Verifying SHA256 checksum..."
   EXPECTED_SUM=$(grep "${TARBALL}" "${TMP_DIR}/${CHECKSUMS_FILE}" | awk '{print $1}')
@@ -134,48 +148,48 @@ else
   warn "No checksums file found for release ${VERSION} — skipping integrity verification"
 fi
 
-# ─── Extract ──────────────────────────────────────────────────────────────────
+# Extract
 info "Extracting archive..."
 tar -xzf "${TMP_DIR}/${TARBALL}" -C "${TMP_DIR}" \
   || die "Failed to extract archive"
 
-# Find the binary (could be at root of archive or in a subdirectory)
 BINARY_PATH=$(find "${TMP_DIR}" -type f -name "${BINARY_NAME}" | head -1)
 [[ -z "$BINARY_PATH" ]] && die "Could not find '${BINARY_NAME}' binary in extracted archive"
 
-# ─── Install ──────────────────────────────────────────────────────────────────
+# Install
+mkdir -p "$INSTALL_DIR"
 chmod +x "$BINARY_PATH"
+cp "$BINARY_PATH" "${INSTALL_DIR}/${BINARY_NAME}"
 
-if [[ -w "$INSTALL_DIR" ]]; then
-  cp "$BINARY_PATH" "${INSTALL_DIR}/${BINARY_NAME}"
-else
-  info "Writing to ${INSTALL_DIR} requires elevated permissions..."
-  sudo cp "$BINARY_PATH" "${INSTALL_DIR}/${BINARY_NAME}"
-fi
-
-# ─── Verify ───────────────────────────────────────────────────────────────────
-if command -v gclaw &>/dev/null; then
-  INSTALLED_VERSION=$(gclaw version 2>/dev/null | head -1 || echo "unknown")
+# Verify
+if "${INSTALL_DIR}/${BINARY_NAME}" version &>/dev/null 2>&1; then
+  INSTALLED_VERSION=$("${INSTALL_DIR}/${BINARY_NAME}" version 2>/dev/null | head -1 || echo "unknown")
   success "Gclaw installed successfully: ${INSTALLED_VERSION}"
 else
-  warn "Binary installed to ${INSTALL_DIR}/${BINARY_NAME} but 'gclaw' is not in PATH."
-  warn "Add ${INSTALL_DIR} to your PATH or run: export PATH=\"\$PATH:${INSTALL_DIR}\""
+  success "Gclaw installed to ${INSTALL_DIR}/${BINARY_NAME}"
 fi
 
-# ─── Next steps ───────────────────────────────────────────────────────────────
+# Ensure PATH
+if ! echo ":${PATH}:" | grep -q ":${INSTALL_DIR}:"; then
+  warn "${INSTALL_DIR} is not in your PATH."
+  echo "  Add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
+  echo ""
+  echo "  export PATH=\"${INSTALL_DIR}:\${PATH}\""
+  echo ""
+fi
+
+# Next steps
 echo ""
 echo -e "${GREEN}═══ Next Steps ═══${RESET}"
-echo "  1. Initialize your workspace:"
+echo "  1. Run the interactive setup wizard:"
 echo "       gclaw onboard"
 echo ""
-echo "  2. Configure API keys:"
-echo "       cp .env.example .env"
-echo "       # Edit .env with your LLM provider keys and GDEX trading keys"
+echo "  2. Start interactive agent:"
+echo "       gclaw agent"
 echo ""
-echo "  3. Start chatting with your agent:"
-echo "       gclaw agent -m \"What is your GMAC balance?\""
-echo ""
-echo "  4. Start full gateway (web dashboard, channels, cron):"
+echo "  3. Or start full gateway (web dashboard, channels, cron):"
 echo "       gclaw gateway"
+echo ""
+echo "  Dashboard: http://127.0.0.1:18790/dashboard"
 echo ""
 echo "  Full documentation: https://github.com/${REPO}"

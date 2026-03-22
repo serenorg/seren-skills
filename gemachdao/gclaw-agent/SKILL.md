@@ -22,9 +22,10 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - Single Go binary — `<10MB RAM`, 1-second boot
 - Runs on $10 hardware (Raspberry Pi, VPS, etc.)
 - Powered by GDEX SDK for on-chain DeFi trading
-- Multi-LLM: OpenAI, Anthropic, Google, ZhiPu, OpenRouter, Ollama, and more
-- Multi-channel: Telegram, Discord, QQ, WhatsApp
+- Multi-LLM via `model_list`: OpenAI, Anthropic, Google, ZhiPu, OpenRouter, Ollama, DeepSeek, Groq, Cerebras, and more
+- Multi-channel: Telegram, Discord, Slack, WhatsApp, LINE, QQ, DingTalk, Feishu, WeCom
 - Fully autonomous: cron-scheduled tasks, self-replication, self-recoding, swarm coordination
+- Living Dashboard: real-time web UI at `http://127.0.0.1:18790/dashboard`
 
 ---
 
@@ -32,14 +33,21 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 
 ### GMAC Metabolism
 
-Every inference (heartbeat) deducts GMAC tokens from the agent's balance:
+Every heartbeat and LLM inference deducts GMAC tokens from the agent's balance:
 
 - **Profitable trades** → replenish GMAC + earn goodwill
 - **Losing trades or idle periods** → drain GMAC toward hibernation
-- **Hibernation** → agent pauses all activity until GMAC is replenished
-- **Thriving** → high GMAC balance unlocks replication and recoding
+- **Hibernation** → agent pauses all activity when balance drops below `survival_threshold`
+- **Thriving** → high GMAC balance and goodwill unlock replication, recoding, swarm, and venture abilities
 
-Metabolism creates a survival pressure: the agent is incentivized to find profitable strategies or die.
+New agents start with a **seeded internal 1000 GMAC draw** so they can act immediately. The first economic objective is to trade toward owning that GMAC for real.
+
+| Config Key | Default | Description |
+|---|---|---|
+| `initial_gmac` | 1000 | Seeded internal starting balance |
+| `heartbeat_cost` | 0.1 | GMAC per heartbeat tick |
+| `inference_cost_per_1k_tokens` | 0.5 | GMAC per 1,000 tokens |
+| `survival_threshold` | 50 | Hibernation trigger level |
 
 ### Goodwill Scoring
 
@@ -49,7 +57,14 @@ Each agent accumulates a **goodwill score** based on:
 - Successful task completions
 - Community contribution (swarm participation)
 
-Higher goodwill unlocks advanced capabilities and priority in swarm consensus.
+Higher goodwill unlocks advanced capabilities:
+
+| Goodwill | Ability Unlocked |
+|---|---|
+| 50 | 🔄 Self-Replication |
+| 100 | 🛠️ Self-Recoding |
+| 200 | 🐝 Swarm Leadership |
+| 5000 | 🏗️ Venture Architect |
 
 ### Survival Mode
 
@@ -77,12 +92,12 @@ Agents can **modify their own behavior** at runtime:
 
 ### Swarm Mode
 
-Multiple Gclaw instances can operate as a **coordinated swarm**:
-- **Coordinator**: orchestrates task distribution and consensus
-- **Workers**: execute trades and report outcomes
-- **Consensus voting**: strategy changes require majority approval
-- **Strategy rotation**: swarm collectively rotates between trading strategies
-- **Cross-agent telepathy**: agents share signals via the inter-agent bus
+Multiple Gclaw instances can operate as a **coordinated swarm** (goodwill ≥ 200 for leadership):
+- Parent agent becomes **swarm leader** and coordinates all registered children
+- **Consensus voting**: agents submit trade signals; a configurable threshold must agree before a trade executes
+- **Strategy rotation**: each child agent is assigned a distinct trading strategy; strategies rotate on a schedule
+- **Signal aggregation**: "majority", "weighted", or "unanimous" modes
+- **In-process telepathy**: parent and child agents communicate through an in-process message bus
 
 ---
 
@@ -94,34 +109,29 @@ Multiple Gclaw instances can operate as a **coordinated swarm**:
 curl -fsSL https://raw.githubusercontent.com/GemachDAO/Gclaw/main/install.sh | bash
 ```
 
-This installs the `gclaw` binary to `/usr/local/bin` and sets up `~/.gclaw/`.
+This downloads the latest release binary, verifies its checksum, installs to `~/.local/bin`, launches the interactive setup wizard, and prepares GDEX trading dependencies.
 
 ### From source (Go 1.21+)
 
 ```bash
 git clone https://github.com/GemachDAO/Gclaw.git
 cd Gclaw
-make build
-# binary at ./build/gclaw
-sudo mv build/gclaw /usr/local/bin/gclaw
+make install        # builds and installs to ~/.local/bin
+gclaw onboard       # interactive setup wizard
 ```
 
 ### Docker
 
 ```bash
-# Pull and run with Docker Compose
 git clone https://github.com/GemachDAO/Gclaw.git
 cd Gclaw
-cp .env.example .env
-# edit .env with your keys
-docker-compose up -d
+cp config/config.example.json config/config.json
+# Edit config/config.json — set your API key
+docker compose up gclaw-gateway
+# Or with docker-compose: docker-compose up gclaw-gateway
 ```
 
-### Go module
-
-```bash
-go install github.com/GemachDAO/Gclaw@latest
-```
+The repository includes a `docker-compose.yml` with two service profiles: `gclaw-agent` (one-shot query) and `gclaw-gateway` (long-running bot).
 
 ---
 
@@ -131,43 +141,60 @@ go install github.com/GemachDAO/Gclaw@latest
 
 ```bash
 gclaw onboard
-# Creates ~/.gclaw/config.json with defaults
-# Prompts for LLM provider and API key
-# Sets up initial GMAC wallet
+# Interactive setup wizard:
+#   - Choose LLM provider (OpenRouter, OpenAI, Anthropic, DeepSeek, Google, Groq, Ollama)
+#   - Enter API key
+#   - Creates ~/.gclaw/config.json with defaults
+#   - Sets up workspace and GDEX trading dependencies
 ```
 
-### 2. Configure your agent
+### 2. Configure your LLM provider
 
-Edit `~/.gclaw/config.json` (see Configuration Reference below) or set environment variables:
+Edit `~/.gclaw/config.json` — minimum required config:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model_name": "my-model"
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "my-model",
+      "model": "openai/gpt-4o",
+      "api_key": "sk-your-key-here",
+      "api_base": "https://api.openai.com/v1"
+    }
+  ]
+}
+```
+
+Any OpenAI-compatible provider works (OpenRouter, Ollama, DeepSeek, etc.) — just change `model`, `api_key`, and `api_base`.
+
+### 3. Start interactive agent
+
+### 3. Start interactive agent
 
 ```bash
-export OPENAI_API_KEY=sk-...
-export GDEX_API_KEY=your-gdex-key
-export CONTROL_WALLET_PRIVATE_KEY=your-wallet-key
+gclaw agent
+# Interactive CLI mode — type messages, agent responds
+# Press Ctrl+C to exit
 ```
 
-### 3. Test with a single message
+Or send a single message:
 
 ```bash
 gclaw agent -m "What is your current GMAC balance?"
 ```
 
-### 4. Start interactive chat
-
-```bash
-gclaw agent
-# Opens interactive REPL
-# Type messages, agent responds with reasoning + tool calls
-# Press Ctrl+C to exit
-```
-
-### 5. Start gateway mode (web + channels + cron + health)
+### 4. Start gateway mode (web dashboard + channels + cron)
 
 ```bash
 gclaw gateway
-# Web dashboard: http://localhost:18790
-# Health endpoint: http://localhost:18790/health
-# Channels (Telegram, Discord) connect automatically
+# Living Dashboard: http://127.0.0.1:18790/dashboard
+# Health endpoint: http://127.0.0.1:18790/health
+# Channels (Telegram, Discord, etc.) connect automatically
 # Cron jobs fire on schedule
 ```
 
@@ -175,112 +202,133 @@ gclaw gateway
 
 ## Configuration Reference
 
-Gclaw is configured via `~/.gclaw/config.json`. Override any field with environment variables.
+Gclaw is configured via `~/.gclaw/config.json`. Environment variables override config values. All sensitive keys can be set via environment: e.g. `GCLAW_TOOLS_GDEX_API_KEY`, `GCLAW_CHANNELS_TELEGRAM_TOKEN`.
+
+See [`config/config.example.json`](https://github.com/GemachDAO/Gclaw/blob/main/config/config.example.json) for the full annotated configuration.
+
+### Key configuration sections
+
+| Section | Purpose |
+|---|---|
+| `agents.defaults` | Workspace path, model, token limits |
+| `model_list` | LLM provider definitions (name, model, api_key, api_base) |
+| `metabolism` | GMAC balance, costs, goodwill thresholds |
+| `tools.gdex` | GDEX trading API key, wallet, chain ID, limits |
+| `swarm` | Swarm size, consensus threshold, strategy rotation |
+| `dashboard` | Enable CLI/web dashboard, refresh interval |
+| `heartbeat` | Heartbeat interval in seconds |
+| `channels` | Telegram, Discord, Slack, LINE, QQ, and other messaging channels |
+| `gateway` | HTTP gateway host and port |
+
+### Minimum config.json
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model_name": "my-model"
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "my-model",
+      "model": "openai/gpt-4o",
+      "api_key": "sk-your-key",
+      "api_base": "https://api.openai.com/v1"
+    }
+  ]
+}
+```
 
 ### Full config.json structure
 
 ```json
 {
-  "version": "1",
-  "agents": [
+  "agents": {
+    "defaults": {
+      "workspace": "~/.gclaw/workspace",
+      "restrict_to_workspace": true,
+      "model_name": "gpt4",
+      "max_tokens": 8192,
+      "temperature": 0.7,
+      "max_tool_iterations": 20
+    }
+  },
+  "model_list": [
     {
-      "name": "my-agent",
-      "provider": "openai",
-      "model": "gpt-4o",
-      "system_prompt": "You are an autonomous DeFi trading agent. Your goal is to grow the GMAC balance through profitable trades.",
-      "tools": ["gdex_trade", "gdex_portfolio", "web_search", "shell"],
-      "cron": [
-        {"schedule": "*/15 * * * *", "task": "Check portfolio and rebalance if needed"},
-        {"schedule": "0 9 * * *", "task": "Scan for high-momentum tokens on Solana"}
-      ],
-      "channels": ["telegram"],
-      "metabolism": {
-        "enabled": true,
-        "gmac_per_inference": 1,
-        "survival_threshold": 100
-      }
+      "model_name": "gpt4",
+      "model": "openai/gpt-4o",
+      "api_key": "sk-your-openai-key",
+      "api_base": "https://api.openai.com/v1"
+    },
+    {
+      "model_name": "claude-sonnet",
+      "model": "anthropic/claude-sonnet-4-20250514",
+      "api_key": "sk-ant-your-key",
+      "api_base": "https://api.anthropic.com/v1"
     }
   ],
-  "providers": {
-    "openai": {
-      "api_key": "${OPENAI_API_KEY}",
-      "base_url": "https://api.openai.com/v1"
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "token": "YOUR_BOT_TOKEN",
+      "allow_from": ["YOUR_USER_ID"]
     },
-    "anthropic": {
-      "api_key": "${ANTHROPIC_API_KEY}"
-    },
-    "google": {
-      "api_key": "${GOOGLE_AI_API_KEY}"
-    },
-    "zhipu": {
-      "api_key": "${ZHIPU_API_KEY}"
-    },
-    "openrouter": {
-      "api_key": "${OPENROUTER_API_KEY}"
-    },
-    "ollama": {
-      "base_url": "http://localhost:11434"
+    "discord": {
+      "enabled": false,
+      "token": "YOUR_BOT_TOKEN",
+      "allow_from": [],
+      "mention_only": false
     }
+  },
+  "providers": {
+    "_comment": "DEPRECATED: Use model_list instead"
+  },
+  "tools": {
+    "web": {
+      "brave": { "enabled": false, "api_key": "", "max_results": 5 },
+      "duckduckgo": { "enabled": true, "max_results": 5 }
+    },
+    "gdex": {
+      "enabled": true,
+      "api_key": "",
+      "default_chain_id": 1,
+      "max_trade_size_sol": 0.01,
+      "auto_trade": false
+    }
+  },
+  "heartbeat": {
+    "enabled": true,
+    "interval": 30
   },
   "metabolism": {
     "enabled": true,
-    "gmac_token_address": "...",
-    "wallet_private_key": "${CONTROL_WALLET_PRIVATE_KEY}",
     "initial_gmac": 1000,
-    "replenish_on_profit": true
-  },
-  "replication": {
-    "enabled": false,
-    "max_children": 3,
-    "min_gmac_to_replicate": 5000,
-    "mutation_rate": 0.1
+    "heartbeat_cost": 0.1,
+    "inference_cost_per_1k_tokens": 0.5,
+    "survival_threshold": 50,
+    "thresholds": {
+      "replicate": 50,
+      "self_recode": 100,
+      "swarm_leader": 200,
+      "architect": 500
+    }
   },
   "swarm": {
-    "enabled": false,
-    "role": "worker",
-    "coordinator_url": "http://localhost:18791",
-    "consensus_threshold": 0.66
+    "enabled": true,
+    "max_swarm_size": 5,
+    "consensus_threshold": 0.6,
+    "signal_aggregation": "majority",
+    "strategy_rotation": true
   },
-  "channels": {
-    "telegram": {
-      "token": "${TELEGRAM_BOT_TOKEN}",
-      "allowed_users": []
-    },
-    "discord": {
-      "token": "${DISCORD_BOT_TOKEN}",
-      "guild_id": "",
-      "channel_id": ""
-    }
-  },
-  "tools": {
-    "gdex": {
-      "api_key": "${GDEX_API_KEY}",
-      "default_chain": "solana"
-    },
-    "shell": {
-      "enabled": true,
-      "allowed_commands": ["ls", "cat", "echo", "date", "curl"]
-    },
-    "web": {
-      "enabled": true,
-      "max_pages_per_session": 10
-    },
-    "filesystem": {
-      "enabled": true,
-      "allowed_paths": ["~/gclaw-workspace"]
-    }
+  "dashboard": {
+    "enabled": true,
+    "web_enabled": true,
+    "refresh_interval": 10
   },
   "gateway": {
-    "port": 18790,
-    "host": "localhost",
-    "enable_web_dashboard": true,
-    "enable_api": true,
-    "cors_origins": ["http://localhost:3000"]
-  },
-  "recode": {
-    "enabled": false,
-    "require_approval": true,
-    "max_prompt_length": 4096
+    "host": "127.0.0.1",
+    "port": 18790
   }
 }
 ```
@@ -289,16 +337,19 @@ Gclaw is configured via `~/.gclaw/config.json`. Override any field with environm
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `agents[].provider` | LLM provider name | `zhipu` |
-| `agents[].model` | Model identifier | `glm-4.7` |
-| `agents[].system_prompt` | Agent's base instructions | Built-in survival prompt |
-| `agents[].tools` | Enabled tool list | `["gdex_trade", "shell", "web"]` |
-| `agents[].cron` | Scheduled task definitions | `[]` |
+| `agents.defaults.model_name` | Default model name (references `model_list`) | `gpt4` |
+| `agents.defaults.max_tokens` | Max tokens per response | `8192` |
+| `agents.defaults.workspace` | Workspace directory | `~/.gclaw/workspace` |
+| `model_list[].model_name` | Unique name for this model | — |
+| `model_list[].model` | Provider/model string (e.g. `openai/gpt-4o`) | — |
+| `model_list[].api_key` | API key for this model | — |
+| `model_list[].api_base` | API base URL | Provider default |
 | `metabolism.enabled` | Enable GMAC metabolism | `true` |
-| `metabolism.gmac_per_inference` | GMAC cost per LLM call | `1` |
-| `replication.enabled` | Enable self-replication | `false` |
-| `swarm.enabled` | Enable swarm mode | `false` |
-| `swarm.role` | `coordinator` or `worker` | `worker` |
+| `metabolism.initial_gmac` | Starting GMAC balance | `1000` |
+| `metabolism.survival_threshold` | Hibernation trigger | `50` |
+| `swarm.enabled` | Enable swarm mode | `true` |
+| `swarm.consensus_threshold` | Required agreement ratio | `0.6` |
+| `dashboard.web_enabled` | Enable web dashboard | `true` |
 | `gateway.port` | HTTP gateway port | `18790` |
 
 ---
@@ -535,23 +586,48 @@ Configure cron tasks for autonomous trading:
 ### Telegram
 
 1. Create a bot via [@BotFather](https://t.me/BotFather)
-2. Set `TELEGRAM_BOT_TOKEN` in your `.env`
-3. Start gateway: `gclaw gateway`
-4. Message your bot directly to chat with the agent
+2. Configure in `config.json`:
 
-```bash
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF gclaw gateway
+```json
+{
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "token": "YOUR_BOT_TOKEN",
+      "allow_from": ["YOUR_USER_ID"]
+    }
+  }
+}
 ```
+
+3. Start gateway: `gclaw gateway`
 
 ### Discord
 
 1. Create a Discord application and bot at https://discord.com/developers
-2. Set `DISCORD_BOT_TOKEN`, `guild_id`, and `channel_id` in config
-3. Start gateway: `gclaw gateway`
+2. Enable **MESSAGE CONTENT INTENT**
+3. Configure in `config.json`:
 
-### QQ / WhatsApp
+```json
+{
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "token": "YOUR_BOT_TOKEN",
+      "allow_from": ["YOUR_USER_ID"],
+      "mention_only": false
+    }
+  }
+}
+```
 
-See full documentation at https://github.com/GemachDAO/Gclaw for QQ and WhatsApp integration (requires additional setup).
+### Slack / LINE / QQ / WhatsApp / DingTalk / Feishu / WeCom
+
+See full channel documentation at https://github.com/GemachDAO/Gclaw for setup instructions for additional platforms.
+
+### CLI (default)
+
+No channel config needed — `gclaw agent` starts an interactive CLI session directly.
 
 ---
 
@@ -566,13 +642,12 @@ gclaw gateway
 **Services started:**
 | Service | Endpoint / Port |
 |---------|----------------|
-| Web Dashboard | `http://localhost:18790/` |
-| REST API | `http://localhost:18790/api/v1/` |
-| Health Check | `http://localhost:18790/health` |
-| Metrics | `http://localhost:18790/metrics` |
+| Living Dashboard | `http://127.0.0.1:18790/dashboard` |
+| Health Check | `http://127.0.0.1:18790/health` |
 | Telegram Bot | (webhook or polling) |
 | Discord Bot | (websocket) |
 | Cron Scheduler | (internal) |
+| Heartbeat | (internal) |
 
 **Health check response:**
 
@@ -591,60 +666,49 @@ gclaw gateway
 
 ## Swarm Mode
 
-Run multiple coordinated Gclaw agents.
+Run multiple coordinated Gclaw agents. Swarm leadership is unlocked at goodwill ≥ 200.
 
-### Coordinator setup
-
-```json
-{
-  "swarm": {
-    "enabled": true,
-    "role": "coordinator",
-    "port": 18791,
-    "consensus_threshold": 0.66,
-    "strategy_rotation_interval": "1h"
-  }
-}
-```
-
-```bash
-gclaw gateway --config coordinator.json
-```
-
-### Worker setup
+### Enable swarm in config
 
 ```json
 {
   "swarm": {
     "enabled": true,
-    "role": "worker",
-    "coordinator_url": "http://coordinator-host:18791"
+    "max_swarm_size": 5,
+    "consensus_threshold": 0.6,
+    "signal_aggregation": "majority",
+    "strategy_rotation": true,
+    "rebalance_interval": 60,
+    "shared_wallet_mode": false
   }
 }
 ```
 
 ### Swarm capabilities
 
-- **Task distribution**: Coordinator assigns work to available workers
-- **Consensus voting**: Strategy changes require 66% worker agreement
-- **Strategy rotation**: Swarm cycles through trading strategies based on performance
-- **Fault tolerance**: Workers drop in/out; coordinator handles reconnection
+- **Consensus voting**: agents submit trade signals; a configurable threshold must agree before execution
+- **Strategy rotation**: each child agent runs a distinct trading strategy; strategies rotate on a schedule
+- **Signal aggregation**: "majority", "weighted", or "unanimous" modes
+- **In-process coordination**: registered child workspaces coordinate inside a live runtime
 
 ---
 
 ## LLM Provider Configuration
 
+Gclaw uses the `model_list` array for LLM provider definitions. Any OpenAI-compatible provider works — just change `model`, `api_key`, and `api_base`. The legacy `providers` section is deprecated.
+
 ### OpenAI
 
 ```json
 {
-  "providers": {
-    "openai": {
-      "api_key": "${OPENAI_API_KEY}",
-      "model": "gpt-4o",
-      "base_url": "https://api.openai.com/v1"
+  "model_list": [
+    {
+      "model_name": "gpt4",
+      "model": "openai/gpt-4o",
+      "api_key": "sk-your-key",
+      "api_base": "https://api.openai.com/v1"
     }
-  }
+  ]
 }
 ```
 
@@ -652,64 +716,80 @@ gclaw gateway --config coordinator.json
 
 ```json
 {
-  "providers": {
-    "anthropic": {
-      "api_key": "${ANTHROPIC_API_KEY}",
-      "model": "claude-3-5-sonnet-20241022"
+  "model_list": [
+    {
+      "model_name": "claude",
+      "model": "anthropic/claude-sonnet-4-20250514",
+      "api_key": "sk-ant-your-key",
+      "api_base": "https://api.anthropic.com/v1"
     }
-  }
+  ]
 }
 ```
 
-### Google (Gemini)
+### OpenRouter (100+ models)
 
 ```json
 {
-  "providers": {
-    "google": {
-      "api_key": "${GOOGLE_AI_API_KEY}",
-      "model": "gemini-1.5-pro"
+  "model_list": [
+    {
+      "model_name": "openrouter",
+      "model": "openrouter/auto",
+      "api_key": "sk-or-v1-your-key",
+      "api_base": "https://openrouter.ai/api/v1"
     }
-  }
+  ]
 }
 ```
 
-### ZhiPu (default)
+### DeepSeek
 
 ```json
 {
-  "providers": {
-    "zhipu": {
-      "api_key": "${ZHIPU_API_KEY}",
-      "model": "glm-4.7"
+  "model_list": [
+    {
+      "model_name": "deepseek",
+      "model": "deepseek/deepseek-chat",
+      "api_key": "sk-your-key"
     }
-  }
+  ]
 }
 ```
 
-### Ollama (local)
+### Ollama (local — no API key needed)
 
 ```json
 {
-  "providers": {
-    "ollama": {
-      "base_url": "http://localhost:11434",
-      "model": "llama3.2"
+  "model_list": [
+    {
+      "model_name": "local",
+      "model": "ollama/llama3.2",
+      "api_base": "http://localhost:11434/v1"
     }
-  }
+  ]
 }
 ```
 
-### OpenRouter
+### Load balancing
+
+Multiple entries with the same `model_name` are automatically load-balanced:
 
 ```json
 {
-  "providers": {
-    "openrouter": {
-      "api_key": "${OPENROUTER_API_KEY}",
-      "model": "meta-llama/llama-3.2-90b-vision-instruct"
+  "model_list": [
+    {
+      "model_name": "gpt4",
+      "model": "openai/gpt-4o",
+      "api_key": "sk-key1",
+      "api_base": "https://api1.example.com/v1"
+    },
+    {
+      "model_name": "gpt4",
+      "model": "openai/gpt-4o",
+      "api_key": "sk-key2",
+      "api_base": "https://api2.example.com/v1"
     }
-  }
+  ]
 }
 ```
 
@@ -737,18 +817,16 @@ Before any trade is submitted the agent must complete the following preflight st
 
 The following credentials and libraries are required for live trading. The agent must verify they are installed and configured before executing any trade, and fail closed with an actionable remediation message when they are missing.
 
-| Dependency | Environment Variable | Remediation |
-|-----------|---------------------|-------------|
-| GDEX API key | `GDEX_API_KEY` | Set `GDEX_API_KEY` in `.env` or `config.json` |
-| Control wallet private key | `CONTROL_WALLET_PRIVATE_KEY` | Set `CONTROL_WALLET_PRIVATE_KEY` in `.env` or `config.json` |
-| LLM provider credential | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / etc. | Set at least one LLM provider API key |
-| GDEX SDK library | `@gdexsdk/gdex-skill` or Go GDEX module | Install via `go get` or verify the gclaw binary bundles it |
-| Chain RPC endpoint | (per-chain config) | Ensure the target chain RPC is reachable |
+| Dependency | Source | Remediation |
+|-----------|--------|-------------|
+| LLM provider credential | `model_list[].api_key` in config or `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / etc. env var | Configure at least one LLM provider in `model_list` or set an env var |
+| GDEX trading (optional) | `tools.gdex` in config.json | GDEX uses a shared API key by default; wallets auto-generate on first run |
+| Chain RPC endpoint (optional) | Per-chain config or `GCLAW_ETHEREUM_RPC_URL` etc. | Built-in public RPCs are provided for Ethereum, Arbitrum, and Base |
 
-If any required credential or library is missing, the agent **must stop** and print an error such as:
+If no LLM provider is configured, the agent **must stop** and print an error such as:
 
 ```
-RuntimeError: GDEX_API_KEY is required — set it in .env or config.json
+RuntimeError: No LLM provider API key is set. Configure model_list in config.json or set at least one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, ...
 ```
 
 ---
@@ -800,16 +878,18 @@ For programmatic use, call `scripts/agent.py --unwind-all --yes-live`.
 
 ## Critical Notes / Gotchas
 
-1. **Never commit real private keys** — always use `${ENV_VAR}` references in config.json
+1. **Never commit real private keys** — use placeholder values in config.example.json; real keys go in `~/.gclaw/config.json` (gitignored)
 2. **GMAC balance is real money** — monitor it; low balance = agent hibernation
-3. **Self-replication is disabled by default** — enable only when you understand the cost implications
-4. **Self-recoding requires approval by default** — agents can propose prompt changes but won't apply without confirmation unless `require_approval: false`
-5. **Swarm mode multiplies costs** — each worker agent has its own GMAC budget
+3. **Self-replication requires goodwill ≥ 50** — earned through profitable trades and completed tasks
+4. **Self-recoding requires goodwill ≥ 100** — agents can modify their own prompts and cron jobs
+5. **Swarm mode multiplies costs** — each child agent has its own GMAC budget
 6. **Gateway port 18790** — ensure it's not exposed to the public internet without auth
-7. **Default model is `glm-4.7`** (ZhiPu) — set your preferred model in config if using a different provider
+7. **LLM config uses `model_list`** — the `providers` section is deprecated; use `model_list` with `model_name`, `model`, `api_key`, `api_base`
 8. **Config file location**: `~/.gclaw/config.json` — `gclaw onboard` creates it on first run
-9. **Trading is irreversible** — use dry-run mode or paper trading to test strategies before going live
-10. **x402 payments** — Gclaw supports HTTP 402 micropayment protocol for paid API calls; ensure wallet is funded
+9. **Trading is irreversible** — use dry-run mode to test strategies before going live with `--yes-live`
+10. **GDEX uses shared API key by default** — wallets auto-generate on first run; fund the managed wallet shown in `gclaw status`
+11. **Venture Architect** (goodwill ≥ 5000) — can create Foundry contract scaffolds with a GMAC buy-and-burn policy
+12. **Living Dashboard** — always available at `http://127.0.0.1:18790/dashboard` when running in gateway mode
 
 ---
 

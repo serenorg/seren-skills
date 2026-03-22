@@ -180,7 +180,7 @@ if [[ -f "$CONFIG_EXAMPLE" ]]; then
 import json, sys
 with open('${CONFIG_EXAMPLE}', 'r') as f:
     d = json.load(f)
-missing = [k for k in ['agents', 'providers'] if k not in d]
+missing = [k for k in ['agents', 'model_list'] if k not in d]
 if missing:
     print('MISSING:' + ','.join(missing))
     sys.exit(1)
@@ -188,7 +188,7 @@ print('OK')
 " 2>/dev/null || echo "ERROR")
 
     if [[ "$KEYS_CHECK" == "OK" ]]; then
-      pass "config.example.json has required keys: agents, providers"
+      pass "config.example.json has required keys: agents, model_list"
     else
       fail "config.example.json missing required keys" "$KEYS_CHECK"
     fi
@@ -200,16 +200,16 @@ fi
 # C3. .env.example has expected variable names
 ENV_EXAMPLE="${SKILL_ROOT}/.env.example"
 if [[ -f "$ENV_EXAMPLE" ]]; then
-  for var in OPENAI_API_KEY GDEX_API_KEY CONTROL_WALLET_PRIVATE_KEY TELEGRAM_BOT_TOKEN GCLAW_HOME; do
+  for var in OPENAI_API_KEY ANTHROPIC_API_KEY TELEGRAM_BOT_TOKEN; do
     assert "grep -q '${var}' '${ENV_EXAMPLE}'" \
       ".env.example contains ${var} variable"
   done
 fi
 
-# C4. config.example.json uses env var placeholders (not hardcoded secrets)
+# C4. config.example.json uses placeholder values (not real secrets)
 if [[ -f "$CONFIG_EXAMPLE" ]]; then
-  assert "grep -q '\${' '${CONFIG_EXAMPLE}'" \
-    "config.example.json uses \${ENV_VAR} placeholders for secrets"
+  assert "grep -q 'your' '${CONFIG_EXAMPLE}' || grep -q 'YOUR' '${CONFIG_EXAMPLE}'" \
+    "config.example.json uses placeholder values for secrets"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════

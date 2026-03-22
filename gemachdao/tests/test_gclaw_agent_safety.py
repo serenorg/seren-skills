@@ -63,54 +63,61 @@ def test_yes_live_without_config_is_not_live():
 # ---------------------------------------------------------------------------
 
 
-def test_missing_gdex_api_key_fails_closed():
-    """Missing GDEX_API_KEY must raise RuntimeError with actionable message."""
-    env = {
-        "GDEX_API_KEY": "",
-        "CONTROL_WALLET_PRIVATE_KEY": "test-key",
-        "OPENAI_API_KEY": "test-key",
-    }
-    with mock.patch.dict(os.environ, env, clear=False):
-        try:
-            MODULE.validate_dependencies()
-            assert False, "Should have raised RuntimeError"
-        except RuntimeError as exc:
-            assert "GDEX_API_KEY" in str(exc)
-            assert "missing" in str(exc).lower() or "required" in str(exc).lower()
-
-
-def test_missing_wallet_key_fails_closed():
-    """Missing CONTROL_WALLET_PRIVATE_KEY must raise RuntimeError."""
-    env = {
-        "GDEX_API_KEY": "test-key",
-        "CONTROL_WALLET_PRIVATE_KEY": "",
-        "OPENAI_API_KEY": "test-key",
-    }
-    with mock.patch.dict(os.environ, env, clear=False):
-        try:
-            MODULE.validate_dependencies()
-            assert False, "Should have raised RuntimeError"
-        except RuntimeError as exc:
-            assert "CONTROL_WALLET_PRIVATE_KEY" in str(exc)
-
-
 def test_missing_llm_provider_fails_closed():
-    """Missing all LLM provider keys must raise RuntimeError."""
+    """Missing all LLM provider keys and no model_list must raise RuntimeError."""
     env = {
-        "GDEX_API_KEY": "test-key",
-        "CONTROL_WALLET_PRIVATE_KEY": "test-key",
         "OPENAI_API_KEY": "",
         "ANTHROPIC_API_KEY": "",
-        "GOOGLE_AI_API_KEY": "",
+        "GEMINI_API_KEY": "",
         "ZHIPU_API_KEY": "",
         "OPENROUTER_API_KEY": "",
+        "CEREBRAS_API_KEY": "",
     }
+    config = {"agents": {"defaults": {"model_name": "gpt4"}}, "model_list": []}
     with mock.patch.dict(os.environ, env, clear=False):
         try:
-            MODULE.validate_dependencies()
+            MODULE.validate_dependencies(config)
             assert False, "Should have raised RuntimeError"
         except RuntimeError as exc:
             assert "LLM provider" in str(exc)
+
+
+def test_model_list_satisfies_llm_requirement():
+    """A config with model_list containing api_key satisfies the LLM requirement."""
+    env = {
+        "OPENAI_API_KEY": "",
+        "ANTHROPIC_API_KEY": "",
+        "GEMINI_API_KEY": "",
+        "ZHIPU_API_KEY": "",
+        "OPENROUTER_API_KEY": "",
+        "CEREBRAS_API_KEY": "",
+    }
+    config = {
+        "agents": {"defaults": {"model_name": "gpt4"}},
+        "model_list": [
+            {"model_name": "gpt4", "model": "openai/gpt-4o", "api_key": "sk-test"}
+        ],
+    }
+    with mock.patch.dict(os.environ, env, clear=False), \
+         mock.patch("shutil.which", return_value="/usr/local/bin/gclaw"):
+        # Should NOT raise — model_list satisfies the LLM requirement
+        MODULE.validate_dependencies(config)
+
+
+def test_env_var_satisfies_llm_requirement():
+    """A single LLM env var satisfies the LLM requirement even without model_list."""
+    env = {
+        "OPENAI_API_KEY": "test-key",
+        "ANTHROPIC_API_KEY": "",
+        "GEMINI_API_KEY": "",
+        "ZHIPU_API_KEY": "",
+        "OPENROUTER_API_KEY": "",
+        "CEREBRAS_API_KEY": "",
+    }
+    config = {"agents": {"defaults": {}}, "model_list": []}
+    with mock.patch.dict(os.environ, env, clear=False), \
+         mock.patch("shutil.which", return_value="/usr/local/bin/gclaw"):
+        MODULE.validate_dependencies(config)
 
 
 # ---------------------------------------------------------------------------
@@ -147,14 +154,13 @@ def test_cancel_all_orders_returns_confirmation():
 
 def test_emergency_unwind_with_yes_live(tmp_path):
     """Full unwind path with --yes-live succeeds when dependencies are met."""
-    config = {"execution": {"live_mode": True}}
-    args = mock.MagicMock(yes_live=True, allow_live=False, unwind_all=True)
-    env = {
-        "GDEX_API_KEY": "test-key",
-        "CONTROL_WALLET_PRIVATE_KEY": "test-key",
-        "OPENAI_API_KEY": "test-key",
+    config = {
+        "execution": {"live_mode": True},
+        "model_list": [
+            {"model_name": "gpt4", "model": "openai/gpt-4o", "api_key": "sk-test"}
+        ],
     }
-    with mock.patch.dict(os.environ, env, clear=False), \
-         mock.patch("shutil.which", return_value="/usr/local/bin/gclaw"):
+    args = mock.MagicMock(yes_live=True, allow_live=False, unwind_all=True)
+    with mock.patch("shutil.which", return_value="/usr/local/bin/gclaw"):
         exit_code = MODULE.unwind_all(config, args)
         assert exit_code == 0
