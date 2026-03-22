@@ -11,12 +11,24 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 
 Automated grid trading bot for Kraken that profits from BTC volatility using a mechanical, non-directional strategy.
 
+## On Invoke
+
+**Immediately run a dry-run grid simulation without asking.** Do not present a menu of modes. Execute:
+
+```bash
+cd ~/.config/seren/skills/grid-trader && source .venv/bin/activate && python3 scripts/agent.py dry-run --config config.json --cycles 5
+```
+
+Display the full dry-run results to the user. Only after results are displayed, present available next steps (live mode with `--allow-live`). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## What This Skill Provides
 
 - Automated Kraken grid trading with dry-run and live modes
 - Pair selection support (single pair or candidate list)
+- Adaptive grid centering, spacing/order-size tuning, and persistent learning state
+- Shadow evaluation with gated promotion and rollback
 - JSONL logs for setup, orders, fills, positions, and errors
-- MCP-native SerenDB persistence for sessions, events, orders, fills, and position snapshots
+- MCP-native SerenDB persistence for sessions, events, orders, fills, position snapshots, adaptive runtime state, telemetry, reviews, and runtime locks
 
 ## What is Grid Trading?
 
@@ -30,6 +42,37 @@ Grid trading places buy and sell orders at regular price intervals (the "grid").
 4. Install dependencies: `pip install -r requirements.txt`
 5. Run: `python scripts/agent.py`
 
+## Trade Execution Contract
+
+When the user says `sell`, `close`, `exit`, `unwind`, or `flatten`, treat that as an immediate operator instruction to stop new grid entries and cancel open Kraken orders for the configured pair. If the user did not identify which pair or campaign to stop, ask only the minimum clarifying question needed to identify it.
+
+## Pre-Trade Checklist
+
+Before any live `start --allow-live` run:
+
+1. Fetch balances and the latest Kraken price for the active pair.
+2. Verify `SEREN_API_KEY` and Kraken publisher credentials are loaded.
+3. Verify grid spacing, quote reserve, position size, and drawdown caps still fit the account.
+4. If any credential, dependency, or market probe fails, stop here and fail closed instead of placing orders.
+
+## Dependency Validation
+
+Dependency validation is required before live trading. Verify `SEREN_API_KEY`, Kraken publisher credentials, and Python dependencies from `requirements.txt` are installed and loaded. If credentials are missing, the pair cannot be queried, or the publisher is unavailable, the runtime must stop with an error instead of submitting orders.
+
+## Live Safety Opt-In
+
+Default mode is dry-run. Live trading requires:
+
+- `python scripts/agent.py start --config config.json --allow-live`
+- or `python scripts/agent.py cycle --config config.json --allow-live`
+- the normal startup risk checks to pass
+
+The `--allow-live` flag is a startup-only opt-in for that process. It is not a per-order approval prompt.
+
+## Emergency Exit Path
+
+To stop trading immediately, run `python scripts/agent.py stop --config config.json`. The stop path cancels all open orders for the configured pair, clears the active grid state, and leaves held spot inventory untouched until the operator chooses how to liquidate it.
+
 ## SerenDB Persistence (MCP-native)
 
 Set these optional environment variables in `.env`:
@@ -41,11 +84,11 @@ Set these optional environment variables in `.env`:
 - `SERENDB_AUTO_CREATE` (default: `true`)
 - `SEREN_MCP_COMMAND` (default: `seren-mcp`)
 
-Persistence is best-effort: if SerenDB/MCP is unavailable, trading still runs and logs locally.
+Adaptive mode requires SerenDB/MCP. If the persistence layer is unavailable, the runtime fails closed rather than falling back to local adaptive state files, runtime lock files, or local review/alert telemetry files.
 
 ## Configuration
 
-See `config.example.json` for available parameters including grid spacing, order size, and trading pair selection.
+See `config.example.json` for available parameters including grid spacing, order size, trading pair selection, daily loss caps, cooldowns, shadow thresholds, and adaptive lock lease settings.
 
 ## Disclaimer
 
@@ -53,7 +96,7 @@ This bot trades real money. Use at your own risk. Past performance does not guar
 
 ## Seren-Cron Integration
 
-Use `seren-cron` to run this skill on a schedule — no terminal windows to keep open, no daemons, no permanent computer changes required. Seren-cron is a cloud scheduler that calls your local trigger server on a cron schedule. Grid traders run as continuous processes; seren-cron can trigger periodic cycle checks.
+Use `seren-cron` to run this skill on a schedule. The preferred automation path is one-shot scheduling: a fast adaptive `cycle`, a `safety-check`, and a weekly `review`. All three share a runtime lock so overlapping cron invocations fail closed instead of double-submitting orders.
 
 **Requirements:** Seren Desktop login or a valid `SEREN_API_KEY`.
 
@@ -96,7 +139,8 @@ If jobs for this skill already exist, show them to the user and ask:
 Start the webhook server that seren-cron will call on each scheduled tick:
 
 ```bash
-SEREN_API_KEY="$SEREN_API_KEY" python3 scripts/run_agent_server.py --config config.json --port 8080
+SEREN_API_KEY="$SEREN_API_KEY" KRAKEN_GRID_WEBHOOK_SECRET="$KRAKEN_GRID_WEBHOOK_SECRET" \
+python3 scripts/run_agent_server.py --config config.json --port 8080
 ```
 
 This process runs in your terminal session. When you close the terminal, it stops — **that is expected and correct**. Seren-cron handles the scheduling; your local server handles execution.
@@ -105,47 +149,42 @@ This process runs in your terminal session. When you close the terminal, it stop
 
 With the server running, create the scheduled job:
 
-```text
-publisher: seren-cron
-path:      /jobs
-method:    POST
-body: {
-  "name":            "kraken-grid-trader-live",
-  "url":             "http://localhost:8080/run",
-  "method":          "POST",
-  "cron_expression": "*/5 * * * *",
-  "timezone":        "UTC",
-  "enabled":         true,
-  "timeout_seconds": 60
-}
+```bash
+python3 scripts/setup_cron.py create \
+  --runner-url "https://YOUR_PUBLIC_RUNNER_URL" \
+  --webhook-secret "$KRAKEN_GRID_WEBHOOK_SECRET"
 ```
 
-Save the returned `job_id` — you need it to pause, resume, or delete the job later.
+This creates or updates:
+
+- `kraken-grid-trader-cycle`
+- `kraken-grid-trader-safety-check`
+- `kraken-grid-trader-weekly-review`
 
 ### Step 5 — Manage the schedule
 
 **List all active jobs:**
 
-```text
-publisher: seren-cron, path: /jobs, method: GET
+```bash
+python3 scripts/setup_cron.py list
 ```
 
 **Pause:**
 
-```text
-publisher: seren-cron, path: /jobs/{job_id}/pause, method: POST
+```bash
+python3 scripts/setup_cron.py pause --job-id <job_id>
 ```
 
 **Resume:**
 
-```text
-publisher: seren-cron, path: /jobs/{job_id}/resume, method: POST
+```bash
+python3 scripts/setup_cron.py resume --job-id <job_id>
 ```
 
 **Stop permanently:**
 
-```text
-publisher: seren-cron, path: /jobs/{job_id}, method: DELETE
+```bash
+python3 scripts/setup_cron.py delete --job-id <job_id>
 ```
 
 ### Insufficient Funds Guard

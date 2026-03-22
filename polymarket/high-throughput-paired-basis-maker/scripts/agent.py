@@ -26,6 +26,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 from polymarket_live import (
     DEFAULT_STALE_ORDER_MAX_AGE_SECONDS,
     DEFAULT_UNWIND_BEFORE_RESOLUTION_SECONDS,
+    build_marketable_sell_order,
     cancel_stale_orders,
     positions_by_key,
     DirectClobTrader,
@@ -42,6 +43,7 @@ from pair_stateful_replay import (
     snapshot_from_live_book,
     write_telemetry_records,
 )
+from normalized_trade_store import NormalizedTradingStore
 
 
 DISCLAIMER = (
@@ -200,8 +202,21 @@ def load_json(path: Path) -> dict[str, Any] | list[Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return path
+
+
 def load_config(config_path: str) -> dict[str, Any]:
-    payload = load_json(Path(config_path))
+    payload = load_json(_bootstrap_config_path(config_path))
     return payload if isinstance(payload, dict) else {}
 
 
@@ -1075,6 +1090,107 @@ def _pair_optimization_candidates(config: dict[str, Any], total_markets: int) ->
             },
             "backtest": {},
         },
+        # --- 10 new candidates below ---
+        {
+            "name": "defensive-wide-entry",
+            "subset_size": base_pairs,
+            "strategy": {
+                "basis_entry_bps": round(p.basis_entry_bps * 1.3, 4),
+                "basis_exit_bps": round(p.basis_exit_bps * 1.2, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "narrow-top2-concentration",
+            "subset_size": max(2, min(2, total_markets)),
+            "strategy": {
+                "pairs_max": max(2, min(2, total_markets)),
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 1.4, 4),
+                "max_notional_per_pair_usd": round(p.max_notional_per_pair_usd * 1.3, 4),
+                "max_leg_notional_usd": round(p.max_leg_notional_usd * 1.3, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "aggressive-entry",
+            "subset_size": base_pairs,
+            "strategy": {
+                "basis_entry_bps": round(max(10.0, p.basis_entry_bps * 0.6), 4),
+                "expected_convergence_ratio": round(clamp(p.expected_convergence_ratio + 0.2, 0.0, 1.0), 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "passive-conservative",
+            "subset_size": base_pairs,
+            "strategy": {
+                "basis_entry_bps": round(p.basis_entry_bps * 1.15, 4),
+                "basis_exit_bps": round(p.basis_exit_bps * 1.3, 4),
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 0.8, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "optimistic-costs",
+            "subset_size": base_pairs,
+            "strategy": {
+                "expected_unwind_cost_bps": round(max(0.5, p.expected_unwind_cost_bps * 0.7), 4),
+                "adverse_selection_bps": round(max(0.3, p.adverse_selection_bps * 0.7), 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "tight-exit-fast-convergence",
+            "subset_size": base_pairs,
+            "strategy": {
+                "basis_exit_bps": round(max(0.0, p.basis_exit_bps * 0.6), 4),
+                "expected_convergence_ratio": round(clamp(p.expected_convergence_ratio + 0.25, 0.0, 1.0), 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "broad-diversified",
+            "subset_size": broad_pairs,
+            "strategy": {
+                "pairs_max": broad_pairs,
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 0.75, 4),
+                "max_notional_per_pair_usd": round(p.max_notional_per_pair_usd * 0.7, 4),
+                "max_total_notional_usd": round(p.max_total_notional_usd * 1.3, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "mid-edge-relaxed",
+            "subset_size": base_pairs,
+            "strategy": {
+                "min_edge_bps": round(max(0.5, p.min_edge_bps * 0.5), 4),
+                "basis_entry_bps": round(max(10.0, p.basis_entry_bps * 0.85), 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "high-notional-concentrated",
+            "subset_size": focus_pairs,
+            "strategy": {
+                "pairs_max": focus_pairs,
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 1.5, 4),
+                "max_notional_per_pair_usd": round(p.max_notional_per_pair_usd * 1.5, 4),
+                "max_leg_notional_usd": round(p.max_leg_notional_usd * 1.4, 4),
+            },
+            "backtest": {},
+        },
+        {
+            "name": "balanced-moderate",
+            "subset_size": base_pairs,
+            "strategy": {
+                "basis_entry_bps": round(max(10.0, p.basis_entry_bps * 0.9), 4),
+                "basis_exit_bps": round(max(0.0, p.basis_exit_bps * 0.9), 4),
+                "expected_convergence_ratio": round(clamp(p.expected_convergence_ratio + 0.08, 0.0, 1.0), 4),
+                "base_pair_notional_usd": round(p.base_pair_notional_usd * 1.05, 4),
+                "max_total_notional_usd": round(p.max_total_notional_usd * 1.1, 4),
+            },
+            "backtest": {},
+        },
     ]
 
 
@@ -1091,9 +1207,19 @@ def _check_serenbucks_balance(api_key: str) -> float:
         )
         with urlopen(request, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
-            sb = data.get("data") or data.get("serenbucks") or {}
-            raw = sb.get("balance_usd") or sb.get("funded_balance_usd") or "0"
-            return _safe_float(str(raw).replace("$", "").replace(",", ""), 0.0)
+            if not isinstance(data, dict):
+                return 0.0
+            sb = data.get("data")
+            if not isinstance(sb, dict):
+                sb = data.get("serenbucks")
+            if not isinstance(sb, dict):
+                sb = data
+            for field in ("funded_balance_usd", "balance_usd"):
+                raw = sb.get(field)
+                parsed = _safe_float(str(raw).replace("$", "").replace(",", ""), -1.0)
+                if parsed >= 0.0:
+                    return parsed
+            return 0.0
     except Exception as exc:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
@@ -2004,11 +2130,31 @@ def run_unwind_all(config: dict[str, Any]) -> dict[str, Any]:
             if shares <= 0:
                 continue
             try:
-                from polymarket_live import fetch_midpoint
-                mid = fetch_midpoint(token_id, fallback_mid=0.5)
-                sell_price = round(max(0.01, mid * 0.95), 4)
-                response = trader.create_order(token_id=token_id, side="SELL", price=sell_price, size=shares, tick_size="0.01", neg_risk=False, fee_rate_bps=0)
-                sell_results.append({"token_id": token_id, "shares": shares, "price": sell_price, "response": response})
+                sell_plan = build_marketable_sell_order(token_id, shares)
+                response = trader.create_order(
+                    token_id=token_id,
+                    side="SELL",
+                    price=sell_plan["price"],
+                    size=shares,
+                    tick_size=sell_plan["tick_size"],
+                    neg_risk=sell_plan["neg_risk"],
+                    fee_rate_bps=sell_plan["fee_rate_bps"],
+                )
+                sell_results.append(
+                    {
+                        "token_id": token_id,
+                        "shares": round(shares, 6),
+                        "price": sell_plan["price"],
+                        "best_bid": sell_plan["best_bid"],
+                        "best_ask": sell_plan["best_ask"],
+                        "estimated_exit_value_usd": sell_plan["estimated_exit_value_usd"],
+                        "estimated_fill_size": sell_plan["estimated_fill_size"],
+                        "estimated_unfilled_size": sell_plan["estimated_unfilled_size"],
+                        "estimated_average_price": sell_plan["estimated_average_price"],
+                        "execution_style": sell_plan["execution_style"],
+                        "response": response,
+                    }
+                )
             except Exception as sell_exc:
                 sell_results.append({"token_id": token_id, "shares": shares, "error": str(sell_exc)})
         results["sell_results"] = sell_results
@@ -2016,6 +2162,194 @@ def run_unwind_all(config: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         results["position_error"] = str(exc)
     return results
+
+
+def _normalized_leg_rows(exposure: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for instrument_id, raw_value in exposure.items():
+        value = _safe_float(raw_value, 0.0)
+        rows.append(
+            {
+                "position_key": str(instrument_id),
+                "instrument_id": str(instrument_id),
+                "symbol": str(instrument_id),
+                "side": "LONG" if value >= 0 else "SHORT",
+                "quantity": abs(value),
+                "market_value_usd": abs(value),
+                "status": "open" if abs(value) > 0 else "flat",
+                "metadata": {"exposure_notional_usd": value},
+            }
+        )
+    return rows
+
+
+def _normalized_pair_order_events(result: dict[str, Any]) -> list[dict[str, Any]]:
+    trade = result.get("trade", result)
+    if not isinstance(trade, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for pair_trade in trade.get("pair_trades", []):
+        if not isinstance(pair_trade, dict):
+            continue
+        for index, leg in enumerate(pair_trade.get("legs", [])):
+            if not isinstance(leg, dict):
+                continue
+            rows.append(
+                {
+                    "order_id": f"{pair_trade.get('market_id')}:{index}",
+                    "instrument_id": leg.get("market_id"),
+                    "symbol": leg.get("market_id"),
+                    "side": leg.get("side"),
+                    "order_type": "quote",
+                    "event_type": "pair_quote",
+                    "status": pair_trade.get("status", "quoted"),
+                    "quantity": leg.get("notional_usd"),
+                    "notional_usd": leg.get("notional_usd"),
+                    "metadata": {
+                        "pair_market_id": pair_trade.get("pair_market_id"),
+                        "basis_bps": pair_trade.get("basis_bps"),
+                        "edge_bps": pair_trade.get("edge_bps"),
+                    },
+                }
+            )
+    live_execution = trade.get("live_execution", {})
+    if isinstance(live_execution, dict):
+        for order in live_execution.get("orders_submitted", []):
+            if not isinstance(order, dict):
+                continue
+            rows.append(
+                {
+                    "order_id": order.get("id") or order.get("order_id"),
+                    "instrument_id": order.get("token_id"),
+                    "symbol": order.get("token_id"),
+                    "side": order.get("side"),
+                    "order_type": "limit",
+                    "event_type": "order_submitted",
+                    "status": "submitted",
+                    "price": order.get("price"),
+                    "quantity": order.get("size") or order.get("shares"),
+                    "metadata": order,
+                }
+            )
+    return rows
+
+
+def _normalized_backtest_pnl(result: dict[str, Any]) -> list[dict[str, Any]]:
+    metrics = result.get("results", {})
+    if not isinstance(metrics, dict):
+        return []
+    starting = _safe_float(metrics.get("starting_bankroll_usd"), 0.0)
+    total_pnl = _safe_float(metrics.get("total_pnl_usd"), 0.0)
+    return [
+        {
+            "period_type": "backtest",
+            "net_pnl_usd": total_pnl,
+            "gross_pnl_usd": total_pnl,
+            "equity_start_usd": starting,
+            "equity_end_usd": starting + total_pnl,
+            "metadata": {
+                "return_pct": metrics.get("return_pct"),
+                "fill_events": metrics.get("fill_events"),
+            },
+        }
+    ]
+
+
+def _normalized_unwind_events(result: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for order in result.get("sell_results", []):
+        if not isinstance(order, dict):
+            continue
+        rows.append(
+            {
+                "order_id": order.get("token_id"),
+                "instrument_id": order.get("token_id"),
+                "symbol": order.get("token_id"),
+                "side": "SELL",
+                "order_type": "marketable_limit",
+                "event_type": "unwind_submitted",
+                "status": "submitted" if "error" not in order else "error",
+                "price": order.get("price"),
+                "quantity": order.get("shares"),
+                "notional_usd": order.get("estimated_exit_value_usd"),
+                "metadata": order,
+            }
+        )
+    return rows
+
+
+def _persist_normalized_result(config: dict[str, Any], result: dict[str, Any], *, run_type: str) -> None:
+    store = NormalizedTradingStore(
+        os.getenv("SERENDB_URL"),
+        skill_slug="high-throughput-paired-basis-maker",
+        venue="polymarket",
+        strategy_name="high-throughput-paired-basis-maker",
+    )
+    try:
+        mode = run_type
+        dry_run = run_type != "live"
+        summary: dict[str, Any]
+        order_events: list[dict[str, Any]] = []
+        positions: list[dict[str, Any]] = []
+        position_marks: list[dict[str, Any]] = []
+        pnl_periods: list[dict[str, Any]] = []
+        error_code = result.get("error_code")
+        error_message = result.get("message")
+        status = _safe_str(result.get("status"), "ok")
+
+        if run_type == "backtest":
+            summary = {
+                "backtest_summary": result.get("backtest_summary", {}),
+                "results": result.get("results", {}),
+            }
+            pnl_periods = _normalized_backtest_pnl(result)
+        elif run_type == "trade":
+            trade = result.get("trade", result)
+            backtest = result.get("backtest", {})
+            if isinstance(trade, dict):
+                mode = _safe_str(trade.get("mode"), "trade")
+                dry_run = bool(trade.get("dry_run", True))
+                error_code = trade.get("error_code") or error_code
+                error_message = trade.get("message") or error_message
+                status = _safe_str(trade.get("status"), status)
+                summary = dict(trade.get("strategy_summary", {}))
+                order_events = _normalized_pair_order_events(result)
+                state = trade.get("state", {})
+                if isinstance(state, dict):
+                    positions = _normalized_leg_rows(state.get("leg_exposure", {}))
+                    position_marks = _normalized_leg_rows(state.get("leg_exposure", {}))
+                live_execution = trade.get("live_execution", {})
+                if isinstance(live_execution, dict) and isinstance(live_execution.get("live_risk"), dict):
+                    pnl_periods.append(
+                        {
+                            "period_type": "live_risk",
+                            "equity_end_usd": live_execution["live_risk"].get("current_equity_usd"),
+                            "metadata": live_execution["live_risk"],
+                        }
+                    )
+            else:
+                summary = {}
+            if isinstance(backtest, dict):
+                pnl_periods.extend(_normalized_backtest_pnl(backtest))
+        else:
+            summary = {"positions_unwound": result.get("positions_unwound", 0)}
+            order_events = _normalized_unwind_events(result)
+        store.persist_completed_run(
+            mode=mode,
+            dry_run=dry_run,
+            config=config,
+            status=status,
+            summary=summary,
+            order_events=order_events,
+            positions=positions,
+            position_marks=position_marks,
+            pnl_periods=pnl_periods,
+            metadata={"run_type": run_type},
+            error_code=error_code,
+            error_message=error_message,
+        )
+    finally:
+        store.close()
 
 
 def main() -> int:
@@ -2027,6 +2361,7 @@ def main() -> int:
             result = {"status": "error", "error_code": "unwind_confirmation_required", "message": "Emergency unwind requires --yes-live."}
         else:
             result = run_unwind_all(config=config)
+        _persist_normalized_result(config, result, run_type="unwind-all")
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("status") == "ok" else 1
 
@@ -2047,6 +2382,7 @@ def main() -> int:
             backtest["config_writeback_warning"] = str(exc)
 
     if args.run_type == "backtest":
+        _persist_normalized_result(config, backtest, run_type="backtest")
         print(json.dumps(backtest, sort_keys=True))
         return 0
 
@@ -2065,6 +2401,7 @@ def main() -> int:
             "disclaimer": DISCLAIMER,
             "dry_run": True,
         }
+        _persist_normalized_result(config, payload, run_type="trade")
         print(json.dumps(payload, sort_keys=True))
         return 1
 
@@ -2083,6 +2420,7 @@ def main() -> int:
         "trade": trade,
         "disclaimer": DISCLAIMER,
     }
+    _persist_normalized_result(config, payload, run_type="trade")
     print(json.dumps(payload, sort_keys=True))
     return 0 if ok else 1
 

@@ -18,12 +18,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pytest
+
+      - name: Verify paired basis maker sidecar modules import correctly
+        run: python -m pytest tests/test_paired_basis_maker_imports.py
+
       - name: Block direct Polymarket Gamma API endpoints (must use Seren publisher)
         run: |
           set -euo pipefail
           TARGETS=(
             polymarket/maker-rebate-bot
-            polymarket/paired-market-basis-maker
             polymarket/liquidity-paired-basis-maker
             polymarket/high-throughput-paired-basis-maker
           )
@@ -37,7 +46,6 @@ jobs:
           set -euo pipefail
           CONFIGS=(
             polymarket/maker-rebate-bot/config.example.json
-            polymarket/paired-market-basis-maker/config.example.json
             polymarket/liquidity-paired-basis-maker/config.example.json
             polymarket/high-throughput-paired-basis-maker/config.example.json
           )
@@ -53,7 +61,6 @@ jobs:
           set -euo pipefail
           SCRIPTS=(
             polymarket/maker-rebate-bot/scripts/agent.py
-            polymarket/paired-market-basis-maker/scripts/agent.py
             polymarket/liquidity-paired-basis-maker/scripts/agent.py
             polymarket/high-throughput-paired-basis-maker/scripts/agent.py
           )

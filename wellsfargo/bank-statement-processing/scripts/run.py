@@ -150,7 +150,21 @@ def merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return path
+
+
 def load_config(config_path: Path, skill_root: Path) -> dict[str, Any]:
+    config_path = _bootstrap_config_path(str(config_path))
     default_config = {
         "runtime": {
             "strict_read_only": True,

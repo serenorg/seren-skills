@@ -23,11 +23,13 @@ With 15 fills per day: **$252/day or $7,560/month** (75.6% monthly return)
 ## Features
 
 - **Mechanical Strategy**: No predictions, just profit from volatility
-- **Risk Management**: Stop-loss, position limits, bankroll protection
+- **Adaptive Runtime**: Re-centers the grid, adjusts spacing/order size, and persists accepted parameters across runs
+- **Shadow Evaluation**: Scores candidate settings in the background before promotion or rollback
+- **Risk Management**: Stop-loss, daily loss caps, position limits, open-order caps, and cooldowns after loss streaks
 - **Cost Efficient**: 0.16% maker fees via Kraken
 - **Always Active**: Always has opportunities (unlike prediction markets)
-- **Audit Trail**: JSONL logs for every trade
-- **Dry-Run Mode**: Test strategy without risking capital
+- **Audit Trail**: JSONL logs for core trading activity plus SerenDB-backed adaptive runtime telemetry
+- **Dry-Run Adaptive Path**: Test adaptive decisions without placing real orders
 
 ## Quick Start
 
@@ -105,7 +107,7 @@ Bot will:
 - Place buy orders below current price
 - Place sell orders above current price
 - Automatically replace filled orders
-- Log all trades to `logs/` directory
+- Log core trade activity to `logs/` and adaptive runtime telemetry to SerenDB
 - Stop if bankroll drops below stop-loss threshold
 
 Press `Ctrl+C` to stop trading.
@@ -119,8 +121,20 @@ python scripts/agent.py setup --config config.json
 # Simulate trading (no real orders)
 python scripts/agent.py dry-run --config config.json --cycles 10
 
+# Run exactly one adaptive cycle
+python scripts/agent.py cycle --config config.json
+
+# Run one live adaptive cycle
+python scripts/agent.py cycle --config config.json --allow-live
+
 # Start live trading
-python scripts/agent.py start --config config.json
+python scripts/agent.py start --config config.json --allow-live
+
+# Generate weekly review JSON
+python scripts/agent.py review --config config.json
+
+# Run one-shot safety checks
+python scripts/agent.py safety-check --config config.json
 
 # Check current status
 python scripts/agent.py status --config config.json
@@ -165,6 +179,8 @@ python scripts/agent.py stop --config config.json
 - **price_range**: Min/max prices for grid (should span 20-30% range)
 - **scan_interval_seconds**: How often to check for fills (60s recommended)
 - **stop_loss_bankroll**: Auto-stop if value drops below this (80% of bankroll)
+- **daily_loss_cap_usd**: Pause new risk if realized + unrealized daily loss breaches the cap
+- **cooldown_after_consecutive_losses**: Number of losing cycles before adaptive cooldown kicks in
 
 ## Cost Analysis
 
@@ -201,7 +217,7 @@ python scripts/agent.py stop --config config.json
 
 ## Logs
 
-All operations logged to `logs/` directory as JSONL files:
+Core trading operations are logged to `logs/` as JSONL files:
 
 - `grid_setup.jsonl` - Grid initialization
 - `orders.jsonl` - Order placements/cancellations
@@ -209,25 +225,47 @@ All operations logged to `logs/` directory as JSONL files:
 - `positions.jsonl` - Position snapshots
 - `errors.jsonl` - Errors and warnings
 
+Adaptive runtime state, telemetry, review references, and alert events persist in SerenDB. This includes accepted parameters, shadow scores, recent cycles, known open orders, `live_risk_state`, runtime events, and the lock record used to fail closed on overlapping one-shot invocations.
+
 ## SerenDB Persistence
 
-When `seren-mcp` is available, the bot also persists to SerenDB:
+When `seren-mcp` is available, the bot persists to SerenDB:
 
 - `kraken_grid_sessions`
 - `kraken_grid_orders`
 - `kraken_grid_fills`
 - `kraken_grid_positions`
 - `kraken_grid_events`
+- `trading.runtime_state`
+- `trading.runtime_events`
+- `trading.runtime_locks`
 
-SerenDB persistence is best-effort; if unavailable, trading continues with local logs.
+Adaptive mode requires SerenDB persistence. If the MCP-backed store is unavailable, the adaptive runtime fails closed instead of silently falling back to local state files, runtime lock files, or local review/alert telemetry artifacts.
 
 ## Safety Features
 
 1. **Stop-Loss**: Auto-stops if bankroll drops below threshold
-2. **Position Limits**: Prevents overexposure
-3. **Dry-Run Mode**: Test without risking capital
-4. **Audit Trail**: Every trade logged
-5. **Graceful Shutdown**: Cancels all orders on exit
+2. **Daily Loss Caps + Cooldowns**: New buys pause after loss streaks or daily drawdown breaches
+3. **Position/Open Order Limits**: Prevents overexposure and runaway order spam
+4. **Shadow Promotion Gate**: Candidate settings must outperform the baseline before promotion
+5. **Audit Trail**: Every cycle, review, fill, alert, and runtime lease transition is persisted, with adaptive telemetry stored in SerenDB
+6. **Graceful Shutdown**: Cancels all orders on exit
+
+## seren-cron
+
+The preferred automation path is one-shot scheduling:
+
+```bash
+python scripts/run_agent_server.py --config config.json --port 8787
+python scripts/setup_cron.py create \
+  --runner-url "https://YOUR_PUBLIC_RUNNER_URL" \
+  --webhook-secret "$KRAKEN_GRID_WEBHOOK_SECRET"
+```
+
+This creates three jobs by default:
+- `kraken-grid-trader-cycle`
+- `kraken-grid-trader-safety-check`
+- `kraken-grid-trader-weekly-review`
 
 ## Troubleshooting
 

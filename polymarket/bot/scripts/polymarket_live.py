@@ -4,6 +4,7 @@ import json
 import math
 import os
 import platform
+import re
 import select
 import shlex
 import signal
@@ -28,10 +29,15 @@ POLYMARKET_DATA_API_BASE_URL = "https://data-api.polymarket.com"
 POLYMARKET_CLOB_BASE_URL = "https://clob.polymarket.com"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_CHAIN_ID = 137
-LIVE_SAFETY_VERSION = "2026-03-18.polymarket-live-safety-v3"
+LIVE_SAFETY_VERSION = "2026-03-20.polymarket-live-safety-v4"
 USDC_DECIMALS = 6
 SEREN_CRON_PUBLISHER = "seren-cron"
+SEREN_POLYGON_PUBLISHER_HINT = "seren-polygon"
+SEREN_MIN_PUBLISHER_BALANCE_USD = 1.0
 DEFAULT_SEREN_CRON_POLL_INTERVAL_SECONDS = 30
+POLYGON_PUBLIC_RPC_URL = "https://polygon-rpc.com"
+POLYGON_RPC_PROBE_PATHS = ("/", "", "/rpc")
+POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK_ENV = "POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK"
 
 # Polymarket contract addresses on Polygon mainnet
 POLYGON_USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
@@ -225,6 +231,90 @@ def parse_book_payload(payload: Any) -> dict[str, Any]:
         "tick_size": tick_size,
         "neg_risk": bool(payload.get("neg_risk", False)),
         "raw": payload,
+    }
+
+
+def _book_levels(payload: Any, side: str) -> list[tuple[float, float]]:
+    if isinstance(payload, dict):
+        key = "asks" if side.upper() == "BUY" else "bids"
+        payload = payload.get(key)
+    if not isinstance(payload, list):
+        return []
+
+    levels: list[tuple[float, float]] = []
+    for level in payload:
+        if isinstance(level, dict):
+            price = safe_float(level.get("price"), 0.0)
+            size = safe_float(
+                level.get(
+                    "size",
+                    level.get("quantity", level.get("amount", level.get("shares", 0.0))),
+                ),
+                0.0,
+            )
+        elif isinstance(level, (list, tuple)) and len(level) >= 2:
+            price = safe_float(level[0], 0.0)
+            size = safe_float(level[1], 0.0)
+        else:
+            price = 0.0
+            size = 0.0
+        if price > 0.0 and size > 0.0:
+            levels.append((price, size))
+    return levels
+
+
+def estimate_book_fill_value(payload: Any, *, side: str, size: float) -> dict[str, float]:
+    requested_size = max(0.0, size)
+    remaining = requested_size
+    gross_value = 0.0
+    filled_size = 0.0
+    for level_price, level_size in _book_levels(payload, side):
+        take_size = min(remaining, level_size)
+        gross_value += take_size * level_price
+        filled_size += take_size
+        remaining -= take_size
+        if remaining <= 1e-9:
+            break
+    average_price = gross_value / filled_size if filled_size > 0.0 else 0.0
+    return {
+        "requested_size": round(requested_size, 6),
+        "fillable_size": round(filled_size, 6),
+        "unfilled_size": round(max(0.0, remaining), 6),
+        "gross_value": round(gross_value, 6),
+        "average_price": round(average_price, 6),
+    }
+
+
+def build_marketable_sell_order(
+    token_id: str,
+    shares: float,
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    book = fetch_book(token_id, timeout_seconds=timeout_seconds)
+    tick_size = safe_str(book.get("tick_size"), "0.01")
+    tick_price = snap_price(safe_float(tick_size, 0.01), tick_size, "SELL")
+    best_bid = safe_float(book.get("best_bid"), 0.0)
+    best_ask = safe_float(book.get("best_ask"), 0.0)
+    estimate = estimate_book_fill_value(book.get("raw"), side="SELL", size=shares)
+    if best_bid <= 0.0 or estimate["fillable_size"] <= 0.0:
+        raise RuntimeError(
+            "no_bid_liquidity: order book has no executable bids for an immediate exit."
+        )
+    return {
+        "token_id": token_id,
+        "shares": round(max(0.0, shares), 6),
+        "price": tick_price,
+        "tick_size": tick_size,
+        "neg_risk": bool(book.get("neg_risk", False)),
+        "fee_rate_bps": fetch_fee_rate_bps(token_id, timeout_seconds=timeout_seconds),
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "estimated_exit_value_usd": estimate["gross_value"],
+        "estimated_fill_size": estimate["fillable_size"],
+        "estimated_unfilled_size": estimate["unfilled_size"],
+        "estimated_average_price": estimate["average_price"],
+        "execution_style": "marketable-limit-min-tick",
     }
 
 
@@ -480,6 +570,98 @@ def _extract_call_publisher_body(result: dict[str, Any]) -> Any:
     return result.get("value")
 
 
+def _seren_api_key() -> str:
+    return safe_str(os.getenv("API_KEY") or os.getenv("SEREN_API_KEY"), "").strip()
+
+
+def _call_seren_mcp_tool(
+    tool_name: str,
+    arguments: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> Any:
+    command_raw = safe_str(os.getenv("SEREN_MCP_COMMAND"), "seren-mcp").strip() or "seren-mcp"
+    command = shlex.split(command_raw)
+    if not command:
+        raise RuntimeError("SEREN_MCP_COMMAND is empty.")
+    proc = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_request(
+            proc=proc,
+            request_id=1,
+            method="initialize",
+            params={
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "polymarket-live", "version": "1.0"},
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        _write_mcp_message(
+            proc,
+            {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+        )
+        result = _mcp_request(
+            proc=proc,
+            request_id=2,
+            method="tools/call",
+            params={
+                "name": tool_name,
+                "arguments": arguments or {},
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return _extract_call_publisher_body(result)
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=1)
+
+
+def _seren_http_json(
+    path: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    body: Any = None,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> Any:
+    api_key = _seren_api_key()
+    if not api_key:
+        raise RuntimeError("Seren API key is not available for direct HTTP access.")
+
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    req_headers = {"Accept": "application/json", "Authorization": f"Bearer {api_key}"}
+    if headers:
+        req_headers.update(headers)
+
+    data = None
+    if body is not None:
+        req_headers["Content-Type"] = "application/json"
+        data = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+    request = Request(
+        f"{SEREN_API_BASE}{normalized_path}",
+        headers=req_headers,
+        method=method.upper(),
+        data=data,
+    )
+    with urlopen(request, timeout=timeout_seconds) as response:
+        text = response.read().decode("utf-8")
+        if not text:
+            return {}
+        return json.loads(text)
+
+
 def call_publisher_json(
     publisher: str,
     method: str,
@@ -488,62 +670,22 @@ def call_publisher_json(
     body: Any = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> Any:
-    api_key = safe_str(os.getenv("API_KEY") or os.getenv("SEREN_API_KEY"), "").strip()
+    api_key = _seren_api_key()
     prefer_mcp = not api_key
 
     if prefer_mcp:
-        command_raw = safe_str(os.getenv("SEREN_MCP_COMMAND"), "seren-mcp").strip() or "seren-mcp"
-        command = shlex.split(command_raw)
-        if not command:
-            raise RuntimeError("SEREN_MCP_COMMAND is empty.")
-        proc = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        return _call_seren_mcp_tool(
+            "call_publisher",
+            {
+                "publisher": publisher,
+                "method": method.upper(),
+                "path": path,
+                "headers": headers or {},
+                "body": json.dumps(body) if body is not None else None,
+                "response_format": "json",
+            },
+            timeout_seconds=timeout_seconds,
         )
-        try:
-            _mcp_request(
-                proc=proc,
-                request_id=1,
-                method="initialize",
-                params={
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {"name": "polymarket-live", "version": "1.0"},
-                },
-                timeout_seconds=timeout_seconds,
-            )
-            _write_mcp_message(
-                proc,
-                {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
-            )
-            result = _mcp_request(
-                proc=proc,
-                request_id=2,
-                method="tools/call",
-                params={
-                    "name": "call_publisher",
-                    "arguments": {
-                        "publisher": publisher,
-                        "method": method.upper(),
-                        "path": path,
-                        "headers": headers or {},
-                        "body": json.dumps(body) if body is not None else None,
-                        "response_format": "json",
-                    },
-                },
-                timeout_seconds=timeout_seconds,
-            )
-            return _extract_call_publisher_body(result)
-        finally:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=1)
 
     req_headers = {"Accept": "application/json", "Authorization": f"Bearer {api_key}"}
     if headers:
@@ -563,6 +705,431 @@ def call_publisher_json(
         if not text:
             return {}
         return json.loads(text)
+
+
+def get_seren_prepaid_balance(
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> float:
+    try:
+        if _seren_api_key():
+            payload = _seren_http_json("/wallet/balance", timeout_seconds=timeout_seconds)
+        else:
+            payload = _call_seren_mcp_tool(
+                "get_prepaid_balance",
+                {},
+                timeout_seconds=timeout_seconds,
+            )
+    except Exception:
+        return 0.0
+
+    if not isinstance(payload, dict):
+        return 0.0
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        data = payload
+
+    for field in ("funded_balance_usd", "balance_usd"):
+        value = safe_float(data.get(field), -1.0)
+        if value >= 0.0:
+            return value
+    return 0.0
+
+
+def _allow_public_polygon_rpc_fallback() -> bool:
+    raw = safe_str(os.getenv(POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK_ENV), "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _build_polygon_rpc_public_fallback_message(
+    *,
+    seren_balance_usd: float,
+    fallback_reason: str,
+    rpc_url: str,
+) -> str:
+    reason = fallback_reason.strip() or "Seren Polygon RPC is unavailable."
+    message = (
+        f"{reason} Public Polygon RPC at {rpc_url} can be stale or rate-limited for approval reads."
+    )
+    if seren_balance_usd <= 0.0:
+        message = (
+            f"{message} Fund paid Polygon RPC with SerenBucks at https://serendb.com/serenbucks "
+            "or https://console.serendb.com. Stripe deposits start at $5.00 and require a "
+            "verified email. API-first funding is available via POST /wallet/deposit."
+        )
+    return (
+        f"{message} If you still want to continue with the public fallback, set "
+        f"{POLYMARKET_ALLOW_PUBLIC_RPC_FALLBACK_ENV}=1 and rerun."
+    )
+
+
+def list_seren_publishers(
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> list[dict[str, Any]]:
+    try:
+        if _seren_api_key():
+            payload = _seren_http_json("/publishers?limit=200&offset=0", timeout_seconds=timeout_seconds)
+        else:
+            payload = _call_seren_mcp_tool(
+                "list_agent_publishers",
+                {"category": "integration", "limit": 200, "offset": 0, "verbose": True},
+                timeout_seconds=timeout_seconds,
+            )
+    except Exception:
+        return []
+
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        rows = payload.get("publishers")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _tokenize(value: str) -> set[str]:
+    return {token for token in re.split(r"[^a-z0-9]+", value.lower()) if token}
+
+
+def _is_rpc_like_publisher(publisher: dict[str, Any]) -> bool:
+    categories = publisher.get("categories", [])
+    categories_text = ""
+    if isinstance(categories, list):
+        categories_text = " ".join(
+            str(category).lower() for category in categories if isinstance(category, str)
+        )
+
+    slug_tokens = _tokenize(safe_str(publisher.get("slug"), ""))
+    name_tokens = _tokenize(safe_str(publisher.get("name"), ""))
+    category_tokens = _tokenize(categories_text)
+    description_tokens = _tokenize(safe_str(publisher.get("description"), ""))
+    combined = slug_tokens | name_tokens | category_tokens | description_tokens
+    return "rpc" in combined or ("json" in combined and "web3" in combined)
+
+
+def discover_seren_polygon_publisher(
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> str:
+    best_slug = ""
+    best_score = -1
+    for publisher in list_seren_publishers(timeout_seconds=timeout_seconds):
+        if publisher.get("is_active") is False:
+            continue
+        if not _is_rpc_like_publisher(publisher):
+            continue
+
+        slug = safe_str(publisher.get("slug"), "").strip().lower()
+        if not slug:
+            continue
+
+        categories = publisher.get("categories", [])
+        categories_text = ""
+        if isinstance(categories, list):
+            categories_text = " ".join(
+                str(category).lower() for category in categories if isinstance(category, str)
+            )
+
+        slug_tokens = _tokenize(slug)
+        name_tokens = _tokenize(safe_str(publisher.get("name"), ""))
+        category_tokens = _tokenize(categories_text)
+        description_tokens = _tokenize(safe_str(publisher.get("description"), ""))
+        combined = slug_tokens | name_tokens | category_tokens | description_tokens
+        if not ({"polygon", "matic"} & combined):
+            continue
+
+        score = 0
+        if slug == SEREN_POLYGON_PUBLISHER_HINT:
+            score += 100
+        if slug.startswith("seren-"):
+            score += 20
+        if "polygon" in slug_tokens:
+            score += 12
+        if "matic" in slug_tokens:
+            score += 6
+        if "polygon" in category_tokens:
+            score += 10
+        if "matic" in category_tokens:
+            score += 5
+        if "polygon" in name_tokens:
+            score += 8
+        if "polygon" in description_tokens:
+            score += 4
+        if score > best_score or (score == best_score and slug < best_slug):
+            best_score = score
+            best_slug = slug
+
+    return best_slug
+
+
+def _extract_rpc_result(payload: Any, *, source: str) -> dict[str, Any]:
+    body = _extract_publisher_data(payload)
+    if not isinstance(body, dict):
+        raise RuntimeError(f"{source} returned a non-object JSON-RPC payload.")
+    error = body.get("error")
+    if error not in (None, {}):
+        raise RuntimeError(f"{source} returned JSON-RPC error: {error}")
+    if "result" not in body:
+        raise RuntimeError(f"{source} did not return a JSON-RPC result.")
+    return body
+
+
+def _parse_rpc_int(value: Any, *, field: str) -> int:
+    if isinstance(value, int):
+        return value
+    text = safe_str(value, "").strip()
+    if not text:
+        raise RuntimeError(f"{field} was empty.")
+    try:
+        if text.startswith(("0x", "0X")):
+            return int(text, 16)
+        return int(text)
+    except ValueError as exc:
+        raise RuntimeError(f"{field} was not numeric: {value}") from exc
+
+
+def _probe_seren_polygon_rpc_target(
+    publisher: str,
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    errors: list[str] = []
+    probe_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_chainId",
+        "params": [],
+    }
+    for path in POLYGON_RPC_PROBE_PATHS:
+        try:
+            response = _extract_rpc_result(
+                call_publisher_json(
+                    publisher=publisher,
+                    method="POST",
+                    path=path,
+                    body=probe_payload,
+                    timeout_seconds=timeout_seconds,
+                ),
+                source=f"{publisher}{path or '(root)'}",
+            )
+            chain_id = _parse_rpc_int(response.get("result"), field="eth_chainId")
+            if chain_id != DEFAULT_CHAIN_ID:
+                raise RuntimeError(f"expected chain id {DEFAULT_CHAIN_ID}, got {chain_id}")
+            return {
+                "publisher": publisher,
+                "path": path,
+            }
+        except Exception as exc:
+            errors.append(f"{path or '(root)'}: {exc}")
+
+    raise RuntimeError(
+        f"Unable to probe Polygon RPC publisher '{publisher}'. Errors: {' | '.join(errors)}"
+    )
+
+
+def _eth_call_via_seren_polygon(
+    to: str,
+    data: str,
+    *,
+    publisher: str,
+    path: str,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> str:
+    response = _extract_rpc_result(
+        call_publisher_json(
+            publisher=publisher,
+            method="POST",
+            path=path,
+            body={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_call",
+                "params": [{"to": to, "data": data}, "latest"],
+            },
+            timeout_seconds=timeout_seconds,
+        ),
+        source=f"{publisher}{path or '(root)'}",
+    )
+    return safe_str(response.get("result"), "0x0")
+
+
+def _eth_call_via_public_polygon_rpc(
+    to: str,
+    data: str,
+    *,
+    rpc_url: str = POLYGON_PUBLIC_RPC_URL,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> str:
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "id": 1,
+        "params": [{"to": to, "data": data}, "latest"],
+    }).encode()
+    req = Request(rpc_url, data=payload, headers={"Content-Type": "application/json"})
+    with urlopen(req, timeout=timeout_seconds) as resp:
+        body = json.loads(resp.read())
+    response = _extract_rpc_result(body, source=rpc_url)
+    return safe_str(response.get("result"), "0x0")
+
+
+def _eth_get_transaction_count_via_seren_polygon(
+    wallet_address: str,
+    *,
+    publisher: str,
+    path: str,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> int:
+    response = _extract_rpc_result(
+        call_publisher_json(
+            publisher=publisher,
+            method="POST",
+            path=path,
+            body={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_getTransactionCount",
+                "params": [wallet_address, "latest"],
+            },
+            timeout_seconds=timeout_seconds,
+        ),
+        source=f"{publisher}{path or '(root)'}",
+    )
+    return _parse_rpc_int(response.get("result"), field="transaction_count")
+
+
+def _eth_get_transaction_count_via_public_polygon_rpc(
+    wallet_address: str,
+    *,
+    rpc_url: str = POLYGON_PUBLIC_RPC_URL,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> int:
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionCount",
+        "id": 1,
+        "params": [wallet_address, "latest"],
+    }).encode()
+    req = Request(rpc_url, data=payload, headers={"Content-Type": "application/json"})
+    with urlopen(req, timeout=timeout_seconds) as resp:
+        body = json.loads(resp.read())
+    response = _extract_rpc_result(body, source=rpc_url)
+    return _parse_rpc_int(response.get("result"), field="transaction_count")
+
+
+def _resolve_polygon_rpc_transport(
+    *,
+    rpc_url: str = POLYGON_PUBLIC_RPC_URL,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    balance = get_seren_prepaid_balance(timeout_seconds=timeout_seconds)
+    allow_public_fallback = _allow_public_polygon_rpc_fallback()
+    publisher = discover_seren_polygon_publisher(timeout_seconds=timeout_seconds)
+    if publisher:
+        try:
+            target = _probe_seren_polygon_rpc_target(
+                publisher,
+                timeout_seconds=timeout_seconds,
+            )
+            return {
+                "rpc_transport": "seren-publisher",
+                "rpc_publisher": publisher,
+                "rpc_path": safe_str(target.get("path"), "/") or "/",
+                "seren_balance_usd": balance,
+            }
+        except Exception as exc:
+            fallback_reason = (
+                f"Seren Polygon publisher '{publisher}' probe failed: {exc}"
+            )
+    else:
+        fallback_reason = (
+            "No Polygon RPC publisher was discovered in the Seren catalog. "
+            f"Seren prepaid balance was ${balance:.2f}, but read-only publisher RPC "
+            "resolution is attempted regardless of balance."
+        )
+
+    if balance <= 0.0 and not allow_public_fallback:
+        return {
+            "rpc_transport": "public-disabled",
+            "rpc_url": rpc_url,
+            "rpc_fallback_reason": fallback_reason,
+            "seren_balance_usd": balance,
+            "rpc_public_opt_in_required": True,
+            "rpc_user_action_message": _build_polygon_rpc_public_fallback_message(
+                seren_balance_usd=balance,
+                fallback_reason=fallback_reason,
+                rpc_url=rpc_url,
+            ),
+        }
+
+    return {
+        "rpc_transport": "public",
+        "rpc_url": rpc_url,
+        "rpc_fallback_reason": fallback_reason,
+        "seren_balance_usd": balance,
+        "rpc_warning": _build_polygon_rpc_public_fallback_message(
+            seren_balance_usd=balance,
+            fallback_reason=fallback_reason,
+            rpc_url=rpc_url,
+        ),
+    }
+
+
+def _eth_call_with_transport(
+    to: str,
+    data: str,
+    *,
+    rpc_transport: dict[str, Any],
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> str:
+    mode = safe_str(rpc_transport.get("rpc_transport"), "public")
+    if mode == "seren-publisher":
+        return _eth_call_via_seren_polygon(
+            to,
+            data,
+            publisher=safe_str(rpc_transport.get("rpc_publisher"), ""),
+            path=safe_str(rpc_transport.get("rpc_path"), ""),
+            timeout_seconds=timeout_seconds,
+        )
+
+    try:
+        return _eth_call_via_public_polygon_rpc(
+            to,
+            data,
+            rpc_url=safe_str(rpc_transport.get("rpc_url"), POLYGON_PUBLIC_RPC_URL),
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        fallback_reason = safe_str(rpc_transport.get("rpc_fallback_reason"), "").strip()
+        if fallback_reason:
+            raise RuntimeError(
+                f"Polygon RPC read failed via public fallback. {fallback_reason} | public-rpc: {exc}"
+            ) from exc
+        raise RuntimeError(f"Polygon RPC read failed via public fallback: {exc}") from exc
+
+
+def _eth_get_transaction_count_with_transport(
+    wallet_address: str,
+    *,
+    rpc_transport: dict[str, Any],
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> int:
+    mode = safe_str(rpc_transport.get("rpc_transport"), "public")
+    if mode == "seren-publisher":
+        return _eth_get_transaction_count_via_seren_polygon(
+            wallet_address,
+            publisher=safe_str(rpc_transport.get("rpc_publisher"), ""),
+            path=safe_str(rpc_transport.get("rpc_path"), ""),
+            timeout_seconds=timeout_seconds,
+        )
+
+    return _eth_get_transaction_count_via_public_polygon_rpc(
+        wallet_address,
+        rpc_url=safe_str(rpc_transport.get("rpc_url"), POLYGON_PUBLIC_RPC_URL),
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def current_machine_label() -> str:
@@ -1339,7 +1906,7 @@ class PolymarketPublisherTrader:
 def check_neg_risk_approvals(
     wallet_address: str,
     *,
-    rpc_url: str = "https://polygon-rpc.com",
+    rpc_url: str = POLYGON_PUBLIC_RPC_URL,
     timeout_seconds: float = 10.0,
 ) -> dict[str, Any]:
     """Check if wallet has USDC.e and CT approvals for NegRiskAdapter.
@@ -1353,28 +1920,39 @@ def check_neg_risk_approvals(
         "usdc_approved": False,
         "ct_approved": False,
         "checks_passed": False,
+        "rpc_transport": "unknown",
         "errors": [],
     }
 
     wallet_padded = wallet_address.lower().replace("0x", "").zfill(64)
     adapter_padded = POLYGON_NEG_RISK_ADAPTER.lower().replace("0x", "").zfill(64)
 
-    def _eth_call(to: str, data: str) -> str:
-        payload = json.dumps({
-            "jsonrpc": "2.0", "method": "eth_call", "id": 1,
-            "params": [{"to": to, "data": data}, "latest"],
-        }).encode()
-        req = Request(rpc_url, data=payload, headers={"Content-Type": "application/json"})
-        try:
-            with urlopen(req, timeout=timeout_seconds) as resp:
-                body = json.loads(resp.read())
-                return safe_str(body.get("result"), "0x0")
-        except Exception:
-            return "0x0"
+    rpc_transport = _resolve_polygon_rpc_transport(
+        rpc_url=rpc_url,
+        timeout_seconds=timeout_seconds,
+    )
+    results.update(rpc_transport)
+    if safe_str(results.get("rpc_transport"), "") == "public-disabled":
+        results["errors"].append(
+            safe_str(
+                results.get("rpc_user_action_message"),
+                "Polygon RPC fallback requires explicit user confirmation.",
+            )
+        )
+        return results
 
     # Check USDC.e allowance to NegRiskAdapter
     usdc_data = f"0x{ERC20_ALLOWANCE_ABI_FRAGMENT[2:]}{wallet_padded}{adapter_padded}"
-    usdc_result = _eth_call(POLYGON_USDC_E, usdc_data)
+    try:
+        usdc_result = _eth_call_with_transport(
+            POLYGON_USDC_E,
+            usdc_data,
+            rpc_transport=rpc_transport,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        results["errors"].append(str(exc))
+        return results
     try:
         usdc_allowance = int(usdc_result, 16)
     except (ValueError, TypeError):
@@ -1384,12 +1962,45 @@ def check_neg_risk_approvals(
 
     # Check CT isApprovedForAll to NegRiskAdapter
     ct_data = f"0x{ERC1155_IS_APPROVED_ABI_FRAGMENT[2:]}{wallet_padded}{adapter_padded}"
-    ct_result = _eth_call(POLYGON_CONDITIONAL_TOKENS, ct_data)
+    try:
+        ct_result = _eth_call_with_transport(
+            POLYGON_CONDITIONAL_TOKENS,
+            ct_data,
+            rpc_transport=rpc_transport,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        results["errors"].append(str(exc))
+        return results
     try:
         ct_approved = int(ct_result, 16) > 0
     except (ValueError, TypeError):
         ct_approved = False
     results["ct_approved"] = ct_approved
+
+    if (
+        results["rpc_transport"] == "public"
+        and not results["usdc_approved"]
+        and not results["ct_approved"]
+    ):
+        try:
+            wallet_nonce = _eth_get_transaction_count_with_transport(
+                wallet_address,
+                rpc_transport=rpc_transport,
+                timeout_seconds=timeout_seconds,
+            )
+            results["wallet_nonce"] = wallet_nonce
+        except Exception:
+            wallet_nonce = 0
+
+        if wallet_nonce > 0:
+            results["errors"].append(
+                "Public Polygon RPC fallback returned an all-zero approval state for a "
+                f"wallet with nonce {wallet_nonce}. This fallback can be stale or "
+                "rate-limited and is not being treated as authoritative. Re-run with "
+                "a working Seren Polygon publisher or configure a reliable Polygon RPC."
+            )
+            return results
 
     if not results["usdc_approved"]:
         results["errors"].append(
@@ -2433,34 +3044,45 @@ def sell_held_inventory(
         if shares <= 0 or token_id in covered_token_ids:
             continue
         try:
-            book = fetch_book(token_id, timeout_seconds=timeout_seconds)
-            ask_price = safe_float(book.get("best_ask"), 0.0)
-            tick_size = safe_str(book.get("tick_size"), "0.01")
-            neg_risk = bool(book.get("neg_risk", False))
-            if ask_price <= 0.0:
-                continue
-            ask_price = snap_price(ask_price, tick_size, "SELL")
-            size = shares
-            fee_rate_bps = fetch_fee_rate_bps(token_id, timeout_seconds=timeout_seconds)
+            sell_plan = build_marketable_sell_order(
+                token_id,
+                shares,
+                timeout_seconds=timeout_seconds,
+            )
             response = trader.create_order(
                 token_id=token_id,
                 side="SELL",
-                price=ask_price,
-                size=size,
-                tick_size=tick_size,
-                neg_risk=neg_risk,
-                fee_rate_bps=fee_rate_bps,
+                price=sell_plan["price"],
+                size=shares,
+                tick_size=sell_plan["tick_size"],
+                neg_risk=sell_plan["neg_risk"],
+                fee_rate_bps=sell_plan["fee_rate_bps"],
             )
             sells.append(
                 {
                     "token_id": token_id,
                     "side": "SELL",
-                    "price": ask_price,
-                    "size": round(size, 6),
+                    "price": sell_plan["price"],
+                    "size": round(shares, 6),
+                    "best_bid": sell_plan["best_bid"],
+                    "best_ask": sell_plan["best_ask"],
+                    "estimated_exit_value_usd": sell_plan["estimated_exit_value_usd"],
+                    "estimated_fill_size": sell_plan["estimated_fill_size"],
+                    "estimated_unfilled_size": sell_plan["estimated_unfilled_size"],
+                    "estimated_average_price": sell_plan["estimated_average_price"],
+                    "execution_style": sell_plan["execution_style"],
                     "source": "held-inventory-unwind",
                     "response": response,
                 }
             )
-        except Exception:
-            continue
+        except Exception as exc:
+            sells.append(
+                {
+                    "token_id": token_id,
+                    "side": "SELL",
+                    "size": round(shares, 6),
+                    "source": "held-inventory-unwind",
+                    "error": str(exc),
+                }
+            )
     return sells

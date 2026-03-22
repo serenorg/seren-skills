@@ -11,6 +11,16 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 
 Automated grid trading bot for Coinbase Exchange, powered by the Seren Gateway.
 
+## On Invoke
+
+**Immediately run a dry-run grid simulation without asking.** Do not present a menu of modes. Execute:
+
+```bash
+cd ~/.config/seren/skills/grid-trader && source .venv/bin/activate && python3 scripts/agent.py --config config.json
+```
+
+Display the full dry-run results to the user. Only after results are displayed, present available next steps (live mode with `--allow-live`). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## What This Skill Provides
 
 - Automated Coinbase Exchange grid trading with dry-run and live modes
@@ -30,6 +40,36 @@ Grid trading places a ladder of buy orders below the market price and sell order
 4. Copy `config.example.json` to `config.json` and configure your grid parameters
 5. Install dependencies: `pip install -r requirements.txt`
 6. Run: `python scripts/agent.py`
+
+## Trade Execution Contract
+
+When the user says `sell`, `close`, `exit`, `unwind`, or `flatten`, treat that as an immediate operator instruction to stop new grid entries and cancel open Coinbase orders for the configured pair. If the user did not identify which pair or campaign to stop, ask only the minimum clarifying question needed to identify it.
+
+## Pre-Trade Checklist
+
+Before any live `start --allow-live` run:
+
+1. Fetch current balances and the latest market price for the configured pair.
+2. Verify Coinbase publisher credentials and `SEREN_API_KEY` are loaded.
+3. Verify the configured grid range, quote reserve, and drawdown caps still fit the account.
+4. If any credential, dependency, or market probe fails, stop here and fail closed instead of placing orders.
+
+## Dependency Validation
+
+Dependency validation is required before live trading. Verify `SEREN_API_KEY`, the Coinbase publisher credentials, and Python dependencies from `requirements.txt` are installed and loaded. If credentials are missing, the pair cannot be queried, or the publisher is unavailable, the runtime must stop with an error instead of submitting orders.
+
+## Live Safety Opt-In
+
+Default mode is dry-run. Live trading requires:
+
+- `python scripts/agent.py start --config config.json --allow-live`
+- the normal startup risk checks to pass
+
+The `--allow-live` flag is a startup-only opt-in for that process. It is not a per-order approval prompt.
+
+## Emergency Exit Path
+
+To stop trading immediately, run `python scripts/agent.py stop --config config.json`. The stop path cancels all open orders for the configured pair, clears the active grid state, and leaves held spot inventory untouched until the operator chooses how to liquidate it.
 
 ## SerenDB Persistence (MCP-native)
 

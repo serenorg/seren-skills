@@ -10,7 +10,8 @@ Stores trading data in SerenDB cloud database:
 
 import json
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
+from uuid import uuid4
 from seren_client import SerenClient
 
 
@@ -34,6 +35,9 @@ class SerenDBStorage:
         self.project_id: Optional[str] = None
         self.branch_id: Optional[str] = None
         self.database_name = "trading_db"
+        self._normalized_run_id: Optional[str] = None
+        self._normalized_dry_run = True
+        self._normalized_mode = "paper-sim"
 
     def setup_database(self) -> bool:
         """
@@ -183,6 +187,132 @@ class SerenDBStorage:
                 )
             """)
 
+            self._execute_sql("""
+                CREATE SCHEMA IF NOT EXISTS trading;
+
+                CREATE TABLE IF NOT EXISTS trading.strategy_runs (
+                    run_id UUID PRIMARY KEY,
+                    skill_slug TEXT NOT NULL,
+                    venue TEXT NOT NULL,
+                    strategy_name TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    dry_run BOOLEAN NOT NULL DEFAULT TRUE,
+                    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    completed_at TIMESTAMPTZ,
+                    config JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    error_code TEXT,
+                    error_message TEXT,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_strategy_runs_skill_mode_started
+                    ON trading.strategy_runs (skill_slug, mode, started_at DESC);
+
+                CREATE TABLE IF NOT EXISTS trading.order_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+                    order_id TEXT,
+                    instrument_id TEXT,
+                    symbol TEXT,
+                    side TEXT,
+                    order_type TEXT,
+                    event_type TEXT NOT NULL,
+                    status TEXT,
+                    price NUMERIC(24, 10),
+                    quantity NUMERIC(24, 10),
+                    notional_usd NUMERIC(24, 10),
+                    event_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_order_events_run_time
+                    ON trading.order_events (run_id, event_time DESC);
+
+                CREATE TABLE IF NOT EXISTS trading.fills (
+                    id BIGSERIAL PRIMARY KEY,
+                    run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+                    order_id TEXT,
+                    venue_fill_id TEXT,
+                    instrument_id TEXT,
+                    symbol TEXT,
+                    side TEXT,
+                    fill_price NUMERIC(24, 10),
+                    fill_quantity NUMERIC(24, 10),
+                    fee_usd NUMERIC(24, 10),
+                    notional_usd NUMERIC(24, 10),
+                    realized_pnl_usd NUMERIC(24, 10),
+                    fill_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_fills_run_time
+                    ON trading.fills (run_id, fill_time DESC);
+
+                CREATE TABLE IF NOT EXISTS trading.positions (
+                    id BIGSERIAL PRIMARY KEY,
+                    run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+                    position_key TEXT NOT NULL,
+                    instrument_id TEXT,
+                    symbol TEXT,
+                    side TEXT,
+                    quantity NUMERIC(24, 10),
+                    entry_price NUMERIC(24, 10),
+                    cost_basis_usd NUMERIC(24, 10),
+                    market_price NUMERIC(24, 10),
+                    market_value_usd NUMERIC(24, 10),
+                    unrealized_pnl_usd NUMERIC(24, 10),
+                    realized_pnl_usd NUMERIC(24, 10),
+                    status TEXT,
+                    opened_at TIMESTAMPTZ,
+                    closed_at TIMESTAMPTZ,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    UNIQUE (run_id, position_key)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_positions_run_status
+                    ON trading.positions (run_id, status);
+
+                CREATE TABLE IF NOT EXISTS trading.position_marks (
+                    id BIGSERIAL PRIMARY KEY,
+                    run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+                    position_key TEXT NOT NULL,
+                    instrument_id TEXT,
+                    symbol TEXT,
+                    side TEXT,
+                    quantity NUMERIC(24, 10),
+                    mark_price NUMERIC(24, 10),
+                    market_value_usd NUMERIC(24, 10),
+                    unrealized_pnl_usd NUMERIC(24, 10),
+                    realized_pnl_usd NUMERIC(24, 10),
+                    mark_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_position_marks_run_time
+                    ON trading.position_marks (run_id, mark_time DESC);
+
+                CREATE TABLE IF NOT EXISTS trading.pnl_periods (
+                    id BIGSERIAL PRIMARY KEY,
+                    run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+                    period_type TEXT NOT NULL,
+                    period_start TIMESTAMPTZ,
+                    period_end TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    realized_pnl_usd NUMERIC(24, 10),
+                    unrealized_pnl_usd NUMERIC(24, 10),
+                    fees_usd NUMERIC(24, 10),
+                    gross_pnl_usd NUMERIC(24, 10),
+                    net_pnl_usd NUMERIC(24, 10),
+                    equity_start_usd NUMERIC(24, 10),
+                    equity_end_usd NUMERIC(24, 10),
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_pnl_periods_run_end
+                    ON trading.pnl_periods (run_id, period_end DESC);
+            """)
+
             print(f"✅ SerenDB setup complete")
             return True
 
@@ -191,6 +321,69 @@ class SerenDBStorage:
             import traceback
             traceback.print_exc()
             return False
+
+    def set_run_mode(self, dry_run: bool) -> None:
+        """Set the normalized run mode for the current agent process."""
+        self._normalized_dry_run = bool(dry_run)
+        self._normalized_mode = "paper-sim" if self._normalized_dry_run else "live"
+
+    def _ensure_normalized_run(self, dry_run: Optional[bool] = None, metadata: Optional[Dict[str, Any]] = None) -> str:
+        if dry_run is not None:
+            self.set_run_mode(dry_run)
+
+        if not self._normalized_run_id:
+            self._normalized_run_id = str(uuid4())
+            self._execute_sql("""
+                INSERT INTO trading.strategy_runs (
+                    run_id, skill_slug, venue, strategy_name, mode, status,
+                    dry_run, config, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb)
+            """, (
+                self._normalized_run_id,
+                "polymarket-bot",
+                "polymarket",
+                "bot",
+                self._normalized_mode,
+                "running",
+                self._normalized_dry_run,
+                json.dumps({
+                    "project_name": self.project_name,
+                    "database_name": self.database_name,
+                }),
+                json.dumps(metadata or {}),
+            ))
+        elif metadata:
+            self._execute_sql("""
+                UPDATE trading.strategy_runs
+                SET mode = ?,
+                    dry_run = ?,
+                    metadata = COALESCE(metadata, '{}'::jsonb) || ?::jsonb
+                WHERE run_id = ?
+            """, (
+                self._normalized_mode,
+                self._normalized_dry_run,
+                json.dumps(metadata),
+                self._normalized_run_id,
+            ))
+
+        return self._normalized_run_id
+
+    def _update_normalized_summary(self, summary_patch: Dict[str, Any]) -> None:
+        run_id = self._ensure_normalized_run()
+        self._execute_sql("""
+            UPDATE trading.strategy_runs
+            SET summary = COALESCE(summary, '{}'::jsonb) || ?::jsonb
+            WHERE run_id = ?
+        """, (
+            json.dumps(summary_patch),
+            run_id,
+        ))
+
+    @staticmethod
+    def _position_market_value(position: Dict[str, Any]) -> float:
+        size = float(position.get('size', 0) or 0)
+        unrealized = float(position.get('unrealized_pnl', 0) or 0)
+        return size + unrealized
 
     # Position methods
 
@@ -205,7 +398,14 @@ class SerenDBStorage:
             True if successful
         """
         try:
-            now = datetime.utcnow().isoformat() + 'Z'
+            now = datetime.now(timezone.utc).isoformat()
+            run_id = self._ensure_normalized_run()
+            market_value = self._position_market_value(position)
+            instrument_id = position.get('token_id') or position['market_id']
+            metadata_json = json.dumps({
+                'market': position.get('market', ''),
+                'opened_at': position.get('opened_at'),
+            })
 
             # Try to update existing position first
             result = self._execute_sql("""
@@ -241,6 +441,64 @@ class SerenDBStorage:
                     position['opened_at'],
                     now
                 ))
+
+            self._execute_sql("""
+                INSERT INTO trading.positions (
+                    run_id, position_key, instrument_id, symbol, side, quantity,
+                    entry_price, cost_basis_usd, market_price, market_value_usd,
+                    unrealized_pnl_usd, realized_pnl_usd, status, opened_at, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+                ON CONFLICT (run_id, position_key) DO UPDATE
+                SET instrument_id = EXCLUDED.instrument_id,
+                    symbol = EXCLUDED.symbol,
+                    side = EXCLUDED.side,
+                    quantity = EXCLUDED.quantity,
+                    entry_price = EXCLUDED.entry_price,
+                    cost_basis_usd = EXCLUDED.cost_basis_usd,
+                    market_price = EXCLUDED.market_price,
+                    market_value_usd = EXCLUDED.market_value_usd,
+                    unrealized_pnl_usd = EXCLUDED.unrealized_pnl_usd,
+                    realized_pnl_usd = EXCLUDED.realized_pnl_usd,
+                    status = EXCLUDED.status,
+                    opened_at = COALESCE(EXCLUDED.opened_at, trading.positions.opened_at),
+                    metadata = EXCLUDED.metadata
+            """, (
+                run_id,
+                position['market_id'],
+                instrument_id,
+                position['market_id'],
+                position['side'],
+                position['size'],
+                position['entry_price'],
+                position['size'],
+                position['current_price'],
+                market_value,
+                position['unrealized_pnl'],
+                0.0,
+                'open',
+                position.get('opened_at', now),
+                metadata_json,
+            ))
+            self._execute_sql("""
+                INSERT INTO trading.position_marks (
+                    run_id, position_key, instrument_id, symbol, side, quantity,
+                    mark_price, market_value_usd, unrealized_pnl_usd, realized_pnl_usd,
+                    mark_time, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+            """, (
+                run_id,
+                position['market_id'],
+                instrument_id,
+                position['market_id'],
+                position['side'],
+                position['size'],
+                position['current_price'],
+                market_value,
+                position['unrealized_pnl'],
+                0.0,
+                now,
+                metadata_json,
+            ))
 
             return True
 
@@ -313,6 +571,16 @@ class SerenDBStorage:
             True if successful
         """
         try:
+            run_id = self._ensure_normalized_run(dry_run=(trade.get('status') == 'dry_run'))
+            executed_at = trade.get('executed_at') or datetime.now(timezone.utc).isoformat()
+            order_id = trade.get('tx_hash') or f"{trade['market_id']}:{executed_at}"
+            metadata_json = json.dumps({
+                'market': trade.get('market', ''),
+                'fair_value': trade.get('fair_value'),
+                'edge': trade.get('edge'),
+                'status': trade.get('status', 'open'),
+                'pnl': trade.get('pnl'),
+            })
             self._execute_sql("""
                 INSERT INTO trades (
                     market_id, market, side, price, size, executed_at, tx_hash
@@ -323,8 +591,47 @@ class SerenDBStorage:
                 trade['side'],
                 trade['price'],
                 trade['size'],
-                trade['executed_at'],
+                executed_at,
                 trade.get('tx_hash', '')
+            ))
+            self._execute_sql("""
+                INSERT INTO trading.order_events (
+                    run_id, order_id, instrument_id, symbol, side, order_type,
+                    event_type, status, price, quantity, notional_usd, event_time, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+            """, (
+                run_id,
+                order_id,
+                trade.get('market_id'),
+                trade.get('market_id'),
+                trade['side'],
+                'market',
+                'trade',
+                trade.get('status', 'open'),
+                trade['price'],
+                trade['size'],
+                trade['size'],
+                executed_at,
+                metadata_json,
+            ))
+            self._execute_sql("""
+                INSERT INTO trading.fills (
+                    run_id, order_id, venue_fill_id, instrument_id, symbol, side,
+                    fill_price, fill_quantity, notional_usd, realized_pnl_usd, fill_time, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+            """, (
+                run_id,
+                order_id,
+                trade.get('tx_hash'),
+                trade.get('market_id'),
+                trade.get('market_id'),
+                trade['side'],
+                trade['price'],
+                trade['size'],
+                trade['size'],
+                trade.get('pnl'),
+                executed_at,
+                metadata_json,
             ))
             return True
         except Exception as e:
@@ -364,6 +671,7 @@ class SerenDBStorage:
             True if successful
         """
         try:
+            run_id = self._ensure_normalized_run(dry_run=bool(log.get('dry_run', self._normalized_dry_run)))
             self._execute_sql("""
                 INSERT INTO scan_logs (
                     scan_at, markets_scanned, opportunities_found,
@@ -380,6 +688,37 @@ class SerenDBStorage:
                 log.get('serenbucks_balance'),
                 log.get('polymarket_balance')
             ))
+            self._execute_sql("""
+                INSERT INTO trading.pnl_periods (
+                    run_id, period_type, period_end, fees_usd, equity_end_usd, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?::jsonb)
+            """, (
+                run_id,
+                'scan_cycle',
+                log['scan_at'],
+                log['api_cost'],
+                log.get('polymarket_balance'),
+                json.dumps({
+                    'dry_run': bool(log.get('dry_run', self._normalized_dry_run)),
+                    'markets_scanned': log['markets_scanned'],
+                    'opportunities_found': log['opportunities_found'],
+                    'trades_executed': log['trades_executed'],
+                    'capital_deployed': log['capital_deployed'],
+                    'serenbucks_balance': log.get('serenbucks_balance'),
+                    'polymarket_balance': log.get('polymarket_balance'),
+                    'errors': log.get('errors', []),
+                }),
+            ))
+            self._update_normalized_summary({
+                'last_scan_at': log['scan_at'],
+                'markets_scanned': log['markets_scanned'],
+                'opportunities_found': log['opportunities_found'],
+                'trades_executed': log['trades_executed'],
+                'capital_deployed': log['capital_deployed'],
+                'api_cost': log['api_cost'],
+                'serenbucks_balance': log.get('serenbucks_balance'),
+                'polymarket_balance': log.get('polymarket_balance'),
+            })
             return True
         except Exception as e:
             print(f"Error saving scan log: {e}")
@@ -419,7 +758,7 @@ class SerenDBStorage:
             True if successful
         """
         try:
-            now = datetime.utcnow().isoformat() + 'Z'
+            now = datetime.now(timezone.utc).isoformat()
             value_json = json.dumps(value)
 
             # Try update first
@@ -809,7 +1148,7 @@ class SerenDBStorage:
                     query = query.replace('?', str(param), 1)
 
         # Call Seren Gateway database API
-        url = f"{self.seren.gateway_url}/databases/projects/{self.project_id}/branches/{self.branch_id}/query"
+        url = f"{self.seren.gateway_url}/projects/{self.project_id}/branches/{self.branch_id}/query"
 
         response = self.seren.session.post(
             url,
@@ -818,39 +1157,48 @@ class SerenDBStorage:
         )
 
         response.raise_for_status()
-        return response.json()
+        return self._unwrap_data(response.json())
 
     def _list_projects(self) -> List[Dict[str, Any]]:
         """List all SerenDB projects"""
-        url = f"{self.seren.gateway_url}/databases/projects"
+        url = f"{self.seren.gateway_url}/projects"
         response = self.seren.session.get(url, timeout=10)
         response.raise_for_status()
-        return response.json().get('data', [])
+        return self._unwrap_data(response.json(), default=[])
 
     def _create_project(self, name: str) -> Dict[str, Any]:
         """Create a new SerenDB project"""
-        url = f"{self.seren.gateway_url}/databases/projects"
+        url = f"{self.seren.gateway_url}/projects"
         response = self.seren.session.post(
             url,
             json={'name': name, 'region': 'aws-us-east-2'},
             timeout=30
         )
         response.raise_for_status()
-        data = response.json()
+        data = self._unwrap_data(response.json())
         # Return full project details
-        project_id = data['data']['id']
+        project_id = data['id']
         return self._get_project(project_id)
 
     def _get_project(self, project_id: str) -> Dict[str, Any]:
         """Get project details"""
-        url = f"{self.seren.gateway_url}/databases/projects/{project_id}"
+        url = f"{self.seren.gateway_url}/projects/{project_id}"
         response = self.seren.session.get(url, timeout=10)
         response.raise_for_status()
-        return response.json().get('data', {})
+        return self._unwrap_data(response.json(), default={})
 
     def _list_branches(self, project_id: str) -> List[Dict[str, Any]]:
         """List branches for a project"""
-        url = f"{self.seren.gateway_url}/databases/projects/{project_id}/branches"
+        url = f"{self.seren.gateway_url}/projects/{project_id}/branches"
         response = self.seren.session.get(url, timeout=10)
         response.raise_for_status()
-        return response.json().get('data', [])
+        return self._unwrap_data(response.json(), default=[])
+
+    @staticmethod
+    def _unwrap_data(payload: Any, default: Optional[Any] = None) -> Any:
+        """Accept either wrapped {'data': ...} or direct payloads from SerenDB."""
+        if payload is None:
+            return default
+        if isinstance(payload, dict) and 'data' in payload:
+            return payload['data']
+        return payload

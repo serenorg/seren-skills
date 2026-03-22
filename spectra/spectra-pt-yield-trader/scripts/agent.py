@@ -10,6 +10,8 @@ import os
 import sys
 from urllib.request import Request, urlopen
 
+from normalized_trade_store import NormalizedTradingStore
+
 
 DEFAULT_DRY_RUN = True
 SUPPORTED_CHAINS = {
@@ -37,11 +39,32 @@ def parse_args() -> argparse.Namespace:
         default="config.json",
         help="Path to runtime config file (default: config.json).",
     )
+    parser.add_argument(
+        "--yes-live",
+        action="store_true",
+        help="Explicit startup-only opt-in for emitting a live execution handoff.",
+    )
+    parser.add_argument(
+        "--stop-trading",
+        action="store_true",
+        help="Stop trading and emit a sell-side unwind handoff for the tracked PT position.",
+    )
     return parser.parse_args()
 
 
-def load_config(config_path: str) -> dict:
+def _bootstrap_config_path(config_path: str) -> Path:
     path = Path(config_path)
+    if path.exists():
+        return path
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+    return path
+
+
+def load_config(config_path: str) -> dict:
+    path = _bootstrap_config_path(config_path)
     if not path.exists():
         raise ConfigError(f"Config file not found: {config_path}")
     try:
@@ -260,6 +283,35 @@ def _build_mcp_plan(inputs: dict) -> list[dict]:
     return plan
 
 
+def _build_stop_trading_plan(inputs: dict) -> list[dict]:
+    if not inputs["pt_address"]:
+        raise ConfigError("inputs.pt_address is required to stop trading and unwind the tracked PT position.")
+
+    return [
+        {
+            "step": "quote_exit_trade",
+            "tool": "quote_trade",
+            "args": {
+                "chain": inputs["chain"],
+                "side": "sell",
+                "capital_usd": inputs["capital_usd"],
+                "pt_address": inputs["pt_address"],
+            },
+        },
+        {
+            "step": "simulate_portfolio_after_exit",
+            "tool": "simulate_portfolio_after_trade",
+            "args": {
+                "chain": inputs["chain"],
+                "side": "sell",
+                "capital_usd": inputs["capital_usd"],
+                "pt_address": inputs["pt_address"],
+                "wallet_address": inputs["wallet_address"] or "<required_for_personal_simulation>",
+            },
+        },
+    ]
+
+
 def _guard_policy(inputs: dict, policies: dict) -> list[dict]:
     violations = []
     if inputs["capital_usd"] > policies["max_notional_usd"]:
@@ -286,7 +338,7 @@ def _guard_policy(inputs: dict, policies: dict) -> list[dict]:
     return violations
 
 
-def run_once(config: dict) -> dict:
+def run_once(config: dict, *, yes_live: bool = False) -> dict:
     dry_run = bool(config.get("dry_run", DEFAULT_DRY_RUN))
     inputs = _resolve_inputs(config)
     policies = _resolve_policies(config)
@@ -320,6 +372,17 @@ def run_once(config: dict) -> dict:
             "workflow_step_count": len(mcp_plan),
             "mcp_plan": mcp_plan,
         }
+    if live_requested and not yes_live:
+        return {
+            "status": "ok",
+            "skill": "spectra-pt-yield-trader",
+            "dry_run": True,
+            "mode": "analysis-only",
+            "blocked_action": "execution_handoff",
+            "message": "Live handoff requested but --yes-live was not provided.",
+            "workflow_step_count": len(mcp_plan),
+            "mcp_plan": mcp_plan,
+        }
 
     execution_handoff = {
         "enabled": live_requested and live_confirmed,
@@ -339,6 +402,35 @@ def run_once(config: dict) -> dict:
             "mcp_spectra": "mcp-spectra",
             "seren_cron": "seren-cron",
         },
+        "inputs": inputs,
+    }
+
+
+def run_stop_trading(config: dict) -> dict:
+    inputs = _resolve_inputs(config)
+    execution = _resolve_execution(config)
+    stop_plan = _build_stop_trading_plan(inputs)
+    execution_handoff = {
+        "enabled": True,
+        "executor": execution["executor"],
+        "warning": "Spectra MCP is read-only. Use the external executor to submit the sell-side exit handoff.",
+        "side": "sell",
+    }
+    return {
+        "status": "ok",
+        "skill": "spectra-pt-yield-trader",
+        "dry_run": True,
+        "mode": "stop-trading",
+        "stop_trading": True,
+        "cancel_all_orders": "not_applicable_for_read_only_handoff",
+        "liquidate_position": True,
+        "workflow_step_count": len(stop_plan),
+        "mcp_plan": stop_plan,
+        "execution_handoff": execution_handoff,
+        "message": (
+            "stop trading and liquidate the tracked PT position by handing the sell-side "
+            "exit plan to the configured executor."
+        ),
         "inputs": inputs,
     }
 
@@ -387,11 +479,58 @@ def _check_serenbucks_balance(api_key: str) -> float:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
 
+
+def _persist_normalized_result(config: dict, result: dict, *, run_type: str) -> None:
+    store = NormalizedTradingStore(
+        os.getenv("SERENDB_URL"),
+        skill_slug="spectra-pt-yield-trader",
+        venue="spectra",
+        strategy_name="spectra-pt-yield-trader",
+    )
+    order_events = []
+    for step in result.get("mcp_plan", []):
+        if not isinstance(step, dict):
+            continue
+        order_events.append(
+            {
+                "order_id": step.get("step"),
+                "instrument_id": step.get("tool"),
+                "symbol": step.get("tool"),
+                "side": run_type.upper(),
+                "order_type": "workflow_step",
+                "event_type": "planned_step",
+                "status": result.get("status", "ok"),
+                "metadata": step,
+            }
+        )
+    try:
+        store.persist_completed_run(
+            mode=str(result.get("mode") or run_type),
+            dry_run=bool(result.get("dry_run", True)),
+            config=config,
+            status=str(result.get("status", "ok")),
+            summary={
+                "workflow_step_count": result.get("workflow_step_count"),
+                "execution_handoff": result.get("execution_handoff", {}),
+            },
+            order_events=order_events,
+            metadata={"run_type": run_type},
+            error_code=result.get("error_code"),
+            error_message=result.get("message"),
+        )
+    finally:
+        store.close()
+
 def main() -> int:
     args = parse_args()
     try:
         config = load_config(args.config)
-        result = run_once(config=config)
+        if args.stop_trading:
+            result = run_stop_trading(config=config)
+            _persist_normalized_result(config, result, run_type="stop_trading")
+        else:
+            result = run_once(config=config, yes_live=bool(args.yes_live))
+            _persist_normalized_result(config, result, run_type="run_once")
     except ConfigError as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1

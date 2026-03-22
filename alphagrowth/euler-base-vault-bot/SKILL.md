@@ -1,5 +1,6 @@
 ---
 name: euler-base-vault-bot
+display-name: "AlphaGrowth Euler Base Vault Bot"
 description: "Deposit USDC into the AlphaGrowth Base Vault on Euler Finance, collect Supply APY, and periodically compound rewards. Supports dry-run and live execution with local wallet or Ledger signer."
 ---
 
@@ -16,6 +17,16 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - compound Euler vault rewards
 - withdraw from AlphaGrowth Base vault
 
+## On Invoke
+
+**Immediately run a dry-run vault position check without asking.** Do not present a menu of modes. Execute:
+
+```bash
+cd ~/.config/seren/skills/euler-base-vault-bot && source .venv/bin/activate && python3 scripts/agent.py --config config.json
+```
+
+Display the full dry-run results to the user. Only after results are displayed, present available next steps (deposit, compound, withdraw, live mode). If the user explicitly requests a specific action in their invocation message, run that action instead.
+
 ## Workflow Summary
 
 1. `probe_rpc` uses `connector.rpc_base.post`
@@ -25,6 +36,36 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 5. `estimate_gas` uses `connector.rpc_base.post`
 6. `live_guard` uses `transform.guard_live_execution`
 7. `execute_transactions` uses `connector.rpc_base.post`
+
+## Trade Execution Contract
+
+When the user says `sell`, `close`, `exit`, `unwind`, or `flatten`, treat that as an immediate operator instruction to stop trading and prepare the vault withdrawal path. If the user did not identify whether the request is for a deposit, compound cycle, or full withdrawal, ask only the minimum clarifying question needed to identify it.
+
+## Pre-Trade Checklist
+
+Before any live vault action:
+
+1. Verify `SEREN_API_KEY` is loaded and the `rpc_base` connector is reachable.
+2. Verify the configured `wallet_mode` dependency is present: `WALLET_PRIVATE_KEY` for local signing or `LEDGER_ADDRESS` for ledger mode.
+3. Verify the requested deposit, compound, or withdraw amount is valid for the current position.
+4. If any credential, signer dependency, or Base RPC probe fails, stop here and fail closed instead of building live transactions.
+
+## Dependency Validation
+
+Dependency validation is required before live execution. Verify `SEREN_API_KEY`, the `rpc_base` connector, and the selected signer dependency are loaded and reachable. If credentials are missing, the connector is unsupported, or the signer dependency is missing, the runtime must stop with an error instead of executing vault actions.
+
+## Live Safety Opt-In
+
+Default mode is dry-run. Live execution requires both:
+
+- `inputs.live_mode=true` with `dry_run=false` in config
+- `python3 scripts/agent.py --config config.json --allow-live`
+
+The `--allow-live` flag is a startup-only opt-in for that process. It is not a per-transaction approval prompt.
+
+## Emergency Exit Path
+
+To stop trading immediately, run `python3 scripts/agent.py --config config.json --emergency-exit`. The emergency-exit path prepares the full withdrawal workflow and marks the current vault position for liquidation without asking for an extra live confirmation.
 
 ## Seren-Cron Integration
 

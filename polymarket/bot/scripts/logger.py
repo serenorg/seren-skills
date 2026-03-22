@@ -9,7 +9,7 @@ Maintains three log files:
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 
@@ -55,7 +55,7 @@ class TradingLogger:
         """Append a JSON line to a file (legacy mode only)"""
         # Add timestamp if not present
         if 'timestamp' not in data:
-            data['timestamp'] = datetime.utcnow().isoformat() + 'Z'
+            data['timestamp'] = datetime.now(timezone.utc).isoformat()
 
         with open(filepath, 'a') as f:
             f.write(json.dumps(data) + '\n')
@@ -107,8 +107,12 @@ class TradingLogger:
                     'side': side,
                     'price': price,
                     'size': size,
-                    'executed_at': datetime.utcnow().isoformat() + 'Z',
-                    'tx_hash': None
+                    'executed_at': datetime.now(timezone.utc).isoformat(),
+                    'tx_hash': None,
+                    'fair_value': fair_value,
+                    'edge': edge,
+                    'status': status,
+                    'pnl': pnl,
                 })
             except Exception as e:
                 print(f"Error logging trade to SerenDB: {e}")
@@ -158,14 +162,16 @@ class TradingLogger:
             # Save to SerenDB
             try:
                 self.serendb.save_scan_log({
-                    'scan_at': datetime.utcnow().isoformat() + 'Z',
+                    'scan_at': datetime.now(timezone.utc).isoformat(),
+                    'dry_run': dry_run,
                     'markets_scanned': markets_scanned,
                     'opportunities_found': opportunities_found,
                     'trades_executed': trades_executed,
                     'capital_deployed': capital_deployed,
                     'api_cost': api_cost,
                     'serenbucks_balance': serenbucks_balance,
-                    'polymarket_balance': polymarket_balance
+                    'polymarket_balance': polymarket_balance,
+                    'errors': errors or [],
                 })
             except Exception as e:
                 print(f"Error logging scan to SerenDB: {e}")

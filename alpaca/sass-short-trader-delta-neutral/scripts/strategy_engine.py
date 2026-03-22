@@ -406,6 +406,23 @@ class StrategyEngine:
             },
         )
 
+    def cancel_all_live_orders(self, mode: str = "live") -> Dict[str, Any]:
+        """Stop trading by cancelling all tracked live orders for this strategy."""
+        latest_orders = self.storage.get_latest_selected_orders(mode=mode)
+        order_refs = [
+            str(order.get("order_ref") or order.get("id") or "").strip()
+            for order in latest_orders
+            if isinstance(order, dict)
+        ]
+        cancelled_live_orders = self._cancel_live_orders(order_refs)
+        return {
+            "status": "ok",
+            "mode": mode,
+            "order_refs": [ref for ref in order_refs if ref],
+            "cancelled_live_orders": cancelled_live_orders,
+            "message": "stop trading cancelled all tracked live orders for the latest strategy run.",
+        }
+
     def run_scan(
         self,
         mode: str = "paper-sim",
@@ -1446,18 +1463,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-key", default=os.getenv("SEREN_API_KEY", ""), help="Seren API key (required if --dsn not provided)")
     parser.add_argument("--project-name", default=os.getenv("SEREN_PROJECT_NAME", "alpaca-sass-short-trader-delta-neutral"))
     parser.add_argument("--database-name", default=os.getenv("SEREN_DATABASE_NAME", "alpaca_sass_short_bot_dn"))
-    parser.add_argument("--run-type", required=True, choices=["scan", "monitor", "post-close"], help="Execution run type")
+    parser.add_argument("--run-type", choices=["scan", "monitor", "post-close"], help="Execution run type")
     parser.add_argument("--mode", default="paper-sim", choices=["paper", "paper-sim", "live"])
     parser.add_argument("--strict-required-feeds", action="store_true", help="Block scan if required data feeds fail")
     parser.add_argument("--config", default="", help="Optional config JSON path")
+    parser.add_argument("--allow-live", action="store_true", help="Explicit startup-only opt-in for live execution.")
+    parser.add_argument("--stop-trading", action="store_true", help="Stop trading and cancel tracked live orders.")
     return parser.parse_args()
+
+
+def _require_live_confirmation(mode: str, allow_live: bool) -> None:
+    if mode == "live" and not allow_live:
+        raise SystemExit(
+            "Live mode requested but --allow-live was not provided. "
+            "Use `python scripts/strategy_engine.py --mode live --allow-live` for the startup-only live opt-in."
+        )
+
+
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+    return path
 
 
 def main() -> None:
     args = parse_args()
     config: Dict[str, Any] = {}
     if args.config:
-        with open(args.config, "r", encoding="utf-8") as f:
+        with open(_bootstrap_config_path(args.config), "r", encoding="utf-8") as f:
             config = json.load(f)
 
     dsn = resolve_dsn(
@@ -1476,6 +1514,12 @@ def main() -> None:
     engine.ensure_schema()
 
     mode = args.mode or config.get("mode", "paper-sim")
+    if args.stop_trading:
+        print(json.dumps(engine.cancel_all_live_orders(mode="live"), indent=2, default=str))
+        return
+    _require_live_confirmation(mode, args.allow_live)
+    if not args.run_type:
+        raise SystemExit("--run-type is required unless --stop-trading is set.")
     optimization: Optional[Dict[str, Any]] = None
     if args.run_type == "scan":
         def _run_scan(candidate: Dict[str, Any]) -> Dict[str, Any]:

@@ -19,6 +19,19 @@ CREATE TABLE IF NOT EXISTS trading.strategy_runs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS skill_slug TEXT;
+ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS venue TEXT;
+ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS dry_run BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS config JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS summary JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS error_code TEXT;
+ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS error_message TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_strategy_runs_skill_mode_started
+  ON trading.strategy_runs (skill_slug, mode, started_at DESC);
+
 CREATE TABLE IF NOT EXISTS trading.candidate_scores (
   id BIGSERIAL PRIMARY KEY,
   run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
@@ -69,8 +82,96 @@ CREATE TABLE IF NOT EXISTS trading.order_events (
   UNIQUE (run_id, order_ref, event_time)
 );
 
+ALTER TABLE trading.order_events ADD COLUMN IF NOT EXISTS order_id TEXT;
+ALTER TABLE trading.order_events ADD COLUMN IF NOT EXISTS instrument_id TEXT;
+ALTER TABLE trading.order_events ADD COLUMN IF NOT EXISTS symbol TEXT;
+ALTER TABLE trading.order_events ADD COLUMN IF NOT EXISTS event_type TEXT;
+ALTER TABLE trading.order_events ADD COLUMN IF NOT EXISTS price NUMERIC(24, 10);
+ALTER TABLE trading.order_events ADD COLUMN IF NOT EXISTS quantity NUMERIC(24, 10);
+ALTER TABLE trading.order_events ADD COLUMN IF NOT EXISTS notional_usd NUMERIC(24, 10);
+ALTER TABLE trading.order_events ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE INDEX IF NOT EXISTS idx_order_events_run_id ON trading.order_events(run_id);
 CREATE INDEX IF NOT EXISTS idx_order_events_ticker_mode_time ON trading.order_events(ticker, mode, event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_order_events_run_time ON trading.order_events(run_id, event_time DESC);
+
+CREATE TABLE IF NOT EXISTS trading.fills (
+  id BIGSERIAL PRIMARY KEY,
+  run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+  order_id TEXT,
+  venue_fill_id TEXT,
+  instrument_id TEXT,
+  symbol TEXT,
+  side TEXT,
+  fill_price NUMERIC(24, 10),
+  fill_quantity NUMERIC(24, 10),
+  fee_usd NUMERIC(24, 10),
+  notional_usd NUMERIC(24, 10),
+  realized_pnl_usd NUMERIC(24, 10),
+  fill_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_fills_run_time ON trading.fills(run_id, fill_time DESC);
+
+CREATE TABLE IF NOT EXISTS trading.positions (
+  id BIGSERIAL PRIMARY KEY,
+  run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+  position_key TEXT NOT NULL,
+  instrument_id TEXT,
+  symbol TEXT,
+  side TEXT,
+  quantity NUMERIC(24, 10),
+  entry_price NUMERIC(24, 10),
+  cost_basis_usd NUMERIC(24, 10),
+  market_price NUMERIC(24, 10),
+  market_value_usd NUMERIC(24, 10),
+  unrealized_pnl_usd NUMERIC(24, 10),
+  realized_pnl_usd NUMERIC(24, 10),
+  status TEXT,
+  opened_at TIMESTAMPTZ,
+  closed_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  UNIQUE (run_id, position_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_positions_run_status ON trading.positions(run_id, status);
+
+CREATE TABLE IF NOT EXISTS trading.position_marks (
+  id BIGSERIAL PRIMARY KEY,
+  run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+  position_key TEXT NOT NULL,
+  instrument_id TEXT,
+  symbol TEXT,
+  side TEXT,
+  quantity NUMERIC(24, 10),
+  mark_price NUMERIC(24, 10),
+  market_value_usd NUMERIC(24, 10),
+  unrealized_pnl_usd NUMERIC(24, 10),
+  realized_pnl_usd NUMERIC(24, 10),
+  mark_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_position_marks_run_time ON trading.position_marks(run_id, mark_time DESC);
+
+CREATE TABLE IF NOT EXISTS trading.pnl_periods (
+  id BIGSERIAL PRIMARY KEY,
+  run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
+  period_type TEXT NOT NULL,
+  period_start TIMESTAMPTZ,
+  period_end TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  realized_pnl_usd NUMERIC(24, 10),
+  unrealized_pnl_usd NUMERIC(24, 10),
+  fees_usd NUMERIC(24, 10),
+  gross_pnl_usd NUMERIC(24, 10),
+  net_pnl_usd NUMERIC(24, 10),
+  equity_start_usd NUMERIC(24, 10),
+  equity_end_usd NUMERIC(24, 10),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_pnl_periods_run_end ON trading.pnl_periods(run_id, period_end DESC);
 
 CREATE TABLE IF NOT EXISTS trading.position_marks_daily (
   as_of_date DATE NOT NULL,

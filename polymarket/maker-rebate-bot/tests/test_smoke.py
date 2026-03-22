@@ -92,6 +92,7 @@ def _base_backtest_payload(now_ts: int, telemetry_path: Path) -> dict:
                 "question": "Synthetic stateful market",
                 "token_id": "TEST-STATEFUL",
                 "rebate_bps": 3,
+                "volume24hr": 25000,
                 "end_ts": now_ts + (14 * 24 * 3600),
                 "history": history,
                 "orderbooks": orderbooks,
@@ -148,6 +149,30 @@ def test_quote_mode_fetches_live_markets_when_config_markets_is_empty(monkeypatc
         fetched_urls.append(url)
         return [
             {
+                "id": "LIVE-MKT-0",
+                "question": "Will event zero happen?",
+                "clobTokenIds": ["TOKEN-0"],
+                "outcomePrices": ["0.12", "0.88"],
+                "bestBid": 0.11,
+                "bestAsk": 0.13,
+                "liquidity": 550000,
+                "volume24hr": 100000,
+                "rebate_bps": 2.5,
+                "endDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ts + 86400)),
+            },
+            {
+                "id": "LIVE-MKT-LOW",
+                "question": "Will thin event happen?",
+                "clobTokenIds": ["TOKEN-LOW"],
+                "outcomePrices": ["0.51", "0.49"],
+                "bestBid": 0.5,
+                "bestAsk": 0.52,
+                "liquidity": 500000,
+                "volume24hr": 1200,
+                "rebate_bps": 2.5,
+                "endDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ts + 86400)),
+            },
+            {
                 "id": "LIVE-MKT-1",
                 "question": "Will event A happen?",
                 "clobTokenIds": ["TOKEN-1"],
@@ -180,6 +205,9 @@ def test_quote_mode_fetches_live_markets_when_config_markets_is_empty(monkeypatc
         "strategy": {
             "markets_max": 2,
             "min_seconds_to_resolution": 60,
+            "min_mid_price": 0.30,
+            "max_mid_price": 0.70,
+            "min_daily_volume_usd": 5000,
             "min_spread_bps": 20,
         },
         "markets": [],
@@ -191,6 +219,24 @@ def test_quote_mode_fetches_live_markets_when_config_markets_is_empty(monkeypatc
     assert result["strategy_summary"]["markets_considered"] == 2
     assert result["strategy_summary"]["markets_quoted"] == 2
     assert any("/publishers/polymarket-data/markets?" in url for url in fetched_urls)
+
+
+def test_check_serenbucks_balance_uses_nested_funded_balance(monkeypatch) -> None:
+    agent = _load_agent_module()
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"data": {"funded_balance_usd": "$20.33"}}).encode("utf-8")
+
+    monkeypatch.setattr(agent, "urlopen", lambda request, timeout=10: _Response())
+
+    assert agent._check_serenbucks_balance("test-key") == 20.33
 
 
 def test_live_guard_fixture_blocks_execution() -> None:
@@ -325,7 +371,13 @@ def test_config_example_uses_seren_polymarket_publisher_urls() -> None:
     agent = _load_agent_module()
     payload = json.loads(CONFIG_EXAMPLE_PATH.read_text(encoding="utf-8"))
     backtest = payload.get("backtest", {})
+    strategy = payload.get("strategy", {})
+    defaults = agent.to_params({})
     assert agent.to_backtest_params({}).bankroll_usd == backtest.get("bankroll_usd") == 100
+    assert defaults.min_mid_price == strategy.get("min_mid_price") == 0.30
+    assert defaults.max_mid_price == strategy.get("max_mid_price") == 0.70
+    assert defaults.min_daily_volume_usd == strategy.get("min_daily_volume_usd") == 5000
+    assert defaults.max_inventory_hold_cycles == strategy.get("max_inventory_hold_cycles") == 3
     assert agent.to_optimization_params({}).max_iterations == backtest["optimization"]["max_iterations"] == 15
     assert backtest.get("gamma_markets_url", "").startswith(
         "https://api.serendb.com/publishers/polymarket-data/"
@@ -433,6 +485,7 @@ def test_live_quote_mode_uses_live_market_loader_and_executor(monkeypatch) -> No
                 "seconds_to_resolution": 86400,
                 "volatility_bps": 50,
                 "rebate_bps": 2.5,
+                "volume24hr": 12000,
                 "tick_size": "0.01",
                 "neg_risk": False,
             }
@@ -448,10 +501,11 @@ def test_live_quote_mode_uses_live_market_loader_and_executor(monkeypatch) -> No
             }
         )
         return {
-            "orders_submitted": [{"id": "ORDER-1"}, {"id": "ORDER-2"}],
+            "orders_submitted": [{"id": "ORDER-1", "source": "forced_inventory_unwind"}],
             "open_order_ids": ["ORDER-1"],
             "updated_inventory": {"LIVE-MKT-1": 12.5},
             "live_risk": {"peak_equity_usd": 1000.0, "current_equity_usd": 980.0, "drawdown_pct": 2.0},
+            "positions": [{"asset_id": "TOKEN-LIVE-1", "size": 4.0}],
         }
 
     monkeypatch.setattr(agent, "DirectClobTrader", FakeTrader)
@@ -476,6 +530,10 @@ def test_live_quote_mode_uses_live_market_loader_and_executor(monkeypatch) -> No
                 "bankroll_usd": 1000,
                 "markets_max": 1,
                 "min_seconds_to_resolution": 60,
+                "min_mid_price": 0.30,
+                "max_mid_price": 0.70,
+                "min_daily_volume_usd": 5000,
+                "max_inventory_hold_cycles": 3,
                 "min_edge_bps": 2,
                 "default_rebate_bps": 3,
                 "expected_unwind_cost_bps": 1.5,
@@ -489,7 +547,10 @@ def test_live_quote_mode_uses_live_market_loader_and_executor(monkeypatch) -> No
                 "max_position_notional_usd": 150,
                 "inventory_skew_strength_bps": 25,
             },
-            "state": {"inventory": {"CONFIG-MKT": 1.0}},
+            "state": {
+                "inventory": {"CONFIG-MKT": 1.0},
+                "inventory_cycles": {"TOKEN-LIVE-1": {"cycles_held": 2}},
+            },
         },
         markets=[
             {
@@ -507,17 +568,25 @@ def test_live_quote_mode_uses_live_market_loader_and_executor(monkeypatch) -> No
     assert result["status"] == "ok"
     assert result["mode"] == "live"
     assert result["market_source"] == "live-seren-publisher"
-    assert result["state"] == {
-        "inventory": {"LIVE-MKT-1": 12.5},
-        "live_risk": {"peak_equity_usd": 1000.0, "current_equity_usd": 980.0, "drawdown_pct": 2.0},
+    assert result["state"]["inventory"] == {"LIVE-MKT-1": 12.5}
+    assert result["state"]["live_risk"] == {
+        "peak_equity_usd": 1000.0,
+        "current_equity_usd": 980.0,
+        "drawdown_pct": 2.0,
     }
-    assert result["strategy_summary"]["orders_submitted"] == 2
+    assert result["state"]["inventory_cycles"]["TOKEN-LIVE-1"]["cycles_held"] == 3
+    assert result["strategy_summary"]["orders_submitted"] == 1
     assert result["strategy_summary"]["open_orders"] == 1
+    assert result["strategy_summary"]["forced_unwinds"] == 1
     assert result["strategy_summary"]["current_equity_usd"] == 980.0
     assert result["strategy_summary"]["drawdown_pct"] == 2.0
     assert load_calls and load_calls[0]["markets_max"] == 1
+    assert load_calls[0]["min_mid_price"] == 0.30
+    assert load_calls[0]["max_mid_price"] == 0.70
+    assert load_calls[0]["min_daily_volume_usd"] == 5000
     assert execute_calls and execute_calls[0]["client_name"] == "polymarket-maker-rebate-bot"
     assert execute_calls[0]["quotes"][0]["market_id"] == "LIVE-MKT-1"
+    assert execute_calls[0]["quotes"][0]["force_unwind"] is True
 
 
 def test_persist_runtime_state_updates_config_file(tmp_path: Path) -> None:
@@ -622,6 +691,83 @@ def test_cancel_stale_orders_detects_old_orders() -> None:
     assert "fresh-order-1" not in trader.cancelled
 
 
+def test_backtest_force_unwinds_after_hold_limit_and_never_shorts_inventory() -> None:
+    agent = _load_agent_module()
+    now_ts = int(time.time())
+    history = []
+    orderbooks = {}
+    for idx, price in enumerate([0.55, 0.54, 0.53, 0.52, 0.51, 0.50, 0.49, 0.48]):
+        ts = now_ts - ((8 - idx) * 3600)
+        history.append((ts, price))
+        orderbooks[ts] = agent.OrderBookSnapshot(
+            t=ts,
+            best_bid=round(price - 0.001, 6),
+            best_ask=round(price + 0.001, 6),
+            bid_size_usd=500.0,
+            ask_size_usd=500.0,
+        )
+
+    strategy = agent.StrategyParams(
+        bankroll_usd=100.0,
+        markets_max=1,
+        min_seconds_to_resolution=60,
+        min_mid_price=0.30,
+        max_mid_price=0.70,
+        min_daily_volume_usd=5000.0,
+        max_inventory_hold_cycles=1,
+        min_edge_bps=0.0,
+        default_rebate_bps=3.0,
+        expected_unwind_cost_bps=1.5,
+        adverse_selection_bps=1.0,
+        min_spread_bps=20.0,
+        max_spread_bps=20.0,
+        volatility_spread_multiplier=0.0,
+        base_order_notional_usd=40.0,
+        max_notional_per_market_usd=120.0,
+        max_total_notional_usd=120.0,
+        max_position_notional_usd=120.0,
+        inventory_skew_strength_bps=25.0,
+    )
+    backtest = agent.BacktestParams(
+        bankroll_usd=100.0,
+        days=90,
+        fidelity_minutes=60,
+        participation_rate=1.0,
+        volatility_window_points=3,
+        min_liquidity_usd=0.0,
+        markets_fetch_limit=5,
+        min_history_points=4,
+        require_orderbook_history=False,
+        spread_decay_bps=10000.0,
+        join_best_queue_factor=1.0,
+        off_best_queue_factor=1.0,
+        synthetic_orderbook_half_spread_bps=18.0,
+        synthetic_orderbook_depth_usd=500.0,
+    )
+    result = agent._simulate_market_backtest(
+        {
+            "market_id": "TEST-HOLD-LIMIT",
+            "question": "Synthetic unwind market",
+            "volume24hr": 10000.0,
+            "rebate_bps": 3.0,
+            "end_ts": now_ts + (20 * 24 * 3600),
+            "history": history,
+            "orderbooks": orderbooks,
+            "orderbook_mode": "historical",
+        },
+        strategy,
+        backtest,
+        allocated_capital=100.0,
+    )
+
+    assert any(record.get("status") == "forced_unwind" for record in result["telemetry"])
+    assert all(
+        record.get("inventory_notional_after_usd", 0.0) >= -1e-9
+        for record in result["telemetry"]
+        if "inventory_notional_after_usd" in record
+    )
+
+
 def test_unwind_all_requires_yes_live() -> None:
     """#163: --unwind-all without --yes-live must be rejected."""
     agent = _load_agent_module()
@@ -633,21 +779,22 @@ def test_unwind_all_requires_yes_live() -> None:
 
 
 def test_check_neg_risk_approvals_returns_structured_result() -> None:
-    """#159: check_neg_risk_approvals returns actionable errors for missing approvals."""
+    """#159: check_neg_risk_approvals fails closed with structured RPC errors."""
     live = _load_live_module()
     assert hasattr(live, "check_neg_risk_approvals")
     assert hasattr(live, "POLYGON_NEG_RISK_ADAPTER")
     assert live.POLYGON_NEG_RISK_ADAPTER == "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
-    # Test with a zero-address wallet (no approvals) against a non-responding RPC
+    # Test with a zero-address wallet against a non-responding public RPC fallback.
     result = live.check_neg_risk_approvals(
         "0x0000000000000000000000000000000000000000",
-        rpc_url="http://127.0.0.1:1",  # unreachable — forces 0x0 fallback
+        rpc_url="http://127.0.0.1:1",
         timeout_seconds=1.0,
     )
     assert isinstance(result, dict)
     assert result["checks_passed"] is False
     assert len(result["errors"]) >= 1
-    assert "NegRiskAdapter" in result["errors"][0]
+    assert "Polygon RPC read failed" in result["errors"][0]
+    assert not any("NegRiskAdapter" in error for error in result["errors"])
 
 
 def test_setup_local_pull_schedule_uses_quote_payload(monkeypatch) -> None:

@@ -15,6 +15,16 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - enforce backtest-first validation before generating paired trade intents
 - run a dry-run-first workflow for hedged pair execution
 
+## On Invoke
+
+**Immediately run the default paired-market backtest without asking.** Do not present a menu of modes. Execute:
+
+```bash
+cd ~/.config/seren/skills/high-throughput-paired-basis-maker && source .venv/bin/activate && python3 scripts/agent.py --config config.json
+```
+
+Display the full backtest results to the user. Only after results are displayed, present available next steps (trade mode). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## Backtest Period
 
 - Default: `270` days
@@ -40,6 +50,40 @@ Live execution requires both:
 - `execution.live_mode=true` in config
 - `--yes-live` on the CLI
 - `POLY_PRIVATE_KEY` (or `WALLET_PRIVATE_KEY`) plus `POLY_API_KEY` / `POLY_PASSPHRASE` / `POLY_SECRET`
+
+## Trade Execution Contract
+
+When the user gives a direct exit instruction (`sell`, `close`, `exit`, `unwind`, `flatten`), execute the exit path immediately.
+Do not editorialize or argue against recovering remaining funds.
+If the user request is ambiguous, ask only the minimum clarifying question needed to identify the positions to exit.
+
+## CLOB Exit Rules
+
+- `py-clob-client` via `DirectClobTrader` is the canonical live execution path.
+- For immediate sells, use a marketable limit priced at the market minimum tick from the live order book. Do not hardcode `$0.001`; use the current `tick_size`.
+- Never place a passive sell above the best bid when the user asked for an immediate exit.
+- Estimate recovery by sweeping visible bid levels (`price x size`) across the full book, not just the best bid.
+- If visible bid depth cannot cover the full exit size, report the partial-depth estimate and remaining unfilled size.
+
+## Pre-Trade Checklist (Mandatory)
+
+Before any live buy, sell, or unwind:
+
+1. Fetch the live order book for every token involved.
+2. Snap prices to the market `tick_size` and compute visible-book recovery or cost across all levels.
+3. Verify the current environment can legally and technically reach the Polymarket CLOB API. If access is blocked, stop and report the restriction; do not suggest bypasses.
+4. Verify `py-clob-client` is installed and `POLY_PRIVATE_KEY` or `WALLET_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_PASSPHRASE`, and `POLY_SECRET` are loaded.
+5. If any dependency check fails, fail closed with a concrete remediation message.
+
+## Emergency Exit
+
+Immediately liquidate held inventory with:
+
+```bash
+python3 scripts/agent.py --config config.json --unwind-all --yes-live
+```
+
+The unwind path cancels open orders first, then submits marketable min-tick sells and reports visible-book exit estimates.
 
 ## Runtime Files
 

@@ -13,8 +13,7 @@ Autonomous trading agent for prediction markets integrating the Seren ecosystem.
 **READ THIS BEFORE USING**
 
 ### Geographic Restrictions - CRITICAL
-⚠️ **Polymarket is BLOCKED in the United States** following their 2022 CFTC settlement.
-⚠️ **Using VPNs or other methods to circumvent geographic restrictions may violate laws**.
+⚠️ **Polymarket access depends on jurisdiction, account eligibility, and current network environment**.
 ⚠️ **You are responsible for verifying that prediction market trading is legal in your jurisdiction**.
 
 ### Regulatory Status
@@ -58,6 +57,8 @@ Activate this skill when the user mentions:
 - "autonomous trading"
 
 ## For Claude: How to Invoke This Skill
+
+**Immediately run a dry-run scan without asking.** Do not present a menu or ask the user to choose between scan/trade/setup. Execute the paper scan by default. Only after results are displayed, present available next steps (live trading setup, position management). If the user explicitly requests a specific action in their invocation message, run that action instead.
 
 When the user asks to **scan Polymarket** or **find trading opportunities**, run the bot:
 
@@ -138,6 +139,39 @@ python3 scripts/run_local_pull_runner.py --config config.json
 - Always confirm user has adequate budget before suggesting live mode
 - Emphasize paper trading first
 - Live trading requires a schedule created with `--live`
+
+## Trade Execution Contract
+
+When the user gives a direct exit instruction (`sell`, `close`, `exit`, `unwind`, `flatten`), execute the exit path immediately.
+Do not editorialize or argue against recovering remaining funds.
+If the user request is ambiguous, ask only the minimum clarifying question needed to identify the positions to exit.
+
+## CLOB Execution Rules
+
+- `py-clob-client` via `DirectClobTrader` from `scripts/polymarket_live.py` is the canonical live execution path.
+- For immediate sells, fetch the live order book, use the market `tick_size`, and submit a marketable sell priced at that market's minimum tick.
+- Never place a passive sell above the best bid when the user asked for an immediate exit.
+- Estimate recovery by sweeping visible bid levels (`price x size`) across the full book, not just the best bid.
+- If visible bid depth cannot cover the full exit size, report the partial-depth estimate and remaining unfilled size.
+
+## Pre-Trade Checklist (Mandatory)
+
+Before any live buy, sell, or unwind:
+
+1. Fetch the live order book for every token involved.
+2. Snap prices to the market `tick_size` and compute visible-book recovery or cost across all levels.
+3. Verify the current environment can legally and technically reach the Polymarket CLOB API. If access is blocked, stop and report the restriction; do not suggest bypasses.
+4. Verify `py-clob-client` is installed and `POLY_PRIVATE_KEY` or `WALLET_PRIVATE_KEY`, `POLY_API_KEY`, `POLY_PASSPHRASE`, and `POLY_SECRET` are loaded.
+5. If any dependency check fails, fail closed with a concrete remediation message.
+
+## Live Safety Opt-In
+
+Default mode should be `--dry-run`. Live trading requires:
+
+- `python scripts/agent.py --config config.json --yes-live`
+- or a wrapper that omits `--dry-run` and sets `--yes-live` for that process
+
+The `--yes-live` flag is a startup-only live opt-in. It is not a per-order approval prompt.
 
 ## Overview
 

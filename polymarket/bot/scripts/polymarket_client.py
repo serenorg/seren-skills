@@ -96,13 +96,33 @@ class PolymarketClient:
             if not token_ids:
                 continue
 
-            token_id = token_ids[0]
+            yes_token_id = token_ids[0]
+            no_token_id = token_ids[1] if len(token_ids) > 1 else None
 
-            outcome_prices = market_data.get('outcomePrices', ['0.5'])
-            try:
-                price = float(outcome_prices[0]) if outcome_prices else 0.5
-            except Exception:
-                price = 0.5
+            raw_outcome_prices = market_data.get('outcomePrices')
+            price = 0.5
+            price_source = 'gamma_fallback'
+            outcome_prices_csv = ''
+
+            if isinstance(raw_outcome_prices, str):
+                try:
+                    outcome_prices = json.loads(raw_outcome_prices)
+                except Exception:
+                    outcome_prices = [p.strip() for p in raw_outcome_prices.split(',') if p.strip()]
+            elif isinstance(raw_outcome_prices, list):
+                outcome_prices = raw_outcome_prices
+            else:
+                outcome_prices = []
+
+            if outcome_prices:
+                try:
+                    parsed_outcome_prices = [float(str(price_part).strip()) for price_part in outcome_prices]
+                    price = parsed_outcome_prices[0]
+                    price_source = 'gamma'
+                    outcome_prices_csv = ','.join(str(price_part) for price_part in parsed_outcome_prices)
+                except Exception:
+                    price = 0.5
+                    price_source = 'gamma_fallback'
 
             volume = float(market_data.get('volume', 0))
             liquidity = float(market_data.get('liquidity', 0))
@@ -114,8 +134,11 @@ class PolymarketClient:
             markets.append({
                 'market_id': market_id,
                 'question': question,
-                'token_id': token_id,
+                'token_id': yes_token_id,
+                'no_token_id': no_token_id,
+                'outcomePrices': outcome_prices_csv,
                 'price': price,
+                'price_source': price_source,
                 'volume': volume,
                 'liquidity': liquidity,
                 'end_date': end_date,
@@ -142,15 +165,23 @@ class PolymarketClient:
         order_type: str = 'GTC',
     ) -> Dict:
         """Place an order via py-clob-client (local EIP-712 signing)."""
+        del order_type
+        from polymarket_live import fetch_book, fetch_fee_rate_bps, snap_price
+
         trader = self._require_trader()
+        book = fetch_book(token_id)
+        tick_size = str(book.get("tick_size", "0.01"))
+        neg_risk = bool(book.get("neg_risk", False))
+        fee_rate_bps = fetch_fee_rate_bps(token_id)
+        snapped_price = snap_price(price, tick_size, side)
         return trader.create_order(
             token_id=token_id,
             side=side,
-            price=price,
+            price=snapped_price,
             size=size,
-            tick_size="0.01",
-            neg_risk=False,
-            fee_rate_bps=0,
+            tick_size=tick_size,
+            neg_risk=neg_risk,
+            fee_rate_bps=fee_rate_bps,
         )
 
     def cancel_order(self, order_id: str) -> Dict:
@@ -180,27 +211,32 @@ class PolymarketClient:
         except Exception:
             return 0.0
 
-    def get_price(self, token_id: str, side: str) -> float:
-        """Get current price for a token from the CLOB orderbook."""
+    def _get_book_levels(self, token_id: str):
+        """Get best bid/ask from CLOB, falling back to raw data if parsed lists are empty."""
         from polymarket_live import fetch_book
-
-        book = fetch_book(token_id)
-        if side.upper() == 'BUY':
-            asks = book.get('asks', [])
-            return float(asks[0]['price']) if asks else 0.0
-        else:
-            bids = book.get('bids', [])
-            return float(bids[0]['price']) if bids else 0.0
-
-    def get_midpoint(self, token_id: str) -> float:
-        """Get midpoint price (average of best bid and ask)."""
-        from polymarket_live import fetch_book
-
         book = fetch_book(token_id)
         bids = book.get('bids', [])
         asks = book.get('asks', [])
+        if not bids or not asks:
+            raw = book.get('raw', {})
+            if isinstance(raw, dict):
+                bids = bids or raw.get('bids', [])
+                asks = asks or raw.get('asks', [])
         best_bid = float(bids[0]['price']) if bids else 0.0
         best_ask = float(asks[0]['price']) if asks else 0.0
+        return best_bid, best_ask
+
+    def get_price(self, token_id: str, side: str) -> float:
+        """Get current price for a token from the CLOB orderbook."""
+        best_bid, best_ask = self._get_book_levels(token_id)
+        if side.upper() == 'BUY':
+            return best_ask
+        else:
+            return best_bid
+
+    def get_midpoint(self, token_id: str) -> float:
+        """Get midpoint price (average of best bid and ask)."""
+        best_bid, best_ask = self._get_book_levels(token_id)
         if best_bid and best_ask:
             return (best_bid + best_ask) / 2.0
         return best_bid or best_ask

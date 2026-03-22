@@ -15,6 +15,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+from normalized_trade_store import NormalizedTradingStore
 import sys
 
 DEFAULT_DRY_RUN = True
@@ -227,11 +229,27 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Required safety flag for live execution.",
     )
+    parser.add_argument(
+        "--unwind-all",
+        action="store_true",
+        help="Stop trading and prepare an emergency liquidation plan for the tracked position.",
+    )
     return parser.parse_args()
 
 
-def load_config(path: str) -> dict[str, Any]:
+def _bootstrap_config_path(path: str) -> Path:
     config_path = Path(path)
+    if config_path.exists():
+        return config_path
+    example_path = config_path.with_name("config.example.json")
+    if example_path.exists():
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+    return config_path
+
+
+def load_config(path: str) -> dict[str, Any]:
+    config_path = _bootstrap_config_path(path)
     if not config_path.exists():
         raise ConfigError(f"Config file not found: {config_path}")
     try:
@@ -1574,6 +1592,80 @@ def run_once(config: dict[str, Any], *, yes_live: bool, ledger_address: str) -> 
     }
 
 
+def run_unwind_all(config: dict[str, Any], *, ledger_address: str) -> dict[str, Any]:
+    """Stop trading and prepare an unwind plan for the tracked position inventory."""
+    api_key = os.environ.get("SEREN_API_KEY", "").strip()
+    if not api_key:
+        raise ConfigError("SEREN_API_KEY is required in the environment.")
+
+    config_api = config.get("api", {})
+    configured_base_url = ""
+    if isinstance(config_api, dict):
+        configured_base_url = str(config_api.get("base_url", ""))
+    base_url = configured_base_url or os.environ.get("SEREN_API_BASE_URL", DEFAULT_API_BASE)
+    client = SerenPublisherClient(api_key=api_key, base_url=base_url)
+
+    inputs = _resolve_inputs(config)
+    wallet_config = config.get("wallet", {})
+    if wallet_config is None:
+        wallet_config = {}
+    if not isinstance(wallet_config, dict):
+        raise ConfigError("Config field 'wallet' must be an object when provided.")
+    wallet_path = Path(str(wallet_config.get("path", DEFAULT_WALLET_PATH)))
+    ledger_from_config = str(wallet_config.get("ledger_address", ""))
+    resolved_ledger = ledger_address or ledger_from_config
+
+    signer = resolve_signer(
+        wallet_mode=inputs["wallet_mode"],
+        wallet_path=wallet_path,
+        ledger_address=resolved_ledger,
+    )
+    rpc_capability = check_rpc_capability(
+        client,
+        chain=inputs["chain"],
+        config=config,
+    )
+    rpc_target = {
+        "publisher": rpc_capability["publisher"],
+        "method": str(rpc_capability.get("rpc_target", {}).get("method", "POST")),
+        "path": str(rpc_capability.get("rpc_target", {}).get("path", "")),
+        "publisher_source": rpc_capability.get("publisher_source", "unknown"),
+    }
+    gauges_response = fetch_top_gauges(
+        client,
+        chain=inputs["chain"],
+        limit=inputs["top_n_gauges"],
+    )
+    trade_plan = choose_trade_plan(
+        gauges_response,
+        token=inputs["deposit_token"],
+        amount_usd=inputs["deposit_amount_usd"],
+    )
+    position_sync = sync_positions(
+        client,
+        signer=signer,
+        rpc_target=rpc_target,
+        trade_plan=trade_plan,
+    )
+    return {
+        "status": "ok",
+        "mode": "unwind-all",
+        "stop_trading": True,
+        "cancel_all_orders": "not_applicable_for_onchain_curve_positions",
+        "liquidate_position": True,
+        "message": (
+            "stop trading plan generated; no open orders exist on Curve, so unwind the "
+            "LP and gauge position using the synced addresses below."
+        ),
+        "chain": inputs["chain"],
+        "signer_mode": signer["mode"],
+        "signer_address": signer["address"],
+        "rpc_capability": rpc_capability,
+        "position_sync": position_sync,
+        "trade_plan": trade_plan,
+    }
+
+
 
 # ---------------------------------------------------------------------------
 # SerenBucks balance helpers
@@ -1617,6 +1709,86 @@ def _check_serenbucks_balance(api_key: str) -> float:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
 
+
+def _normalized_curve_positions(result: dict[str, Any]) -> list[dict[str, Any]]:
+    sync = result.get("position_sync", {})
+    if not isinstance(sync, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    lp_token = sync.get("lp_token_address")
+    if lp_token:
+        rows.append(
+            {
+                "position_key": str(lp_token),
+                "instrument_id": str(lp_token),
+                "symbol": str(lp_token),
+                "side": "LONG",
+                "quantity": sync.get("lp_balance_wei"),
+                "status": "open",
+                "metadata": sync,
+            }
+        )
+    gauge = sync.get("gauge_address")
+    if gauge:
+        rows.append(
+            {
+                "position_key": str(gauge),
+                "instrument_id": str(gauge),
+                "symbol": str(gauge),
+                "side": "LONG",
+                "quantity": sync.get("staked_balance_wei"),
+                "status": "open",
+                "metadata": sync,
+            }
+        )
+    return rows
+
+
+def _persist_normalized_result(config: dict[str, Any], result: dict[str, Any], *, run_type: str) -> None:
+    store = NormalizedTradingStore(
+        os.getenv("SERENDB_URL"),
+        skill_slug="curve-gauge-yield-trader",
+        venue="curve",
+        strategy_name="curve-gauge-yield-trader",
+    )
+    order_events = [
+        {
+            "order_id": run_type,
+            "instrument_id": result.get("chain"),
+            "symbol": result.get("chain"),
+            "side": "SELL" if run_type == "unwind-all" else "BUY",
+            "order_type": "curve_workflow",
+            "event_type": "trade_plan_generated",
+            "status": result.get("status", "ok"),
+            "metadata": {
+                "trade_plan": result.get("trade_plan", {}),
+                "preflight": result.get("preflight", {}),
+                "live_execution": result.get("live_execution", {}),
+            },
+        }
+    ]
+    positions = _normalized_curve_positions(result)
+    try:
+        store.persist_completed_run(
+            mode=str(result.get("mode") or run_type),
+            dry_run=bool(result.get("mode") != "live"),
+            config=config,
+            status=str(result.get("status", "ok")),
+            summary={
+                "chain": result.get("chain"),
+                "signer_mode": result.get("signer_mode"),
+                "rpc_capability": result.get("rpc_capability", {}),
+            },
+            order_events=order_events,
+            positions=positions,
+            position_marks=positions,
+            metadata={"run_type": run_type},
+            error_code=result.get("error_code"),
+            error_message=result.get("message"),
+        )
+    finally:
+        store.close()
+
 def main() -> int:
     args = parse_args()
     wallet_path = Path(args.wallet_path)
@@ -1643,11 +1815,16 @@ def main() -> int:
 
     try:
         config = load_config(args.config)
-        result = run_once(
-            config=config,
-            yes_live=bool(args.yes_live),
-            ledger_address=args.ledger_address.strip(),
-        )
+        if args.unwind_all:
+            result = run_unwind_all(config=config, ledger_address=args.ledger_address.strip())
+            _persist_normalized_result(config, result, run_type="unwind-all")
+        else:
+            result = run_once(
+                config=config,
+                yes_live=bool(args.yes_live),
+                ledger_address=args.ledger_address.strip(),
+            )
+            _persist_normalized_result(config, result, run_type="run_once")
     except (ConfigError, PublisherError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1

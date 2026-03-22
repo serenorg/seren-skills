@@ -1,0 +1,48 @@
+name: Trading Skill Safety
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      scan_scope:
+        description: "Scope to validate"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - changed
+
+jobs:
+  trading-skill-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pytest
+
+      - name: Run validator unit tests
+        run: python -m pytest tests/test_validate_trading_skill_safety.py
+
+      - name: Fetch pull request base branch
+        if: github.event_name == 'pull_request'
+        run: git fetch origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}" --depth=1
+
+      - name: Validate changed trading skills
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/validate_trading_skill_safety.py --base-ref "origin/${{ github.base_ref }}"
+
+      - name: Validate all trading skills
+        if: github.event_name == 'workflow_dispatch' && inputs.scan_scope == 'all'
+        run: python3 scripts/validate_trading_skill_safety.py --all
+
+      - name: Validate changed trading skills in manual mode
+        if: github.event_name == 'workflow_dispatch' && inputs.scan_scope == 'changed'
+        run: python3 scripts/validate_trading_skill_safety.py --base-ref "origin/main"

@@ -5,7 +5,7 @@ Unit tests for SerenClient._extract_text response shape handling.
 import pytest
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -119,3 +119,57 @@ class TestSerenClientApiKeyResolution:
         ):
             with pytest.raises(ValueError, match=r"SEREN_API_KEY.*API_KEY"):
                 SerenClient()
+
+
+class TestSerenClientWalletBalance:
+    def test_get_wallet_balance_unwraps_data_and_parses_currency_strings(self):
+        session = Mock()
+        response = Mock()
+        response.json.return_value = {
+            'data': {
+                'balance_atomic': 21028699,
+                'balance_usd': '$21.03',
+                'funded_balance_usd': '$20.33',
+                'promotional_balance_usd': '$0.70',
+            }
+        }
+        response.raise_for_status.return_value = None
+        session.get.return_value = response
+
+        with patch.dict('os.environ', {'SEREN_API_KEY': 'seren-key'}, clear=True), patch(
+            'seren_client.requests.Session',
+            return_value=session,
+        ):
+            client = SerenClient()
+
+        wallet = client.get_wallet_balance()
+
+        assert wallet['balance_atomic'] == 21028699
+        assert wallet['balance_usd'] == 21.03
+        assert wallet['funded_balance_usd'] == 20.33
+        assert wallet['promotional_balance_usd'] == 0.70
+        session.get.assert_called_once_with(
+            'https://api.serendb.com/wallet/balance',
+            timeout=30,
+        )
+
+    def test_get_wallet_balance_keeps_top_level_numeric_response(self):
+        session = Mock()
+        response = Mock()
+        response.json.return_value = {
+            'balance_atomic': 1230000,
+            'balance_usd': 1.23,
+        }
+        response.raise_for_status.return_value = None
+        session.get.return_value = response
+
+        with patch.dict('os.environ', {'SEREN_API_KEY': 'seren-key'}, clear=True), patch(
+            'seren_client.requests.Session',
+            return_value=session,
+        ):
+            client = SerenClient()
+
+        wallet = client.get_wallet_balance()
+
+        assert wallet['balance_atomic'] == 1230000
+        assert wallet['balance_usd'] == 1.23

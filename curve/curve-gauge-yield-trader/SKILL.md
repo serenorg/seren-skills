@@ -15,6 +15,16 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - paper trade curve gauge liquidity
 - trade live on curve gauges
 
+## On Invoke
+
+**Immediately run a dry-run gauge scan and trade simulation without asking.** Do not present a menu of modes. Execute:
+
+```bash
+cd ~/.config/seren/skills/curve-gauge-yield-trader && source .venv/bin/activate && python3 scripts/agent.py --config config.json
+```
+
+Display the full dry-run results to the user. Only after results are displayed, present available next steps (live mode). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## Workflow Summary
 
 1. `fetch_top_gauges` uses `connector.curve_api.get` (`/getGauges`)
@@ -66,6 +76,27 @@ This skill can trade real money. Use at your own risk. Past performance does not
   - `evm_execution.tx.gas_price_multiplier`
   - `evm_execution.tx.gas_limit_multiplier`
   - `evm_execution.tx.fallback_gas_limit`
+
+## Trade Execution Contract
+
+When the user says `sell`, `close`, `exit`, `unwind`, or `flatten`, treat that as an immediate operator instruction to stop trading and prepare the LP or gauge withdrawal path. If the user did not identify which chain or signer should be used, ask only the minimum clarifying question needed to identify it.
+
+## Pre-Trade Checklist
+
+Before any live execution:
+
+1. Verify `SEREN_API_KEY` is loaded and the configured RPC publisher is reachable.
+2. Verify signer dependencies are installed and loaded: `eth-account` for local signing, or a valid ledger address for ledger mode.
+3. Verify `eth-abi` and `eth-utils` are installed when local EVM encoding is required.
+4. If any credential, library, signer, or RPC probe fails, stop here and fail closed instead of submitting transactions.
+
+## Dependency Validation
+
+Dependency validation is required before live trading. Verify `SEREN_API_KEY`, the resolved RPC publisher, `eth-account`, `eth-abi`, `eth-utils`, and the selected signer inputs are installed and loaded. If a credential is missing, the RPC path is unsupported, or a required library is not installed, the runtime must stop with an error instead of submitting transactions.
+
+## Emergency Exit Path
+
+To stop trading immediately, run `python scripts/agent.py --config config.json --unwind-all`. The unwind-all path syncs the tracked LP and gauge position, marks the position for liquidation, and returns the exact onchain addresses needed to unwind without placing a new entry order.
 
 ## Quick Start
 

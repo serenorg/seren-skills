@@ -40,6 +40,7 @@ class Handler(BaseHTTPRequestHandler):
     engine: StrategyEngine
     dsn: str
     webhook_secret: str
+    allow_live: bool = False
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path != "/health":
@@ -66,6 +67,7 @@ class Handler(BaseHTTPRequestHandler):
         mode = str(payload.get("mode", "paper-sim"))
         run_type = str(payload.get("run_type", "scan"))
         action = str(payload.get("action", "")).strip().lower()
+        allow_live = bool(payload.get("allow_live", self.allow_live))
         strict_feeds = bool(payload.get("strict_required_feeds", True))
         live_controls = payload.get("live_controls")
         if isinstance(live_controls, dict):
@@ -85,6 +87,22 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         result = run_full(conn, mode=mode)
                 json_response(self, 200, {"status": "ok", "action": action, "result": result})
+                return
+
+            if action == "stop-trading":
+                json_response(self, 200, self.engine.cancel_all_live_orders(mode="live"))
+                return
+
+            if mode == "live" and not allow_live:
+                json_response(
+                    self,
+                    400,
+                    {
+                        "status": "error",
+                        "error_code": "live_confirmation_required",
+                        "message": "Live mode requested but allow_live was not provided to the trigger server.",
+                    },
+                )
                 return
 
             # Strategy actions
@@ -128,6 +146,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--webhook-secret", default=os.getenv("SASS_SHORT_TRADER_DELTA_NEUTRAL_WEBHOOK_SECRET", ""))
     parser.add_argument("--strict-required-feeds", action="store_true")
+    parser.add_argument("--allow-live", action="store_true", help="Allow live execution for this trigger server process.")
     return parser.parse_args()
 
 
@@ -152,6 +171,7 @@ def main() -> None:
     Handler.engine = engine
     Handler.dsn = dsn
     Handler.webhook_secret = args.webhook_secret
+    Handler.allow_live = bool(args.allow_live)
 
     server = HTTPServer((args.host, args.port), Handler)
     print(f"Server listening on http://{args.host}:{args.port}")

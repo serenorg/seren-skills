@@ -395,10 +395,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return path
+
+
 def main() -> None:
     args = parse_args()
 
-    config_path = Path(args.config)
+    config_path = _bootstrap_config_path(args.config)
     if not config_path.exists():
         print(f"Config file not found: {config_path}", file=sys.stderr)
         sys.exit(1)

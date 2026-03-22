@@ -72,6 +72,19 @@ def _build_store_from_env() -> SerenDBStore:
     )
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return path
+
+
 class CoinbaseGridTrader:
     """Coinbase Exchange Grid Trading Bot"""
 
@@ -192,7 +205,7 @@ class CoinbaseGridTrader:
 
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load and validate configuration"""
-        with open(config_path, 'r') as f:
+        with open(_bootstrap_config_path(config_path), 'r') as f:
             config = json.load(f)
 
         for field in ['campaign_name', 'trading_pair', 'strategy', 'risk_management']:
@@ -951,6 +964,14 @@ def _check_serenbucks_balance(api_key: str) -> float:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
 
+def _require_live_confirmation(command: str, allow_live: bool) -> None:
+    if command == "start" and not allow_live:
+        raise SystemExit(
+            "Live mode requested but --allow-live was not provided. "
+            "Use `python scripts/agent.py start --config config.json --allow-live` "
+            "for the startup-only live opt-in."
+        )
+
 def main():
     """CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -970,11 +991,19 @@ def main():
         sp.add_argument('--config', required=True, help='Path to config JSON file')
         if cmd == 'dry-run':
             sp.add_argument('--cycles', type=int, default=5, help='Cycles to simulate')
+        if cmd == 'start':
+            sp.add_argument(
+                '--allow-live',
+                action='store_true',
+                help='Explicit startup-only opt-in for live trading.',
+            )
 
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    _require_live_confirmation(args.command, getattr(args, 'allow_live', False))
 
     dry_run = (args.command == 'dry-run')
     agent = CoinbaseGridTrader(config_path=args.config, dry_run=dry_run)

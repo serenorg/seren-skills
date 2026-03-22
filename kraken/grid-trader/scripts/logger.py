@@ -1,5 +1,5 @@
 """
-Kraken Grid Trader Logger - Logs all trading activity
+Kraken Grid Trader Logger - Logs core trading activity.
 
 Maintains JSONL log files:
 1. grid_setup.jsonl - Grid initialization and updates
@@ -10,7 +10,6 @@ Maintains JSONL log files:
 """
 
 import json
-import os
 from datetime import datetime
 from typing import Dict, Any, Optional
 from pathlib import Path
@@ -44,6 +43,12 @@ class GridTraderLogger:
         filepath = self.logs_dir / filename
         with open(filepath, 'a') as f:
             f.write(json.dumps(data) + '\n')
+
+    @staticmethod
+    def _merge_extra(payload: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not extra:
+            return payload
+        return {**payload, **extra}
 
     def log_grid_setup(
         self,
@@ -86,7 +91,8 @@ class GridTraderLogger:
         price: float,
         volume: float,
         status: str,
-        error: Optional[str] = None
+        error: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
     ):
         """
         Log order placement or cancellation
@@ -100,7 +106,7 @@ class GridTraderLogger:
             status: 'placed', 'cancelled', or 'error'
             error: Error message (if failed)
         """
-        self._append_jsonl('orders.jsonl', {
+        self._append_jsonl('orders.jsonl', self._merge_extra({
             'phase': 'order',
             'order_id': order_id,
             'type': order_type,
@@ -109,7 +115,7 @@ class GridTraderLogger:
             'volume': volume,
             'status': status,
             'error': error
-        })
+        }, extra))
 
     def log_fill(
         self,
@@ -118,7 +124,8 @@ class GridTraderLogger:
         price: float,
         volume: float,
         fee: float,
-        cost: float
+        cost: float,
+        extra: Optional[Dict[str, Any]] = None,
     ):
         """
         Log trade execution
@@ -131,7 +138,7 @@ class GridTraderLogger:
             fee: Trading fee (USD)
             cost: Total cost (USD)
         """
-        self._append_jsonl('fills.jsonl', {
+        self._append_jsonl('fills.jsonl', self._merge_extra({
             'phase': 'fill',
             'order_id': order_id,
             'side': side,
@@ -139,7 +146,7 @@ class GridTraderLogger:
             'volume': volume,
             'fee': fee,
             'cost': cost
-        })
+        }, extra))
 
     def log_position_update(
         self,
@@ -148,7 +155,8 @@ class GridTraderLogger:
         usd_balance: float,
         total_value_usd: float,
         unrealized_pnl: float,
-        open_orders: int
+        open_orders: int,
+        extra: Optional[Dict[str, Any]] = None,
     ):
         """
         Log position snapshot
@@ -161,7 +169,7 @@ class GridTraderLogger:
             unrealized_pnl: Unrealized profit/loss
             open_orders: Number of open orders
         """
-        self._append_jsonl('positions.jsonl', {
+        self._append_jsonl('positions.jsonl', self._merge_extra({
             'phase': 'position',
             'pair': pair,
             'btc_balance': btc_balance,
@@ -169,14 +177,15 @@ class GridTraderLogger:
             'total_value_usd': total_value_usd,
             'unrealized_pnl': unrealized_pnl,
             'open_orders': open_orders
-        })
+        }, extra))
 
     def log_error(
         self,
         operation: str,
         error_type: str,
         error_message: str,
-        context: Optional[Dict] = None
+        context: Optional[Dict[str, Any]] = None,
+        extra: Optional[Dict[str, Any]] = None,
     ):
         """
         Log error or warning
@@ -187,13 +196,13 @@ class GridTraderLogger:
             error_message: Error details
             context: Additional context
         """
-        self._append_jsonl('errors.jsonl', {
+        self._append_jsonl('errors.jsonl', self._merge_extra({
             'phase': 'error',
             'operation': operation,
             'error_type': error_type,
             'error_message': error_message,
             'context': context or {}
-        })
+        }, extra))
 
     def get_recent_logs(self, log_type: str, limit: int = 10) -> list:
         """

@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Dict, List, Optional
 from datetime import datetime
 from dotenv import load_dotenv
@@ -68,6 +69,8 @@ class TradingAgent:
         if not self.storage.setup_database():
             print("⚠️  Warning: SerenDB setup failed, falling back to file storage")
             self.storage = None
+        else:
+            self.storage.set_run_mode(self.dry_run)
 
         # Initialize position tracker and logger with SerenDB
         self.positions = PositionTracker(serendb_storage=self.storage)
@@ -80,11 +83,17 @@ class TradingAgent:
         self.max_positions = int(self.config['max_positions'])
         self.stop_loss_bankroll = float(self.config.get('stop_loss_bankroll', 0.0))
 
+        # Safety guards (configurable, with backward-compatible defaults)
+        self.min_annualized_return = float(self.config.get('min_annualized_return', 0.25))
+        self.max_resolution_days = int(self.config.get('max_resolution_days', 180))
+        self.min_exit_bid_depth_ratio = float(self.config.get('min_exit_bid_depth_ratio', 0.5))
+
         # Scan pipeline limits (configurable, with backward-compatible defaults)
         self.scan_limit = int(self.config.get('scan_limit', 100))
         self.candidate_limit = int(self.config.get('candidate_limit', 20))
         self.analyze_limit = int(self.config.get('analyze_limit', self.candidate_limit))
         self.min_liquidity = float(self.config.get('min_liquidity', 100.0))
+        self.stale_price_demotion = float(self.config.get('stale_price_demotion', 0.1))
 
         print(f"✓ Agent initialized (Dry-run: {dry_run})")
         print(f"  Bankroll: ${self.bankroll:.2f}")
@@ -157,35 +166,148 @@ class TradingAgent:
         """
         Cheap heuristic ranking to select the best candidates for LLM analysis.
 
-        No API calls. Ranks by a composite score of:
-        - Liquidity (higher = better)
-        - Price proximity to 50% (closer to 50% = more uncertain = more edge potential)
-        - Volume (if available)
+        Ranks by liquidity + volume (Gamma API prices are stale 0.50 seeds).
+        After ranking, enriches top candidates with live CLOB midpoint prices.
 
         Args:
             markets: Full list of fetched markets
             limit: Number of candidates to keep
 
         Returns:
-            Top N markets by heuristic score
+            Top N markets by heuristic score, enriched with live prices
         """
+        import math
+
+        stale_demotion = self.stale_price_demotion
+
+        def _parse_price_asymmetry(m: Dict) -> float:
+            """Return abs(p1 - p2) from outcomePrices string, or -1 if unparseable."""
+            raw = m.get('outcomePrices', '')
+            if not raw:
+                return -1.0
+            try:
+                parts = raw.split(',')
+                p1, p2 = float(parts[0]), float(parts[1])
+                return abs(p1 - p2)
+            except (IndexError, ValueError, TypeError):
+                return -1.0
+
+        def _is_stale_gamma(m: Dict) -> bool:
+            """True if outcomePrices is the Gamma 0.5/0.5 default seed."""
+            asymmetry = _parse_price_asymmetry(m)
+            return 0 <= asymmetry < 0.02
+
         def score(m: Dict) -> float:
             liquidity = float(m.get('liquidity', 0))
-            price = float(m.get('price', 0.5))
             volume = float(m.get('volume', 0))
-            # Proximity to 50% — max uncertainty, most edge potential
-            uncertainty = 1.0 - abs(price - 0.5) * 2
-            # Normalise liquidity contribution (log scale to avoid domination)
-            import math
             liq_score = math.log1p(liquidity)
             vol_score = math.log1p(volume)
-            return liq_score + vol_score + uncertainty * 2
+            base = liq_score + vol_score * 2
 
-        ranked = sorted(markets, key=score, reverse=True)
-        selected = ranked[:limit]
-        dropped = len(markets) - len(selected)
-        print(f"  Ranked {len(markets)} markets → kept top {len(selected)} candidates (dropped {dropped})")
-        return selected
+            # Demote markets whose outcomePrices are still at the Gamma 0.5/0.5 default
+            if _is_stale_gamma(m):
+                return base * stale_demotion
+            return base
+
+        # Hard-filter stale 50/50 Gamma markets before ranking — they waste LLM budget
+        stale_gamma_filtered = [m for m in markets if not _is_stale_gamma(m)]
+        stale_gamma_pre_filter = len(markets) - len(stale_gamma_filtered)
+        if stale_gamma_pre_filter:
+            print(f"  Filtered {stale_gamma_pre_filter} stale 50/50 Gamma-seeded markets")
+
+        ranked = sorted(stale_gamma_filtered, key=score, reverse=True)
+
+        # Filter out markets resolving too far in the future
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        time_filtered = []
+        for m in ranked:
+            end_date_str = m.get('end_date', '')
+            if not end_date_str:
+                continue
+
+            try:
+                end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                if end_dt.tzinfo is None:
+                    end_dt = end_dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                continue
+
+            days_to_resolution = (end_dt - now).days
+            if days_to_resolution <= 0:
+                continue
+
+            m['days_to_resolution'] = days_to_resolution
+            if days_to_resolution > self.max_resolution_days:
+                continue  # skip far-out markets
+            time_filtered.append(m)
+
+        if len(ranked) - len(time_filtered) > 0:
+            print(f"  Filtered {len(ranked) - len(time_filtered)} markets resolving >{self.max_resolution_days} days out")
+
+        pre_selected = time_filtered[:limit]
+
+        # Enrich with live CLOB midpoint prices. If CLOB is unavailable, keep only
+        # markets that already have a non-fallback Gamma price.
+        # Also reject markets where Gamma outcomePrices is the stale 0.5/0.5 default
+        # unless the CLOB provides a real midpoint.
+        enriched = []
+        stale_price_skips = 0
+        stale_gamma_skips = 0
+        for m in pre_selected:
+            # Detect stale Gamma 50/50 default prices from outcomePrices field
+            stale_gamma_price = False
+            outcome_prices_str = m.get('outcomePrices', '')
+            if outcome_prices_str:
+                try:
+                    parts = [float(p.strip()) for p in outcome_prices_str.split(',')]
+                    if len(parts) == 2 and all(abs(p - 0.5) <= 0.01 for p in parts):
+                        stale_gamma_price = True
+                except (ValueError, TypeError):
+                    pass
+
+            live_mid = None
+            try:
+                live_mid = self.polymarket.get_midpoint(m['token_id'])
+            except Exception:
+                live_mid = None
+
+            if live_mid and 0.01 < live_mid < 0.99:
+                # If Gamma seeded this market at 50/50 and the CLOB also returns
+                # ~50%, the midpoint is likely derived from a thin/symmetric book
+                # on a market that has never traded.  Reject it.
+                if stale_gamma_price and abs(live_mid - 0.5) <= 0.03:
+                    stale_gamma_skips += 1
+                    question = m.get('question', '')[:60]
+                    print(f"  Skipping stale 50/50 market (CLOB mid ≈ Gamma seed): {question}")
+                    continue
+                m['price'] = live_mid
+                m['price_source'] = 'clob_midpoint'
+                enriched.append(m)
+                continue
+
+            # CLOB enrichment failed — check if Gamma price is trustworthy
+            if stale_gamma_price:
+                stale_gamma_skips += 1
+                question = m.get('question', '')[:60]
+                print(f"  Skipping stale 50/50 Gamma market (no CLOB): {question}")
+                continue
+
+            if m.get('price_source') == 'gamma':
+                enriched.append(m)
+                continue
+
+            stale_price_skips += 1
+            question = m.get('question', '')[:60]
+            print(f"  Skipping stale-priced market: {question}")
+
+        dropped = len(markets) - len(enriched)
+        if stale_gamma_skips:
+            print(f"  Skipped {stale_gamma_skips} markets with stale 50/50 Gamma prices and no valid CLOB midpoint")
+        if stale_price_skips:
+            print(f"  Skipped {stale_price_skips} markets with fallback 50% prices and no valid CLOB midpoint")
+        print(f"  Ranked {len(markets)} markets → kept top {len(enriched)} candidates (dropped {dropped})")
+        return enriched
 
     def research_opportunity(self, market_question: str) -> str:
         """
@@ -266,6 +388,30 @@ class TradingAgent:
         # Check if edge exceeds threshold
         if edge < self.mispricing_threshold:
             print(f"    ✗ Edge {edge * 100:.1f}% below threshold {self.mispricing_threshold * 100:.1f}%")
+            return None
+
+        # Annualized return gate: edge must justify the lockup period
+        days_to_resolution = market.get('days_to_resolution', 0)
+        if days_to_resolution <= 0:
+            print(f"    ✗ Missing or invalid resolution date; cannot annualize return")
+            return None
+
+        years_to_resolution = days_to_resolution / 365.0
+        annualized_return = kelly.calculate_annualized_return(edge, years_to_resolution)
+        if annualized_return < self.min_annualized_return:
+            print(f"    ✗ Annualized return {annualized_return * 100:.1f}% below {self.min_annualized_return * 100:.0f}% hurdle ({days_to_resolution}d to resolution)")
+            return None
+
+        # Exit liquidity check: ensure we can sell what we buy
+        try:
+            token_to_check = market.get('no_token_id') or market.get('token_id')
+            if token_to_check:
+                bid_price = self.polymarket.get_price(token_to_check, 'SELL')
+                if bid_price <= 0:
+                    print(f"    ✗ No exit liquidity: zero bids on order book")
+                    return None
+        except Exception:
+            print(f"    ✗ Could not verify exit liquidity")
             return None
 
         # Reject low confidence estimates
@@ -361,14 +507,29 @@ class TradingAgent:
             return True
 
         # Execute actual trade
-        try:
-            print(f"    📊 Placing {side} order...")
+        # On Polymarket CLOB, "SELL" means betting against the outcome.
+        # This is done by BUYing the NO token at the live ask price.
+        if side == 'SELL' and market.get('no_token_id'):
+            exec_token_id = market['no_token_id']
+            exec_side = 'BUY'
+            try:
+                no_ask_price = self.polymarket.get_price(exec_token_id, 'BUY')
+                exec_price = no_ask_price if no_ask_price and no_ask_price > 0 else 1.0 - price
+            except Exception:
+                exec_price = 1.0 - price
+            print(f"    📊 Placing BUY NO order @ {exec_price:.4f} (betting against YES @ {price*100:.1f}%)...")
+        else:
+            exec_token_id = market['token_id']
+            exec_side = side
+            exec_price = price
+            print(f"    📊 Placing {side} order @ {exec_price:.4f}...")
 
+        try:
             order = self.polymarket.place_order(
-                token_id=market['token_id'],
-                side=side,
+                token_id=exec_token_id,
+                side=exec_side,
                 size=size,
-                price=price
+                price=exec_price
             )
 
             print(f"    ✓ Order placed: {order.get('orderID', 'unknown')}")
@@ -377,7 +538,7 @@ class TradingAgent:
             self.positions.add_position(
                 market=market['question'],
                 market_id=market['market_id'],
-                token_id=market['token_id'],
+                token_id=exec_token_id,
                 side=side,
                 entry_price=price,
                 size=size
@@ -523,6 +684,19 @@ class TradingAgent:
         print()
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return path
+
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description='Polymarket Trading Agent')
@@ -536,17 +710,31 @@ def main():
         action='store_true',
         help='Dry-run mode (no actual trades)'
     )
+    parser.add_argument(
+        '--yes-live',
+        action='store_true',
+        help='Explicit startup-only opt-in for live trading.'
+    )
 
     args = parser.parse_args()
 
+    config_path = _bootstrap_config_path(args.config)
+
     # Check config exists
-    if not os.path.exists(args.config):
-        print(f"Error: Config file not found: {args.config}")
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found: {config_path}")
+        sys.exit(1)
+
+    if not args.dry_run and not args.yes_live:
+        print(
+            "Error: live trading requires --yes-live. "
+            "Use --dry-run for paper mode or pass --yes-live for a startup-only live opt-in."
+        )
         sys.exit(1)
 
     # Initialize agent
     try:
-        agent = TradingAgent(args.config, dry_run=args.dry_run)
+        agent = TradingAgent(str(config_path), dry_run=args.dry_run)
     except Exception as e:
         print(f"Error initializing agent: {e}")
         sys.exit(1)

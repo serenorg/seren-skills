@@ -29,6 +29,10 @@ Legacy Python/API scripts remain available as fallback, not default.
 - Self-learning champion/challenger loop with promotion gates
 - seren-cron setup for continuous automation
 
+## On Invoke
+
+**Immediately run a paper-sim scan without asking.** Do not present a menu of modes. Follow the MCP-native workflow in `scripts/dry_run_prompt.txt` to execute a paper-sim run. Display the full scan and scoring results to the user. Only after results are displayed, present available next steps (paper mode, live mode). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## Runtime Files
 
 - `scripts/dry_run_prompt.txt` - single copy/paste MCP-native run prompt (default)
@@ -65,6 +69,32 @@ Legacy Python/API scripts remain available as fallback, not default.
 7. Return selected names, feed status, and PnL summary.
 
 Use `scripts/dry_run_prompt.txt` for one-copy/paste execution.
+
+## Pre-Trade Checklist
+
+Before any live run:
+
+1. Verify `SEREN_API_KEY` is loaded and the `alpaca` publisher can read `/v2/account`.
+2. Verify `sec-filings-intelligence`, `google-trends`, and `perplexity` or `exa` are reachable.
+3. Verify `strict_required_feeds` and `live_controls` still fit the account before submitting orders.
+4. If any required feed, credential, or account preflight fails, stop here and fail closed instead of placing orders.
+
+## Dependency Validation
+
+Dependency validation is required before live trading. Verify `SEREN_API_KEY`, the `alpaca` publisher, `sec-filings-intelligence`, `google-trends`, and the news research publisher are loaded and reachable. If credentials are missing, a required feed is blocked, or Alpaca account preflight fails, the runtime must stop with an error instead of submitting orders.
+
+## Live Safety Opt-In
+
+Default mode is `paper-sim`. Live trading requires both:
+
+- `mode=live` in config or request payload
+- `python3 scripts/strategy_engine.py --config config.json --mode live --allow-live ...`
+
+For scheduled execution, the trigger server must be started with `--allow-live` or the webhook payload must set `allow_live=true`. This is a startup-only live opt-in for that process or schedule, not a per-order approval prompt.
+
+## Emergency Exit Path
+
+To stop trading immediately, run `python3 scripts/strategy_engine.py --config config.json --stop-trading` or send `action=stop-trading` to the webhook runner. The stop-trading path cancels all tracked live orders for the latest strategy run without requiring an extra live confirmation.
 
 ## Continuous Schedule (Recommended ET)
 

@@ -23,6 +23,16 @@ All trades are executed locally and directly against Kraken REST APIs.
 - rebalance dca portfolio allocations
 - scan for dca opportunities on kraken
 
+## On Invoke
+
+**Immediately run a dry-run DCA cycle without asking.** Do not present a menu of modes or strategies. Execute:
+
+```bash
+cd ~/.config/seren/skills/smart-dca-bot && source .venv/bin/activate && python3 scripts/agent.py --config config.json --accept-risk-disclaimer
+```
+
+Display the full dry-run results to the user. Only after results are displayed, present available next steps (live mode, strategy changes). If the user explicitly requests a specific mode in their invocation message, run that mode instead.
+
 ## What This Skill Provides
 
 - Mode 1 (`single_asset`) with 5 strategies:
@@ -70,6 +80,27 @@ All trades are executed locally and directly against Kraken REST APIs.
 5. Execute locally to Kraken (or simulate in dry-run).
 6. Persist runs, snapshots, scanner signals, and cost-basis lots.
 7. Emit JSONL audit events.
+
+## Trade Execution Contract
+
+When the user says `sell`, `close`, `exit`, `unwind`, or `flatten`, stop new DCA entries immediately, cancel tracked pending Kraken orders, and ask only the minimum clarifying question needed if the user also wants held spot inventory liquidated.
+
+## Pre-Trade Checklist
+
+Before any live `run --allow-live --accept-risk-disclaimer` or `loop --allow-live --accept-risk-disclaimer` execution:
+
+1. Verify `SEREN_API_KEY` and Kraken API credentials are loaded.
+2. Verify the requested notional, balances, and cash reserve fit the account.
+3. Verify Python dependencies from `requirements.txt` are installed and the venue client can load.
+4. If any credential, dependency, or balance probe fails, stop here and fail closed instead of placing orders.
+
+## Dependency Validation
+
+Dependency validation is required before live trading. Verify `SEREN_API_KEY`, Kraken credentials, and Python dependencies from `requirements.txt` are installed and loaded. `SERENDB_URL` is optional, but if exchange credentials are missing or the Kraken client cannot be initialized, the runtime must stop with an error instead of submitting orders.
+
+## Emergency Exit Path
+
+To stop trading immediately, run `python scripts/agent.py stop-trading --config config.json`. The stop-trading path cancels tracked pending Kraken orders without asking for an extra live confirmation, writes the remaining local state to disk, and leaves held spot positions untouched until the operator chooses how to liquidate them.
 
 ## Required Disclaimers
 

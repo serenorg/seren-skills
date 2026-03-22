@@ -14,6 +14,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 def _load_strategy_engine_module():
     for module_name in (
         "self_learning",
+        "backtest_optimizer",
         "seren_client",
         "serendb_bootstrap",
         "serendb_storage",
@@ -24,6 +25,10 @@ def _load_strategy_engine_module():
     self_learning.ensure_champion = lambda conn: None
     self_learning.run_label_update = lambda conn, mode="paper-sim": {}
     sys.modules["self_learning"] = self_learning
+
+    backtest_optimizer = types.ModuleType("backtest_optimizer")
+    backtest_optimizer.optimize_scan_config = lambda *args, **kwargs: {}
+    sys.modules["backtest_optimizer"] = backtest_optimizer
 
     seren_client = types.ModuleType("seren_client")
 
@@ -158,3 +163,35 @@ def test_live_cleanup_cancels_matching_strategy_refs(tmp_path: Path) -> None:
             "result": {"id": "alpaca-2", "status": "cancelled"},
         },
     ]
+
+
+def test_live_mode_requires_allow_live_flag() -> None:
+    with pytest.raises(SystemExit, match="--allow-live"):
+        module._require_live_confirmation("live", False)
+
+
+def test_cancel_all_live_orders_stops_trading(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    engine.storage = _FakeStorage(latest_orders=[{"order_ref": "short-1"}, {"order_ref": "hedge-1"}])
+    engine.seren = _FakeSeren(
+        account={"equity": "100000", "buying_power": "50000"},
+        open_orders=[
+            {"id": "alpaca-1", "client_order_id": "short-1"},
+            {"id": "alpaca-2", "client_order_id": "hedge-1"},
+        ],
+    )
+
+    result = engine.cancel_all_live_orders()
+
+    assert "stop trading" in result["message"]
+    assert [row["order_id"] for row in result["cancelled_live_orders"]] == ["alpaca-1", "alpaca-2"]
+
+
+def test_market_feed_missing_seren_api_key_fails_closed(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    engine.seren = None
+
+    result = engine.fetch_market_features(["CRM"])
+
+    assert result.ok is False
+    assert result.error == "SEREN_API_KEY missing"

@@ -25,6 +25,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 from polymarket_live import (
     DEFAULT_STALE_ORDER_MAX_AGE_SECONDS,
     DEFAULT_UNWIND_BEFORE_RESOLUTION_SECONDS,
+    build_marketable_sell_order,
     DirectClobTrader,
     cancel_stale_orders,
     execute_single_market_quotes,
@@ -34,6 +35,7 @@ from polymarket_live import (
     positions_by_key,
     single_market_inventory_notional,
 )
+from normalized_trade_store import NormalizedTradingStore
 
 SEREN_POLYMARKET_PUBLISHER_HOST = "api.serendb.com"
 SEREN_PUBLISHERS_PREFIX = "/publishers/"
@@ -61,7 +63,11 @@ MISSING_RUNTIME_AUTH_ERROR = (
 class StrategyParams:
     bankroll_usd: float = 1000.0
     markets_max: int = 12
-    min_seconds_to_resolution: int = 6 * 60 * 60
+    min_seconds_to_resolution: int = 14 * 24 * 60 * 60
+    min_mid_price: float = 0.30
+    max_mid_price: float = 0.70
+    min_daily_volume_usd: float = 5000.0
+    max_inventory_hold_cycles: int = 3
     min_edge_bps: float = 2.0
     default_rebate_bps: float = 3.0
     expected_unwind_cost_bps: float = 1.5
@@ -178,8 +184,21 @@ def load_json_file(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _bootstrap_config_path(config_path: str) -> Path:
+    path = Path(config_path)
+    if path.exists():
+        return path
+
+    example_path = path.with_name("config.example.json")
+    if example_path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(example_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return path
+
+
 def load_config(config_path: str) -> dict[str, Any]:
-    return load_json_file(Path(config_path))
+    return load_json_file(_bootstrap_config_path(config_path))
 
 
 def _clone_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -303,7 +322,14 @@ def to_params(config: dict[str, Any]) -> StrategyParams:
     return StrategyParams(
         bankroll_usd=_safe_float(strategy.get("bankroll_usd"), 1000.0),
         markets_max=_safe_int(strategy.get("markets_max"), 12),
-        min_seconds_to_resolution=_safe_int(strategy.get("min_seconds_to_resolution"), 21600),
+        min_seconds_to_resolution=_safe_int(
+            strategy.get("min_seconds_to_resolution"),
+            14 * 24 * 60 * 60,
+        ),
+        min_mid_price=clamp(_safe_float(strategy.get("min_mid_price"), 0.30), 0.001, 0.999),
+        max_mid_price=clamp(_safe_float(strategy.get("max_mid_price"), 0.70), 0.001, 0.999),
+        min_daily_volume_usd=max(0.0, _safe_float(strategy.get("min_daily_volume_usd"), 5000.0)),
+        max_inventory_hold_cycles=max(1, _safe_int(strategy.get("max_inventory_hold_cycles"), 3)),
         min_edge_bps=_safe_float(strategy.get("min_edge_bps"), 2.0),
         default_rebate_bps=_safe_float(strategy.get("default_rebate_bps"), 3.0),
         expected_unwind_cost_bps=_safe_float(strategy.get("expected_unwind_cost_bps"), 1.5),
@@ -403,21 +429,137 @@ def expected_edge_bps(spread_bps: float, rebate_bps: float, p: StrategyParams) -
     return half_spread_capture + rebate_bps - p.expected_unwind_cost_bps - p.adverse_selection_bps
 
 
-def should_skip_market(market: dict[str, Any], p: StrategyParams) -> tuple[bool, str]:
-    ttl = _safe_int(market.get("seconds_to_resolution"), 0)
-    if ttl < p.min_seconds_to_resolution:
-        return True, "near_resolution"
+def _mid_price_in_band(mid_price: float, p: StrategyParams) -> bool:
+    return p.min_mid_price <= mid_price <= p.max_mid_price
 
+
+def _market_daily_volume_usd(market: dict[str, Any]) -> float | None:
+    for key in ("volume24hr", "daily_volume_usd", "volume_24h_usd"):
+        if key in market and market.get(key) is not None:
+            return max(0.0, _safe_float(market.get(key), 0.0))
+    return None
+
+
+def _is_inventory_exit_market(market: dict[str, Any]) -> bool:
+    return bool(market.get("sell_only", False)) or bool(market.get("force_unwind", False))
+
+
+def should_skip_market(market: dict[str, Any], p: StrategyParams) -> tuple[bool, str]:
     mid = _safe_float(market.get("mid_price"), -1.0)
-    if mid <= 0.01 or mid >= 0.99:
-        return True, "extreme_probability"
+    if not (0.0 < mid < 1.0):
+        return True, "invalid_mid_price"
 
     bid = _safe_float(market.get("best_bid"), -1.0)
     ask = _safe_float(market.get("best_ask"), -1.0)
     if not (0.0 <= bid <= 1.0 and 0.0 <= ask <= 1.0 and bid <= ask):
         return True, "invalid_book"
 
+    if _is_inventory_exit_market(market):
+        return False, ""
+
+    ttl = _safe_int(market.get("seconds_to_resolution"), 0)
+    if ttl < p.min_seconds_to_resolution:
+        return True, "near_resolution"
+
+    daily_volume = _market_daily_volume_usd(market)
+    if daily_volume is not None and daily_volume < p.min_daily_volume_usd:
+        return True, "low_daily_volume"
+
+    if not _mid_price_in_band(mid, p):
+        return True, "outside_price_band"
+
     return False, ""
+
+
+def _build_inventory_cycle_state(
+    *,
+    prior_state: Any,
+    raw_positions: Any,
+    markets: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    previous = prior_state if isinstance(prior_state, dict) else {}
+    sizes = positions_by_key(raw_positions)
+    now_iso = datetime.now(tz=timezone.utc).isoformat()
+    market_by_token: dict[str, dict[str, Any]] = {}
+    for market in markets:
+        token_id = _safe_str(market.get("token_id"), _safe_str(market.get("market_id"), "")).strip()
+        if token_id:
+            market_by_token[token_id] = market
+
+    next_state: dict[str, dict[str, Any]] = {}
+    for token_id, shares in sizes.items():
+        if shares <= 0:
+            continue
+        market = market_by_token.get(token_id, {})
+        prior = previous.get(token_id, {}) if isinstance(previous.get(token_id), dict) else {}
+        record: dict[str, Any] = {
+            "token_id": token_id,
+            "market_id": _safe_str(market.get("market_id"), _safe_str(prior.get("market_id"), token_id)),
+            "question": _safe_str(market.get("question"), _safe_str(prior.get("question"), token_id)),
+            "cycles_held": _safe_int(prior.get("cycles_held"), 0) + 1,
+            "shares": round(shares, 6),
+            "first_seen_at": _safe_str(prior.get("first_seen_at"), now_iso),
+            "last_seen_at": now_iso,
+        }
+        mid_price = _safe_float(market.get("mid_price"), -1.0)
+        if 0.0 < mid_price < 1.0:
+            record["mid_price"] = round(mid_price, 6)
+        seconds_to_resolution = _safe_int(market.get("seconds_to_resolution"), -1)
+        if seconds_to_resolution >= 0:
+            record["seconds_to_resolution"] = seconds_to_resolution
+        daily_volume = _market_daily_volume_usd(market)
+        if daily_volume is not None:
+            record["volume24hr"] = round(daily_volume, 4)
+        next_state[token_id] = record
+    return next_state
+
+
+def _apply_held_inventory_policy(
+    *,
+    markets: list[dict[str, Any]],
+    raw_positions: Any,
+    inventory_cycles: dict[str, dict[str, Any]],
+    params: StrategyParams,
+) -> list[dict[str, Any]]:
+    sizes = positions_by_key(raw_positions)
+    updated: list[dict[str, Any]] = []
+    for market in markets:
+        token_id = _safe_str(market.get("token_id"), _safe_str(market.get("market_id"), "")).strip()
+        market_id = _safe_str(market.get("market_id"), token_id).strip()
+        shares = sizes.get(token_id, sizes.get(market_id, 0.0))
+        if shares <= 0:
+            updated.append(market)
+            continue
+
+        enriched = dict(market)
+        cycle_record = inventory_cycles.get(token_id, {})
+        cycles_held = _safe_int(cycle_record.get("cycles_held"), 0)
+        seconds_to_resolution = _safe_int(market.get("seconds_to_resolution"), 0)
+        mid_price = _safe_float(market.get("mid_price"), -1.0)
+        daily_volume = _market_daily_volume_usd(market)
+
+        sell_only_reasons: list[str] = []
+        force_unwind_reason = ""
+        if bool(market.get("sell_only", False)):
+            sell_only_reasons.append(_safe_str(market.get("sell_only_reason"), "resolution_unwind"))
+        if seconds_to_resolution < params.min_seconds_to_resolution:
+            sell_only_reasons.append("near_resolution")
+        if daily_volume is not None and daily_volume < params.min_daily_volume_usd:
+            sell_only_reasons.append("low_daily_volume")
+        if cycles_held >= params.max_inventory_hold_cycles:
+            force_unwind_reason = "inventory_hold_limit"
+        elif 0.0 < mid_price < 1.0 and not _mid_price_in_band(mid_price, params):
+            force_unwind_reason = "outside_price_band"
+
+        if sell_only_reasons:
+            enriched["sell_only"] = True
+            enriched["sell_only_reason"] = ",".join(sorted(set(sell_only_reasons)))
+        if force_unwind_reason:
+            enriched["sell_only"] = True
+            enriched["force_unwind"] = True
+            enriched["force_unwind_reason"] = force_unwind_reason
+        updated.append(enriched)
+    return updated
 
 
 def _parse_iso_ts(value: Any) -> int | None:
@@ -776,9 +918,19 @@ def _check_serenbucks_balance(api_key: str) -> float:
         )
         with urlopen(request, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
-            sb = data.get("data") or data.get("serenbucks") or {}
-            raw = sb.get("balance_usd") or sb.get("funded_balance_usd") or "0"
-            return _safe_float(str(raw).replace("$", "").replace(",", ""), 0.0)
+            if not isinstance(data, dict):
+                return 0.0
+            sb = data.get("data")
+            if not isinstance(sb, dict):
+                sb = data.get("serenbucks")
+            if not isinstance(sb, dict):
+                sb = data
+            for field in ("funded_balance_usd", "balance_usd"):
+                raw = sb.get(field)
+                parsed = _safe_float(str(raw).replace("$", "").replace(",", ""), -1.0)
+                if parsed >= 0.0:
+                    return parsed
+            return 0.0
     except Exception as exc:
         print(f"WARNING: could not fetch SerenBucks balance: {exc}", file=sys.stderr)
         return 0.0
@@ -985,6 +1137,7 @@ def _load_markets_from_fixture(
                 "token_id": _safe_str(raw.get("token_id"), market_id),
                 "end_ts": _safe_int(raw.get("end_ts"), _parse_iso_ts(raw.get("endDate")) or 0),
                 "rebate_bps": _safe_float(raw.get("rebate_bps"), 0.0),
+                "volume24hr": _safe_float(raw.get("volume24hr"), 0.0),
                 "history": history,
                 "orderbooks": orderbooks,
                 "orderbook_mode": orderbook_mode,
@@ -1080,11 +1233,15 @@ def _fetch_live_markets(
         token_id = _safe_str(token_ids[0], "")
         if not token_id:
             continue
-        # Parse mid-price from outcomePrices for ranking
-        outcome_prices = _json_to_list(market.get("outcomePrices"))
-        mid_price = _safe_float(outcome_prices[0] if outcome_prices else None, 0.5)
+        mid_price = _extract_live_mid_price(market)
+        if not (0.0 < mid_price < 1.0):
+            continue
         spread = _safe_float(market.get("spread"), 1.0)
         volume24hr = _safe_float(market.get("volume24hr"), 0.0)
+        if volume24hr < strategy_params.min_daily_volume_usd:
+            continue
+        if not _mid_price_in_band(mid_price, strategy_params):
+            continue
         # Score: prefer price near 0.5 (two-way flow), high volume, tight spread
         price_score = 1.0 - abs(mid_price - 0.5) * 2.0  # 1.0 at 0.50, 0.0 at 0.0/1.0
         spread_score = max(0.0, 1.0 - spread * 10.0)     # penalise wide spreads
@@ -1205,7 +1362,12 @@ def _fetch_live_quote_markets(config: dict[str, Any]) -> list[dict[str, Any]]:
             continue
 
         mid_price = _extract_live_mid_price(market)
-        if not (0.01 < mid_price < 0.99):
+        if not (0.0 < mid_price < 1.0):
+            continue
+        volume24hr = _safe_float(market.get("volume24hr"), 0.0)
+        if volume24hr < strategy_params.min_daily_volume_usd:
+            continue
+        if not _mid_price_in_band(mid_price, strategy_params):
             continue
 
         best_bid, best_ask = _extract_live_book(market, mid_price)
@@ -1222,6 +1384,7 @@ def _fetch_live_quote_markets(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "seconds_to_resolution": seconds_to_resolution,
                 "volatility_bps": round(volatility_bps, 3),
                 "rebate_bps": _safe_float(market.get("rebate_bps"), strategy_params.default_rebate_bps),
+                "volume24hr": round(volume24hr, 4),
                 "source": "live-seren-publisher",
             }
         )
@@ -1337,6 +1500,54 @@ def _build_quote_plan(
     )
 
 
+def _build_inventory_exit_quote_plan(
+    *,
+    market_id: str,
+    mid_price: float,
+    volatility_bps: float,
+    rebate_bps: float,
+    inventory_notional: float,
+    strategy_params: StrategyParams,
+    exit_reason: str,
+    target_notional_usd: float,
+) -> QuotePlan:
+    if inventory_notional <= 0.0 or target_notional_usd <= 0.0:
+        return QuotePlan(
+            status="skipped",
+            market_id=market_id,
+            reason="no_inventory_to_unwind",
+            edge_bps=0.0,
+            spread_bps=0.0,
+            rebate_bps=round(rebate_bps, 3),
+            inventory_notional_usd=round(inventory_notional, 2),
+        )
+    spread_bps = compute_spread_bps(volatility_bps, strategy_params)
+    inventory_ratio = 0.0
+    if strategy_params.max_position_notional_usd > 0:
+        inventory_ratio = clamp(
+            inventory_notional / strategy_params.max_position_notional_usd,
+            -1.0,
+            1.0,
+        )
+    skew_bps = -inventory_ratio * strategy_params.inventory_skew_strength_bps
+    half_spread_prob = (spread_bps / 2.0) / 10000.0
+    skew_prob = skew_bps / 10000.0
+    ask_price = clamp(mid_price + half_spread_prob + skew_prob, 0.001, 0.999)
+    return QuotePlan(
+        status="quoted",
+        market_id=market_id,
+        edge_bps=round(expected_edge_bps(spread_bps, rebate_bps, strategy_params), 3),
+        spread_bps=round(spread_bps, 3),
+        rebate_bps=round(rebate_bps, 3),
+        bid_price=0.0,
+        ask_price=round(ask_price, 4),
+        bid_notional_usd=0.0,
+        ask_notional_usd=round(target_notional_usd, 2),
+        inventory_notional_usd=round(inventory_notional, 2),
+        reason=exit_reason,
+    )
+
+
 def _liquidation_equity(
     *,
     cash_usd: float,
@@ -1445,6 +1656,28 @@ def _simulate_market_backtest(
     if rebate_bps <= 0:
         rebate_bps = strategy_params.default_rebate_bps
     end_ts = _safe_int(market.get("end_ts"), 0)
+    market_volume = _market_daily_volume_usd(market)
+    if market_volume is not None and market_volume < strategy_params.min_daily_volume_usd:
+        return {
+            "market_id": market["market_id"],
+            "question": market["question"],
+            "considered_points": 0,
+            "quoted_points": 0,
+            "skipped_points": 1,
+            "fill_events": 0,
+            "filled_notional_usd": 0.0,
+            "pnl_usd": 0.0,
+            "equity_curve": [capital],
+            "telemetry": [
+                {
+                    "market_id": market["market_id"],
+                    "status": "skipped",
+                    "reason": "low_daily_volume",
+                    "volume24hr": round(market_volume, 4),
+                }
+            ],
+            "orderbook_mode": market.get("orderbook_mode", "unknown"),
+        }
     moves_bps = [abs((history[i][1] - history[i - 1][1]) * 10000.0) for i in range(1, len(history))]
 
     # Compute prediction-based directional skew (positive = lean bid/buy, negative = lean ask/sell)
@@ -1469,6 +1702,7 @@ def _simulate_market_backtest(
     filled_notional = 0.0
     telemetry: list[dict[str, Any]] = []
     equity_curve = [capital]
+    holding_cycles = 0
 
     for i in range(window, len(history) - 1):
         t, mid_price = history[i]
@@ -1490,16 +1724,55 @@ def _simulate_market_backtest(
             "inventory_notional_before_usd": round(position_shares * mid_price, 6),
             "orderbook_mode": market.get("orderbook_mode", "unknown"),
         }
-        if end_ts and end_ts - t < strategy_params.min_seconds_to_resolution:
+        breach_near_resolution = bool(end_ts and end_ts - t < strategy_params.min_seconds_to_resolution)
+        breach_price_band = not _mid_price_in_band(mid_price, strategy_params)
+        if position_shares > 1e-9:
+            holding_cycles += 1
+        else:
+            holding_cycles = 0
+        record["holding_cycles_before"] = holding_cycles
+        if (breach_price_band or holding_cycles >= strategy_params.max_inventory_hold_cycles) and position_shares > 1e-9:
+            previous_equity = _liquidation_equity(
+                cash_usd=cash_usd,
+                position_shares=position_shares,
+                mark_price=mid_price,
+                unwind_cost_bps=strategy_params.expected_unwind_cost_bps,
+            )
+            shares_to_sell = position_shares
+            fill_notional = shares_to_sell * max(current_book.best_bid, 0.001)
+            cash_usd += fill_notional
+            cash_usd -= fill_notional * strategy_params.expected_unwind_cost_bps / 10000.0
+            position_shares = 0.0
+            holding_cycles = 0
+            fill_events += 1
+            filled_notional += fill_notional
+            equity_after = max(0.0, cash_usd)
+            equity_curve.append(equity_after)
+            record.update(
+                {
+                    "status": "forced_unwind",
+                    "reason": "outside_price_band" if breach_price_band else "inventory_hold_limit",
+                    "fill_side": "sell",
+                    "fill_fraction": 1.0,
+                    "fill_notional_usd": round(fill_notional, 6),
+                    "inventory_notional_after_usd": 0.0,
+                    "equity_before_usd": round(previous_equity, 6),
+                    "equity_after_usd": round(equity_after, 6),
+                    "event_pnl_usd": round(equity_after - previous_equity, 6),
+                }
+            )
+            telemetry.append(record)
+            continue
+        if breach_near_resolution and position_shares <= 1e-9:
             skipped += 1
             record["status"] = "skipped"
             record["reason"] = "near_resolution"
             telemetry.append(record)
             continue
-        if mid_price <= 0.01 or mid_price >= 0.99:
+        if breach_price_band and position_shares <= 1e-9:
             skipped += 1
             record["status"] = "skipped"
-            record["reason"] = "extreme_probability"
+            record["reason"] = "outside_price_band"
             telemetry.append(record)
             continue
 
@@ -1541,10 +1814,19 @@ def _simulate_market_backtest(
             continue
 
         quoted += 1
+        sell_only = breach_near_resolution or (market_volume is not None and market_volume < strategy_params.min_daily_volume_usd)
+        bid_notional_usd = 0.0 if sell_only else quote_plan.bid_notional_usd
+        ask_notional_usd = min(
+            quote_plan.ask_notional_usd,
+            max(0.0, position_shares) * max(quote_plan.ask_price, 0.0),
+        )
+        record["sell_only"] = sell_only
+        record["bid_notional_usd"] = round(bid_notional_usd, 6)
+        record["ask_notional_usd"] = round(ask_notional_usd, 6)
         side: str | None = None
-        if next_price < mid_price and quote_plan.bid_notional_usd > 0.0:
+        if next_price < mid_price and bid_notional_usd > 0.0:
             side = "buy"
-        elif next_price > mid_price and quote_plan.ask_notional_usd > 0.0:
+        elif next_price > mid_price and ask_notional_usd > 0.0:
             side = "sell"
 
         previous_equity = _liquidation_equity(
@@ -1560,7 +1842,7 @@ def _simulate_market_backtest(
             fill_fraction = _fill_fraction(
                 side="buy",
                 quote_price=quote_plan.bid_price,
-                quote_notional=quote_plan.bid_notional_usd,
+                quote_notional=bid_notional_usd,
                 current_book=current_book,
                 next_book=next_book,
                 next_mid=next_price,
@@ -1568,13 +1850,13 @@ def _simulate_market_backtest(
                 backtest_params=backtest_params,
                 strategy_params=strategy_params,
             )
-            fill_notional = quote_plan.bid_notional_usd * fill_fraction
+            fill_notional = bid_notional_usd * fill_fraction
             fill_price = quote_plan.bid_price
         elif side == "sell":
             fill_fraction = _fill_fraction(
                 side="sell",
                 quote_price=quote_plan.ask_price,
-                quote_notional=quote_plan.ask_notional_usd,
+                quote_notional=ask_notional_usd,
                 current_book=current_book,
                 next_book=next_book,
                 next_mid=next_price,
@@ -1582,7 +1864,7 @@ def _simulate_market_backtest(
                 backtest_params=backtest_params,
                 strategy_params=strategy_params,
             )
-            fill_notional = quote_plan.ask_notional_usd * fill_fraction
+            fill_notional = ask_notional_usd * fill_fraction
             fill_price = quote_plan.ask_price
 
         if fill_notional > 0.0 and side is not None:
@@ -1761,6 +2043,107 @@ def _maker_optimization_candidates(config: dict[str, Any], total_markets: int) -
                 "base_order_notional_usd": round(p.base_order_notional_usd * 1.05, 4),
             },
             "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.05, 0.0, 1.0), 4)},
+        },
+        # --- 10 new candidates below ---
+        {
+            "name": "defensive-wide-spread",
+            "subset_size": base_markets,
+            "strategy": {
+                "min_spread_bps": round(p.min_spread_bps * 1.3, 4),
+                "max_spread_bps": round(p.max_spread_bps * 1.2, 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate - 0.1, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "narrow-top3-concentration",
+            "subset_size": max(1, min(3, total_markets)),
+            "strategy": {
+                "markets_max": max(1, min(3, total_markets)),
+                "base_order_notional_usd": round(p.base_order_notional_usd * 1.4, 4),
+                "max_notional_per_market_usd": round(p.max_notional_per_market_usd * 1.3, 4),
+                "max_position_notional_usd": round(p.max_position_notional_usd * 1.3, 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.1, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "mid-aggressive-edge",
+            "subset_size": base_markets,
+            "strategy": {
+                "min_edge_bps": round(max(0.5, p.min_edge_bps * 0.6), 4),
+                "base_order_notional_usd": round(p.base_order_notional_usd * 1.2, 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.05, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "passive-low-participation",
+            "subset_size": base_markets,
+            "strategy": {
+                "min_spread_bps": round(p.min_spread_bps * 1.15, 4),
+                "base_order_notional_usd": round(p.base_order_notional_usd * 0.85, 4),
+            },
+            "backtest": {"participation_rate": round(max(0.1, bt.participation_rate - 0.2), 4)},
+        },
+        {
+            "name": "optimistic-rebate",
+            "subset_size": base_markets,
+            "strategy": {
+                "expected_unwind_cost_bps": round(max(0.5, p.expected_unwind_cost_bps * 0.7), 4),
+                "adverse_selection_bps": round(max(0.3, p.adverse_selection_bps * 0.7), 4),
+            },
+            "backtest": {
+                "join_best_queue_factor": round(min(1.0, bt.join_best_queue_factor + 0.1), 4),
+                "off_best_queue_factor": round(min(1.0, bt.off_best_queue_factor + 0.1), 4),
+            },
+        },
+        {
+            "name": "optimistic-fill-quality",
+            "subset_size": base_markets,
+            "strategy": {
+                "min_spread_bps": round(max(5.0, p.min_spread_bps * 0.8), 4),
+            },
+            "backtest": {
+                "spread_decay_bps": round(max(10.0, bt.spread_decay_bps * 0.75), 4),
+                "participation_rate": round(clamp(bt.participation_rate + 0.1, 0.0, 1.0), 4),
+            },
+        },
+        {
+            "name": "broad-diversified",
+            "subset_size": broad_markets,
+            "strategy": {
+                "markets_max": broad_markets,
+                "base_order_notional_usd": round(p.base_order_notional_usd * 0.8, 4),
+                "max_notional_per_market_usd": round(p.max_notional_per_market_usd * 0.75, 4),
+                "max_total_notional_usd": round(p.max_total_notional_usd * 1.25, 4),
+            },
+            "backtest": {"participation_rate": round(bt.participation_rate, 4)},
+        },
+        {
+            "name": "tight-midpoint-band",
+            "subset_size": base_markets,
+            "strategy": {
+                "min_mid_price": round(min(0.40, p.min_mid_price + 0.05), 4),
+                "max_mid_price": round(max(0.60, p.max_mid_price - 0.05), 4),
+            },
+            "backtest": {"participation_rate": round(clamp(bt.participation_rate + 0.05, 0.0, 1.0), 4)},
+        },
+        {
+            "name": "high-inventory-skew",
+            "subset_size": base_markets,
+            "strategy": {
+                "inventory_skew_strength_bps": round(p.inventory_skew_strength_bps * 1.5, 4),
+                "max_inventory_hold_cycles": max(1, p.max_inventory_hold_cycles - 1),
+            },
+            "backtest": {"participation_rate": round(bt.participation_rate, 4)},
+        },
+        {
+            "name": "vol-adjusted-wide",
+            "subset_size": base_markets,
+            "strategy": {
+                "volatility_spread_multiplier": round(p.volatility_spread_multiplier * 1.5, 4),
+                "min_spread_bps": round(p.min_spread_bps * 1.1, 4),
+                "max_spread_bps": round(p.max_spread_bps * 1.3, 4),
+            },
+            "backtest": {"participation_rate": round(max(0.1, bt.participation_rate - 0.05), 4)},
         },
     ]
 
@@ -2091,15 +2474,40 @@ def quote_market(
     mid = _safe_float(market.get("mid_price"), 0.5)
     vol_bps = _safe_float(market.get("volatility_bps"), p.min_spread_bps)
     rebate_bps = _safe_float(market.get("rebate_bps"), p.default_rebate_bps)
-    quote_plan = _build_quote_plan(
-        market_id=market_id,
-        mid_price=mid,
-        volatility_bps=vol_bps,
-        rebate_bps=rebate_bps,
-        inventory_notional=inventory_notional,
-        outstanding_notional=outstanding_notional,
-        strategy_params=p,
-    )
+    sell_only = bool(market.get("sell_only", False))
+    force_unwind = bool(market.get("force_unwind", False))
+    if force_unwind:
+        quote_plan = _build_inventory_exit_quote_plan(
+            market_id=market_id,
+            mid_price=mid,
+            volatility_bps=vol_bps,
+            rebate_bps=rebate_bps,
+            inventory_notional=max(0.0, inventory_notional),
+            strategy_params=p,
+            exit_reason=_safe_str(market.get("force_unwind_reason"), "inventory_force_unwind"),
+            target_notional_usd=max(0.0, inventory_notional),
+        )
+    elif sell_only:
+        quote_plan = _build_inventory_exit_quote_plan(
+            market_id=market_id,
+            mid_price=mid,
+            volatility_bps=vol_bps,
+            rebate_bps=rebate_bps,
+            inventory_notional=max(0.0, inventory_notional),
+            strategy_params=p,
+            exit_reason=_safe_str(market.get("sell_only_reason"), "inventory_exit_only"),
+            target_notional_usd=min(max(0.0, inventory_notional), p.base_order_notional_usd),
+        )
+    else:
+        quote_plan = _build_quote_plan(
+            market_id=market_id,
+            mid_price=mid,
+            volatility_bps=vol_bps,
+            rebate_bps=rebate_bps,
+            inventory_notional=inventory_notional,
+            outstanding_notional=outstanding_notional,
+            strategy_params=p,
+        )
     if quote_plan.status != "quoted":
         return {
             "market_id": market_id,
@@ -2120,6 +2528,13 @@ def quote_market(
         "bid_price": quote_plan.bid_price,
         "ask_price": quote_plan.ask_price,
         "inventory_notional_usd": quote_plan.inventory_notional_usd,
+        "sell_only": sell_only or force_unwind,
+        "force_unwind": force_unwind,
+        "policy_action": (
+            _safe_str(market.get("force_unwind_reason"), "")
+            if force_unwind
+            else _safe_str(market.get("sell_only_reason"), "")
+        ),
     }
 
 
@@ -2158,6 +2573,9 @@ def run_once(
             live_markets = load_live_single_markets(
                 markets_max=params.markets_max,
                 min_seconds_to_resolution=params.min_seconds_to_resolution,
+                min_mid_price=params.min_mid_price,
+                max_mid_price=params.max_mid_price,
+                min_daily_volume_usd=params.min_daily_volume_usd,
                 volatility_window_points=backtest_params.volatility_window_points,
                 min_history_points=max(24, backtest_params.volatility_window_points * 4),
                 min_liquidity_usd=backtest_params.min_liquidity_usd,
@@ -2184,8 +2602,14 @@ def run_once(
     inventory_notional_by_market = {
         str(k): _safe_float(v, 0.0) for k, v in inventory.items()
     }
+    prior_inventory_cycles = (
+        config.get("state", {}).get("inventory_cycles", {})
+        if isinstance(config.get("state", {}), dict)
+        else {}
+    )
     live_trader: DirectClobTrader | None = None
     stale_cleanup: dict[str, Any] | None = None
+    raw_positions: Any = []
     if live_mode:
         try:
             live_trader = DirectClobTrader(
@@ -2216,6 +2640,17 @@ def run_once(
             inventory_notional_by_market = single_market_inventory_notional(
                 raw_positions=raw_positions,
                 markets=markets,
+            )
+            inventory_cycles_state = _build_inventory_cycle_state(
+                prior_state=prior_inventory_cycles,
+                raw_positions=raw_positions,
+                markets=markets,
+            )
+            markets = _apply_held_inventory_policy(
+                markets=markets,
+                raw_positions=raw_positions,
+                inventory_cycles=inventory_cycles_state,
+                params=params,
             )
         except Exception as exc:
             return {
@@ -2248,7 +2683,8 @@ def run_once(
             p=params,
         )
         if proposal.get("status") == "quoted":
-            outstanding_notional += float(proposal["quote_notional_usd"])
+            if not proposal.get("sell_only", False):
+                outstanding_notional += float(proposal["quote_notional_usd"])
             proposals.append(proposal)
             selected += 1
         else:
@@ -2302,8 +2738,21 @@ def run_once(
             "inventory": live_execution.get("updated_inventory", {}),
             "live_risk": live_execution.get("live_risk", {}),
         }
+        latest_positions = live_execution.get("positions", raw_positions)
+        payload["state"]["inventory_cycles"] = _build_inventory_cycle_state(
+            prior_state=prior_inventory_cycles,
+            raw_positions=latest_positions,
+            markets=markets,
+        )
         payload["strategy_summary"]["orders_submitted"] = len(live_execution.get("orders_submitted", []))
         payload["strategy_summary"]["open_orders"] = len(live_execution.get("open_order_ids", []))
+        payload["strategy_summary"]["forced_unwinds"] = len(
+            [
+                order
+                for order in live_execution.get("orders_submitted", [])
+                if isinstance(order, dict) and order.get("source") == "forced_inventory_unwind"
+            ]
+        )
         if isinstance(live_execution.get("live_risk"), dict):
             payload["strategy_summary"]["current_equity_usd"] = _safe_float(
                 live_execution["live_risk"].get("current_equity_usd"),
@@ -2346,19 +2795,31 @@ def run_unwind_all(config: dict[str, Any]) -> dict[str, Any]:
             if shares <= 0:
                 continue
             try:
-                from polymarket_live import fetch_midpoint
-                mid = fetch_midpoint(token_id, fallback_mid=0.5)
-                sell_price = round(max(0.01, mid * 0.95), 4)
+                sell_plan = build_marketable_sell_order(token_id, shares)
                 response = trader.create_order(
                     token_id=token_id,
                     side="SELL",
-                    price=sell_price,
+                    price=sell_plan["price"],
                     size=shares,
-                    tick_size="0.01",
-                    neg_risk=False,
-                    fee_rate_bps=0,
+                    tick_size=sell_plan["tick_size"],
+                    neg_risk=sell_plan["neg_risk"],
+                    fee_rate_bps=sell_plan["fee_rate_bps"],
                 )
-                sell_results.append({"token_id": token_id, "shares": shares, "price": sell_price, "response": response})
+                sell_results.append(
+                    {
+                        "token_id": token_id,
+                        "shares": round(shares, 6),
+                        "price": sell_plan["price"],
+                        "best_bid": sell_plan["best_bid"],
+                        "best_ask": sell_plan["best_ask"],
+                        "estimated_exit_value_usd": sell_plan["estimated_exit_value_usd"],
+                        "estimated_fill_size": sell_plan["estimated_fill_size"],
+                        "estimated_unfilled_size": sell_plan["estimated_unfilled_size"],
+                        "estimated_average_price": sell_plan["estimated_average_price"],
+                        "execution_style": sell_plan["execution_style"],
+                        "response": response,
+                    }
+                )
             except Exception as sell_exc:
                 sell_results.append({"token_id": token_id, "shares": shares, "error": str(sell_exc)})
         results["sell_results"] = sell_results
@@ -2387,6 +2848,171 @@ def run_quote(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
     return run_once(config=config, markets=markets, yes_live=yes_live)
 
 
+def _normalized_inventory_rows(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for market_id, raw_value in inventory.items():
+        value = _safe_float(raw_value, 0.0)
+        rows.append(
+            {
+                "position_key": str(market_id),
+                "instrument_id": str(market_id),
+                "symbol": str(market_id),
+                "side": "LONG" if value >= 0 else "SHORT",
+                "quantity": abs(value),
+                "market_value_usd": abs(value),
+                "status": "open" if abs(value) > 0 else "flat",
+                "metadata": {"inventory_notional_usd": value},
+            }
+        )
+    return rows
+
+
+def _normalized_market_quotes(result: dict[str, Any]) -> list[dict[str, Any]]:
+    quotes = result.get("quotes", [])
+    if not isinstance(quotes, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for quote in quotes:
+        if not isinstance(quote, dict):
+            continue
+        rows.append(
+            {
+                "order_id": quote.get("market_id"),
+                "instrument_id": quote.get("market_id"),
+                "symbol": quote.get("market_id"),
+                "side": quote.get("trade_bias"),
+                "order_type": "quote",
+                "event_type": "quote_generated",
+                "status": quote.get("status", "quoted"),
+                "price": quote.get("bid_price") or quote.get("ask_price") or quote.get("mid_price"),
+                "quantity": quote.get("quote_notional_usd"),
+                "notional_usd": quote.get("quote_notional_usd"),
+                "metadata": quote,
+            }
+        )
+    live_execution = result.get("live_execution", {})
+    if isinstance(live_execution, dict):
+        for order in live_execution.get("orders_submitted", []):
+            if not isinstance(order, dict):
+                continue
+            rows.append(
+                {
+                    "order_id": order.get("id") or order.get("order_id"),
+                    "instrument_id": order.get("token_id"),
+                    "symbol": order.get("token_id"),
+                    "side": order.get("side"),
+                    "order_type": "limit",
+                    "event_type": "order_submitted",
+                    "status": "submitted",
+                    "price": order.get("price"),
+                    "quantity": order.get("size") or order.get("shares"),
+                    "metadata": order,
+                }
+            )
+    return rows
+
+
+def _normalized_unwind_events(result: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for order in result.get("sell_results", []):
+        if not isinstance(order, dict):
+            continue
+        rows.append(
+            {
+                "order_id": order.get("token_id"),
+                "instrument_id": order.get("token_id"),
+                "symbol": order.get("token_id"),
+                "side": "SELL",
+                "order_type": "marketable_limit",
+                "event_type": "unwind_submitted",
+                "status": "submitted" if "error" not in order else "error",
+                "price": order.get("price"),
+                "quantity": order.get("shares"),
+                "notional_usd": order.get("estimated_exit_value_usd"),
+                "metadata": order,
+            }
+        )
+    return rows
+
+
+def _normalized_backtest_pnl(result: dict[str, Any]) -> list[dict[str, Any]]:
+    metrics = result.get("results", {})
+    if not isinstance(metrics, dict):
+        return []
+    starting = _safe_float(metrics.get("starting_bankroll_usd"), 0.0)
+    total_pnl = _safe_float(metrics.get("total_pnl_usd"), 0.0)
+    return [
+        {
+            "period_type": "backtest",
+            "net_pnl_usd": total_pnl,
+            "gross_pnl_usd": total_pnl,
+            "equity_start_usd": starting,
+            "equity_end_usd": starting + total_pnl,
+            "metadata": {
+                "return_pct": metrics.get("return_pct"),
+                "events": metrics.get("events"),
+                "filled_notional_usd": metrics.get("filled_notional_usd"),
+            },
+        }
+    ]
+
+
+def _persist_normalized_result(config: dict[str, Any], result: dict[str, Any], *, run_type: str) -> None:
+    store = NormalizedTradingStore(
+        os.getenv("SERENDB_URL"),
+        skill_slug="polymarket-maker-rebate-bot",
+        venue="polymarket",
+        strategy_name="maker-rebate-bot",
+    )
+    try:
+        summary: dict[str, Any]
+        order_events: list[dict[str, Any]] = []
+        positions: list[dict[str, Any]] = []
+        position_marks: list[dict[str, Any]] = []
+        pnl_periods: list[dict[str, Any]] = []
+        if run_type == "backtest":
+            summary = {
+                "backtest_summary": result.get("backtest_summary", {}),
+                "results": result.get("results", {}),
+            }
+            pnl_periods = _normalized_backtest_pnl(result)
+        elif run_type == "quote":
+            summary = dict(result.get("strategy_summary", {}))
+            order_events = _normalized_market_quotes(result)
+            state = result.get("state", {})
+            if isinstance(state, dict):
+                positions = _normalized_inventory_rows(state.get("inventory", {}))
+                position_marks = _normalized_inventory_rows(state.get("inventory", {}))
+            live_execution = result.get("live_execution", {})
+            if isinstance(live_execution, dict) and isinstance(live_execution.get("live_risk"), dict):
+                pnl_periods.append(
+                    {
+                        "period_type": "live_risk",
+                        "equity_end_usd": live_execution["live_risk"].get("current_equity_usd"),
+                        "metadata": live_execution["live_risk"],
+                    }
+                )
+        else:
+            summary = {"positions_unwound": result.get("positions_unwound", 0)}
+            order_events = _normalized_unwind_events(result)
+        store.persist_completed_run(
+            mode=_safe_str(result.get("mode"), run_type),
+            dry_run=bool(result.get("dry_run", run_type != "live")),
+            config=config,
+            status=_safe_str(result.get("status"), "ok"),
+            summary=summary,
+            order_events=order_events,
+            positions=positions,
+            position_marks=position_marks,
+            pnl_periods=pnl_periods,
+            metadata={"run_type": run_type},
+            error_code=result.get("error_code"),
+            error_message=result.get("message"),
+        )
+    finally:
+        store.close()
+
+
 def main() -> int:
     args = parse_args()
     config = load_config(args.config)
@@ -2400,6 +3026,7 @@ def main() -> int:
             }
         else:
             result = run_unwind_all(config=config)
+        _persist_normalized_result(config, result, run_type="unwind-all")
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("status") == "ok" else 1
 
@@ -2415,6 +3042,7 @@ def main() -> int:
                 _write_config(args.config, config)
             except Exception as exc:  # pragma: no cover - defensive runtime path
                 result["config_writeback_warning"] = str(exc)
+        _persist_normalized_result(config, result, run_type="backtest")
     else:
         result = run_quote(config=config, markets_file=args.markets_file, yes_live=args.yes_live)
         if isinstance(result.get("state"), dict):
@@ -2426,6 +3054,7 @@ def main() -> int:
                 _persist_runtime_state(args.config, config, state)
             except Exception as exc:  # pragma: no cover - defensive runtime path
                 result["state_writeback_warning"] = str(exc)
+        _persist_normalized_result(config, result, run_type="quote")
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("status") == "ok" else 1
 
