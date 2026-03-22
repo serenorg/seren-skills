@@ -102,12 +102,13 @@ class PolymarketClient:
             raw_outcome_prices = market_data.get('outcomePrices')
             price = 0.5
             price_source = 'gamma_fallback'
+            outcome_prices_csv = ''
 
             if isinstance(raw_outcome_prices, str):
                 try:
                     outcome_prices = json.loads(raw_outcome_prices)
                 except Exception:
-                    outcome_prices = []
+                    outcome_prices = [p.strip() for p in raw_outcome_prices.split(',') if p.strip()]
             elif isinstance(raw_outcome_prices, list):
                 outcome_prices = raw_outcome_prices
             else:
@@ -115,8 +116,10 @@ class PolymarketClient:
 
             if outcome_prices:
                 try:
-                    price = float(outcome_prices[0])
+                    parsed_outcome_prices = [float(str(price_part).strip()) for price_part in outcome_prices]
+                    price = parsed_outcome_prices[0]
                     price_source = 'gamma'
+                    outcome_prices_csv = ','.join(str(price_part) for price_part in parsed_outcome_prices)
                 except Exception:
                     price = 0.5
                     price_source = 'gamma_fallback'
@@ -133,6 +136,7 @@ class PolymarketClient:
                 'question': question,
                 'token_id': yes_token_id,
                 'no_token_id': no_token_id,
+                'outcomePrices': outcome_prices_csv,
                 'price': price,
                 'price_source': price_source,
                 'volume': volume,

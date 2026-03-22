@@ -5,12 +5,14 @@ Tests for #220 — annualized return gate, resolution date filter, exit liquidit
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 import kelly
+from polymarket_client import PolymarketClient
 
 
 class TestAnnualizedReturn:
@@ -318,6 +320,33 @@ class TestStaleGammaPriceRejection:
              'price': 0.5, 'price_source': 'gamma'},
         ]
         result = agent.rank_candidates(markets, limit=10)
+        assert len(result) == 0
+
+    def test_get_markets_output_keeps_stale_gamma_signal_for_downstream_rejection(self):
+        """Regression: stale Gamma 50/50 prices must survive market discovery."""
+        seren = MagicMock()
+        seren.call_publisher.return_value = {
+            "body": [
+                {
+                    "conditionId": "0xabc",
+                    "question": "Stale market",
+                    "clobTokenIds": '["YES_TOKEN", "NO_TOKEN"]',
+                    "outcomePrices": '["0.5", "0.5"]',
+                    "volume": "5000",
+                    "liquidity": "1000",
+                    "endDateIso": self._iso(30),
+                    "active": True,
+                }
+            ]
+        }
+        client = PolymarketClient(seren_client=seren, dry_run=True)
+        markets = client.get_markets(limit=10)
+
+        agent = self._make_agent_with_config()
+        agent.polymarket.get_midpoint.side_effect = RuntimeError("no CLOB")
+        result = agent.rank_candidates(markets, limit=10)
+
+        assert markets[0]["outcomePrices"] == "0.5,0.5"
         assert len(result) == 0
 
 
