@@ -174,8 +174,6 @@ Any OpenAI-compatible provider works (OpenRouter, Ollama, DeepSeek, etc.) — ju
 
 ### 3. Start interactive agent
 
-### 3. Start interactive agent
-
 ```bash
 gclaw agent
 # Interactive CLI mode — type messages, agent responds

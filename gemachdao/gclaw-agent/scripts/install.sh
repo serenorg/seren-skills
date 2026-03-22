@@ -159,7 +159,13 @@ BINARY_PATH=$(find "${TMP_DIR}" -type f -name "${BINARY_NAME}" | head -1)
 # Install
 mkdir -p "$INSTALL_DIR"
 chmod +x "$BINARY_PATH"
-cp "$BINARY_PATH" "${INSTALL_DIR}/${BINARY_NAME}"
+
+if [[ -w "$INSTALL_DIR" ]]; then
+  cp "$BINARY_PATH" "${INSTALL_DIR}/${BINARY_NAME}"
+else
+  info "Writing to ${INSTALL_DIR} requires elevated permissions..."
+  sudo cp "$BINARY_PATH" "${INSTALL_DIR}/${BINARY_NAME}"
+fi
 
 # Verify
 if "${INSTALL_DIR}/${BINARY_NAME}" version &>/dev/null 2>&1; then
