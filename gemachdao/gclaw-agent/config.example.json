@@ -1,108 +1,179 @@
 {
-  "version": "1",
-  "agents": [
+  "agents": {
+    "defaults": {
+      "workspace": "~/.gclaw/workspace",
+      "restrict_to_workspace": true,
+      "model_name": "gpt4",
+      "max_tokens": 8192,
+      "temperature": 0.7,
+      "max_tool_iterations": 20
+    }
+  },
+  "model_list": [
     {
-      "name": "gclaw-agent",
-      "provider": "openai",
-      "model": "gpt-4o",
-      "system_prompt": "You are an autonomous DeFi trading agent powered by GMAC metabolism. Your goal is to grow your GMAC balance through profitable trades. Analyze market conditions, execute trades via GDEX SDK, and report outcomes. When in survival mode, prioritize high-probability trades.",
-      "tools": ["gdex_trade", "gdex_portfolio", "gdex_trending", "web_search", "shell"],
-      "cron": [
-        {
-          "schedule": "*/15 * * * *",
-          "task": "Check portfolio drift. If any position is more than 5% off target allocation, rebalance."
-        },
-        {
-          "schedule": "0 * * * *",
-          "task": "Scan top trending tokens on Solana. Report any with volume > $500k and price momentum > 3% in last hour."
-        }
-      ],
-      "channels": [],
-      "metabolism": {
-        "enabled": true,
-        "gmac_per_inference": 1,
-        "survival_threshold": 100
-      }
+      "model_name": "gpt4",
+      "model": "openai/gpt-4o",
+      "api_key": "sk-your-openai-key",
+      "api_base": "https://api.openai.com/v1"
+    },
+    {
+      "model_name": "claude-sonnet",
+      "model": "anthropic/claude-sonnet-4-20250514",
+      "api_key": "sk-ant-your-key",
+      "api_base": "https://api.anthropic.com/v1"
+    },
+    {
+      "model_name": "deepseek",
+      "model": "deepseek/deepseek-chat",
+      "api_key": "sk-your-deepseek-key"
     }
   ],
-  "providers": {
-    "openai": {
-      "api_key": "${OPENAI_API_KEY}",
-      "base_url": "https://api.openai.com/v1"
-    },
-    "anthropic": {
-      "api_key": "${ANTHROPIC_API_KEY}"
-    },
-    "google": {
-      "api_key": "${GOOGLE_AI_API_KEY}"
-    },
-    "zhipu": {
-      "api_key": "${ZHIPU_API_KEY}"
-    },
-    "openrouter": {
-      "api_key": "${OPENROUTER_API_KEY}"
-    },
-    "ollama": {
-      "base_url": "http://localhost:11434"
-    }
-  },
-  "metabolism": {
-    "enabled": true,
-    "wallet_private_key": "${CONTROL_WALLET_PRIVATE_KEY}",
-    "initial_gmac": 1000,
-    "replenish_on_profit": true
-  },
-  "replication": {
-    "enabled": false,
-    "max_children": 3,
-    "min_gmac_to_replicate": 5000,
-    "mutation_rate": 0.1
-  },
-  "swarm": {
-    "enabled": false,
-    "role": "worker",
-    "coordinator_url": "http://localhost:18791",
-    "consensus_threshold": 0.66
-  },
   "channels": {
     "telegram": {
-      "token": "${TELEGRAM_BOT_TOKEN}",
-      "allowed_users": []
+      "enabled": false,
+      "token": "YOUR_TELEGRAM_BOT_TOKEN",
+      "proxy": "",
+      "allow_from": [
+        "YOUR_USER_ID"
+      ]
     },
     "discord": {
-      "token": "${DISCORD_BOT_TOKEN}",
-      "guild_id": "",
-      "channel_id": ""
+      "enabled": false,
+      "token": "YOUR_DISCORD_BOT_TOKEN",
+      "allow_from": [],
+      "mention_only": false
+    },
+    "qq": {
+      "enabled": false,
+      "app_id": "YOUR_QQ_APP_ID",
+      "app_secret": "YOUR_QQ_APP_SECRET",
+      "allow_from": []
+    },
+    "whatsapp": {
+      "enabled": false,
+      "bridge_url": "ws://localhost:3001",
+      "allow_from": []
+    },
+    "slack": {
+      "enabled": false,
+      "bot_token": "xoxb-YOUR-BOT-TOKEN",
+      "app_token": "xapp-YOUR-APP-TOKEN",
+      "allow_from": []
+    },
+    "line": {
+      "enabled": false,
+      "channel_secret": "YOUR_LINE_CHANNEL_SECRET",
+      "channel_access_token": "YOUR_LINE_CHANNEL_ACCESS_TOKEN",
+      "webhook_host": "0.0.0.0",
+      "webhook_port": 18791,
+      "webhook_path": "/webhook/line",
+      "allow_from": []
+    }
+  },
+  "providers": {
+    "_comment": "DEPRECATED: Use model_list instead. This will be removed in a future version",
+    "anthropic": {
+      "api_key": "",
+      "api_base": ""
+    },
+    "openai": {
+      "api_key": "",
+      "api_base": "",
+      "web_search": true
+    },
+    "openrouter": {
+      "api_key": "",
+      "api_base": ""
+    },
+    "groq": {
+      "api_key": "",
+      "api_base": ""
+    },
+    "zhipu": {
+      "api_key": "",
+      "api_base": ""
+    },
+    "gemini": {
+      "api_key": "",
+      "api_base": ""
+    },
+    "ollama": {
+      "api_key": "",
+      "api_base": "http://localhost:11434/v1"
+    },
+    "cerebras": {
+      "api_key": "",
+      "api_base": ""
     }
   },
   "tools": {
-    "gdex": {
-      "api_key": "${GDEX_API_KEY}",
-      "default_chain": "solana"
-    },
-    "shell": {
-      "enabled": true,
-      "allowed_commands": ["ls", "cat", "echo", "date", "curl"]
-    },
     "web": {
-      "enabled": true,
-      "max_pages_per_session": 10
+      "brave": {
+        "enabled": false,
+        "api_key": "YOUR_BRAVE_API_KEY",
+        "max_results": 5
+      },
+      "duckduckgo": {
+        "enabled": true,
+        "max_results": 5
+      }
     },
-    "filesystem": {
+    "cron": {
+      "exec_timeout_minutes": 5
+    },
+    "exec": {
+      "enable_deny_patterns": false,
+      "custom_deny_patterns": []
+    },
+    "gdex": {
       "enabled": true,
-      "allowed_paths": ["~/gclaw-workspace"]
+      "api_key": "",
+      "wallet_address": "",
+      "private_key": "",
+      "default_chain_id": 1,
+      "max_trade_size_sol": 0.01,
+      "auto_trade": false,
+      "gmac_token": {
+        "ethereum": "0xd96e84ddbc7cbe1d73c55b6fe8c64f3a6550deea",
+        "arbitrum": "0xd96e84ddbc7cbe1d73c55b6fe8c64f3a6550deea",
+        "solana": "",
+        "coingecko_id": "gemach"
+      }
     }
   },
-  "gateway": {
-    "port": 18790,
-    "host": "localhost",
-    "enable_web_dashboard": true,
-    "enable_api": true,
-    "cors_origins": ["http://localhost:3000"]
+  "heartbeat": {
+    "enabled": true,
+    "interval": 30
   },
-  "recode": {
-    "enabled": false,
-    "require_approval": true,
-    "max_prompt_length": 4096
+  "metabolism": {
+    "enabled": true,
+    "initial_gmac": 1000,
+    "heartbeat_cost": 0.1,
+    "inference_cost_per_1k_tokens": 0.5,
+    "survival_threshold": 50,
+    "thresholds": {
+      "replicate": 50,
+      "self_recode": 100,
+      "swarm_leader": 200,
+      "architect": 500
+    }
+  },
+  "swarm": {
+    "enabled": true,
+    "max_swarm_size": 5,
+    "consensus_threshold": 0.6,
+    "signal_aggregation": "majority",
+    "strategy_rotation": true,
+    "rebalance_interval": 60,
+    "shared_wallet_mode": false
+  },
+  "dashboard": {
+    "enabled": true,
+    "web_enabled": true,
+    "refresh_interval": 10
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 18790
   }
 }

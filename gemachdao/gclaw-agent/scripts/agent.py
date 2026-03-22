@@ -18,13 +18,14 @@ from pathlib import Path
 GCLAW_HOME = Path(os.environ.get("GCLAW_HOME", Path.home() / ".gclaw"))
 CONFIG_PATH = GCLAW_HOME / "config.json"
 
-REQUIRED_TRADING_ENV_VARS = ("GDEX_API_KEY", "CONTROL_WALLET_PRIVATE_KEY")
+OPTIONAL_TRADING_ENV_VARS = ("GDEX_API_KEY", "CONTROL_WALLET_PRIVATE_KEY")
 LLM_PROVIDER_ENV_VARS = (
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
-    "GOOGLE_AI_API_KEY",
+    "GEMINI_API_KEY",
     "ZHIPU_API_KEY",
     "OPENROUTER_API_KEY",
+    "CEREBRAS_API_KEY",
 )
 
 
@@ -52,30 +53,33 @@ def load_config(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def validate_dependencies() -> None:
+def _has_model_list(config: dict) -> bool:
+    """Return True if config has a non-empty model_list with an api_key."""
+    model_list = config.get("model_list", [])
+    if not isinstance(model_list, list):
+        return False
+    return any(
+        isinstance(m, dict) and m.get("api_key")
+        for m in model_list
+    )
+
+
+def validate_dependencies(config: dict | None = None) -> None:
     """Fail closed when required credentials or tools are missing."""
-    missing = []
-    for var in REQUIRED_TRADING_ENV_VARS:
-        if not os.environ.get(var):
-            missing.append(var)
+    llm_env_set = any(os.environ.get(var) for var in LLM_PROVIDER_ENV_VARS)
+    llm_config_set = _has_model_list(config) if config else False
 
-    if missing:
-        raise RuntimeError(
-            f"Required trading credentials are missing: {', '.join(missing)}. "
-            "Set them in .env or config.json before running the agent."
-        )
-
-    llm_set = any(os.environ.get(var) for var in LLM_PROVIDER_ENV_VARS)
-    if not llm_set:
+    if not llm_env_set and not llm_config_set:
         raise RuntimeError(
             "No LLM provider API key is set. "
-            "Set at least one of: " + ", ".join(LLM_PROVIDER_ENV_VARS)
+            "Configure model_list in config.json or set at least one of: "
+            + ", ".join(LLM_PROVIDER_ENV_VARS)
         )
 
     if not shutil.which("gclaw"):
         raise RuntimeError(
             "gclaw binary is not installed or not in PATH. "
-            "Run: bash scripts/install.sh"
+            "Run: curl -fsSL https://raw.githubusercontent.com/GemachDAO/Gclaw/main/install.sh | bash"
         )
 
 
@@ -104,7 +108,7 @@ def unwind_all(config: dict, args: argparse.Namespace) -> int:
         raise RuntimeError(
             "Emergency unwind requires --yes-live flag for safety confirmation."
         )
-    validate_dependencies()
+    validate_dependencies(config)
     print(cancel_all_orders())
     print(liquidate_inventory())
     print("Unwind complete — all positions closed.")
@@ -113,7 +117,7 @@ def unwind_all(config: dict, args: argparse.Namespace) -> int:
 
 def run_agent(config: dict, args: argparse.Namespace) -> int:
     """Launch the gclaw agent with safety checks."""
-    validate_dependencies()
+    validate_dependencies(config)
 
     live = is_live_mode(config, args)
     if not live and (args.yes_live or args.allow_live):

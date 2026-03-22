@@ -65,12 +65,10 @@ if [[ -f "$CONFIG_FILE" ]]; then
 
       # Check required top-level keys
       AGENTS=$(python3 -c "import json; d=json.load(open('${CONFIG_FILE}')); print('ok' if 'agents' in d else 'missing')" 2>/dev/null || echo "error")
-      PROVIDERS=$(python3 -c "import json; d=json.load(open('${CONFIG_FILE}')); print('ok' if 'providers' in d else 'missing')" 2>/dev/null || echo "error")
-      VERSION=$(python3 -c "import json; d=json.load(open('${CONFIG_FILE}')); print('ok' if 'version' in d else 'missing')" 2>/dev/null || echo "error")
+      MODEL_LIST=$(python3 -c "import json; d=json.load(open('${CONFIG_FILE}')); print('ok' if 'model_list' in d else 'missing')" 2>/dev/null || echo "error")
 
-      [[ "$AGENTS" == "ok" ]]   && pass "config.json has 'agents' key"   || fail "config.json missing 'agents' key"
-      [[ "$PROVIDERS" == "ok" ]] && pass "config.json has 'providers' key" || warn "config.json missing 'providers' key (may be using defaults)"
-      [[ "$VERSION" == "ok" ]]  && pass "config.json has 'version' key"  || warn "config.json missing 'version' key (optional)"
+      [[ "$AGENTS" == "ok" ]]     && pass "config.json has 'agents' key"     || fail "config.json missing 'agents' key"
+      [[ "$MODEL_LIST" == "ok" ]] && pass "config.json has 'model_list' key" || warn "config.json missing 'model_list' key (may be using env vars or providers)"
 
     else
       fail "config.json is NOT valid JSON — edit ${CONFIG_FILE} to fix syntax errors"
@@ -111,13 +109,11 @@ check_env() {
 
 # At least one LLM provider is needed
 LLM_SET=false
-for var in OPENAI_API_KEY ANTHROPIC_API_KEY GOOGLE_AI_API_KEY ZHIPU_API_KEY OPENROUTER_API_KEY; do
+for var in OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY ZHIPU_API_KEY OPENROUTER_API_KEY CEREBRAS_API_KEY; do
   [[ -n "${!var:-}" ]] && LLM_SET=true
 done
-[[ "$LLM_SET" == "true" ]] && pass "At least one LLM provider API key is set" || warn "No LLM provider API key is set (required to run agent)"
+[[ "$LLM_SET" == "true" ]] && pass "At least one LLM provider API key is set" || warn "No LLM provider API key is set (may be configured via model_list in config.json)"
 
-check_env "GDEX_API_KEY"
-check_env "CONTROL_WALLET_PRIVATE_KEY"
 check_env "TELEGRAM_BOT_TOKEN"
 check_env "DISCORD_BOT_TOKEN"
 
