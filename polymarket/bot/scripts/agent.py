@@ -192,6 +192,11 @@ class TradingAgent:
             except (IndexError, ValueError, TypeError):
                 return -1.0
 
+        def _is_stale_gamma(m: Dict) -> bool:
+            """True if outcomePrices is the Gamma 0.5/0.5 default seed."""
+            asymmetry = _parse_price_asymmetry(m)
+            return 0 <= asymmetry < 0.02
+
         def score(m: Dict) -> float:
             liquidity = float(m.get('liquidity', 0))
             volume = float(m.get('volume', 0))
@@ -200,12 +205,17 @@ class TradingAgent:
             base = liq_score + vol_score * 2
 
             # Demote markets whose outcomePrices are still at the Gamma 0.5/0.5 default
-            asymmetry = _parse_price_asymmetry(m)
-            if 0 <= asymmetry < 0.02:
+            if _is_stale_gamma(m):
                 return base * stale_demotion
             return base
 
-        ranked = sorted(markets, key=score, reverse=True)
+        # Hard-filter stale 50/50 Gamma markets before ranking — they waste LLM budget
+        stale_gamma_filtered = [m for m in markets if not _is_stale_gamma(m)]
+        stale_gamma_pre_filter = len(markets) - len(stale_gamma_filtered)
+        if stale_gamma_pre_filter:
+            print(f"  Filtered {stale_gamma_pre_filter} stale 50/50 Gamma-seeded markets")
+
+        ranked = sorted(stale_gamma_filtered, key=score, reverse=True)
 
         # Filter out markets resolving too far in the future
         from datetime import datetime, timezone

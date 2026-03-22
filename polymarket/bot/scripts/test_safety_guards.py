@@ -294,8 +294,8 @@ class TestStaleGammaPriceRejection:
         assert result[0]['question'] == 'Real price market'
         assert result[0]['price'] == pytest.approx(0.85, abs=0.01)
 
-    def test_stale_gamma_overridden_by_clob(self):
-        """Market with outcomePrices '0.5,0.5' but real CLOB midpoint uses CLOB price."""
+    def test_stale_gamma_hard_filtered_even_with_clob(self):
+        """Stale 50/50 markets are removed before CLOB enrichment (#250)."""
         agent = self._make_agent_with_config()
         agent.polymarket.get_midpoint.return_value = 0.72
         markets = [
@@ -305,9 +305,7 @@ class TestStaleGammaPriceRejection:
              'price': 0.5, 'price_source': 'gamma'},
         ]
         result = agent.rank_candidates(markets, limit=10)
-        assert len(result) == 1
-        assert result[0]['price'] == pytest.approx(0.72, abs=0.001)
-        assert result[0]['price_source'] == 'clob_midpoint'
+        assert len(result) == 0
 
     def test_stale_gamma_rejected_when_clob_confirms_fifty(self):
         """Market with outcomePrices '0.5,0.5' AND CLOB mid ~0.50 is rejected (#243)."""
@@ -350,8 +348,8 @@ class TestStaleGammaPriceRejection:
         assert len(result) == 0
 
 
-class TestStalePriceDemotion:
-    """Test that markets with 0.5/0.5 outcomePrices are deprioritized in ranking."""
+class TestStalePriceHardFilter:
+    """Test that markets with 0.5/0.5 outcomePrices are hard-filtered (#250)."""
 
     def _make_agent_with_config(self, stale_price_demotion=0.1, max_resolution_days=180):
         from unittest.mock import MagicMock
@@ -370,8 +368,8 @@ class TestStalePriceDemotion:
     def _iso(days_from_now: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(days=days_from_now)).isoformat().replace('+00:00', 'Z')
 
-    def test_stale_price_demoted_in_ranking(self):
-        """Market at 0.5/0.5 ranks below a market at 0.7/0.3 even with higher liquidity."""
+    def test_stale_price_excluded_from_candidates(self):
+        """Market at 0.5/0.5 is removed entirely, not just demoted (#250)."""
         agent = self._make_agent_with_config()
         markets = [
             {
@@ -394,13 +392,11 @@ class TestStalePriceDemotion:
         result = agent.rank_candidates(markets, limit=10)
         questions = [m['question'] for m in result]
         assert 'Real market' in questions
-        assert 'Stale market' in questions
-        assert questions.index('Real market') < questions.index('Stale market')
+        assert 'Stale market' not in questions
 
-    def test_real_price_not_demoted(self):
-        """Market at 0.85/0.15 keeps its full ranking score."""
+    def test_real_price_not_filtered(self):
+        """Market at 0.85/0.15 passes through; stale market does not."""
         agent = self._make_agent_with_config()
-        import math
 
         market = {
             'question': 'Strong signal',
@@ -410,10 +406,6 @@ class TestStalePriceDemotion:
             'token_id': 'tok_strong',
             'outcomePrices': '0.85,0.15',
         }
-        markets = [market]
-        result = agent.rank_candidates(markets, limit=10)
-        assert len(result) == 1
-
         stale_market = {
             'question': 'Stale low liq',
             'end_date': self._iso(30),
@@ -422,6 +414,7 @@ class TestStalePriceDemotion:
             'token_id': 'tok_stale2',
             'outcomePrices': '0.50,0.50',
         }
-        result2 = agent.rank_candidates([market, stale_market], limit=10)
-        questions = [m['question'] for m in result2]
-        assert questions.index('Strong signal') < questions.index('Stale low liq')
+        result = agent.rank_candidates([market, stale_market], limit=10)
+        questions = [m['question'] for m in result]
+        assert 'Strong signal' in questions
+        assert 'Stale low liq' not in questions
