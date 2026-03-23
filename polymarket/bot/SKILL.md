@@ -121,7 +121,7 @@ tail -50 ~/.config/seren/skills/polymarket-bot/logs/trading_*.log
 ⚠️ **Only if user has:**
 
 - Completed paper trading validation (50+ scans)
-- $550+ budget ($500 USDC + $50 SerenBucks)
+- $525+ budget ($500 USDC + $25 SerenBucks)
 - Real Polymarket API credentials
 
 ```bash
@@ -233,32 +233,34 @@ This skill helps users set up and manage an autonomous trading agent that:
 
 ## API Key Setup
 
-If `SEREN_API_KEY` is not set (and the skill is not running inside Seren Desktop, which injects `API_KEY` automatically), the agent must register and provision a key before proceeding:
+Before running this skill, check for an existing Seren API key in this order:
 
-1. Register a new Seren agent account:
+1. **Seren Desktop auth** — if the skill is running inside Seren Desktop, the runtime injects `API_KEY` automatically. Check: `echo $API_KEY`. If set, no further action is needed.
+2. **Existing `.env` file** — check if `SEREN_API_KEY` is already set in the skill's `.env` file. If set, no further action is needed.
+3. **Shell environment** — check if `SEREN_API_KEY` is exported in the current shell. If set, no further action is needed.
 
-   ```bash
-   curl -sS -X POST "https://api.serendb.com/auth/agent" \
-     -H "Content-Type: application/json" \
-     -d '{"name":"polymarket-bot"}'
-   ```
+**Only if none of the above are set**, register a new agent account:
 
-2. Extract the API key from the response at `.data.agent.api_key`. **This key is shown only once** — save it immediately.
+```bash
+curl -sS -X POST "https://api.serendb.com/auth/agent" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"polymarket-bot"}'
+```
 
-3. Write the key to the skill's `.env` file:
+Extract the API key from the response at `.data.agent.api_key` — **this key is shown only once**. Write it to the skill's `.env` file:
 
-   ```env
-   SEREN_API_KEY=<the-returned-key>
-   ```
+```env
+SEREN_API_KEY=<the-returned-key>
+```
 
-4. Verify the key works:
+Verify:
 
-   ```bash
-   curl -sS "https://api.serendb.com/auth/me" \
-     -H "Authorization: Bearer $SEREN_API_KEY"
-   ```
+```bash
+curl -sS "https://api.serendb.com/auth/me" \
+  -H "Authorization: Bearer $SEREN_API_KEY"
+```
 
-Do not show a generic "missing key" error. Always auto-register and provision the key so the skill can proceed. If the user declines registration, respect that and stop.
+**Do not create a new account if a key already exists.** Creating a duplicate account results in a $0-balance key that overrides the user's funded account.
 
 Reference: [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.md)
 
@@ -380,7 +382,7 @@ Stop trading if bankroll drops to this amount.
 
 ⚠️ **REALITY CHECK: The Economics of Automated Trading**
 
-**You need at least $550 total to trade profitably with this bot.**
+**You need at least $525 total to trade profitably with this bot.**
 
 This is not a recommendation - it's math. Here's why:
 
@@ -395,15 +397,15 @@ The bot costs ~$12/day to run (at 2-hour scan intervals). With a $20 bankroll:
 
 This is like hiring a $100/hour analyst to trade a $10 account. The math doesn't work.
 
-#### Minimum Viable Budget: $550
+#### Minimum Viable Budget: $525
 
 To have a realistic chance of offsetting API costs and achieving profitability:
 
 | Item             | Amount   | Purpose                                       |
 | ---------------- | -------- | --------------------------------------------- |
 | **Polygon USDC** | $500     | Trading capital (allows $15-30 positions)     |
-| **SerenBucks**   | $50      | API costs (4+ days of operation)              |
-| **Total**        | **$550** | Minimum to trade with positive expected value |
+| **SerenBucks**   | $25      | API costs (2+ days of operation)              |
+| **Total**        | **$525** | Minimum to trade with positive expected value |
 
 With $500 bankroll:
 
@@ -416,14 +418,14 @@ With $500 bankroll:
 
 #### Budget Tiers
 
-##### 🔴 Below Minimum (<$550 total)
+##### 🔴 Below Minimum (<$525 total)
 
 - **Status**: 🚨 **WILL LOSE MONEY**
 - **Reality**: Trading profits cannot offset API costs with small positions
 - **Use case**: Educational only - learning how the system works
 - **Expected outcome**: Net loss of ~$40-50 after SerenBucks depleted
 
-##### 🟢 Minimum Viable ($550-800 total)
+##### 🟢 Minimum Viable ($525-800 total)
 
 - **SerenBucks**: $50-100
 - **Polygon USDC**: $500
@@ -479,20 +481,20 @@ python3 scripts/agent.py --config config.json --dry-run
 - ❌ Does NOT place actual Polymarket orders
 - ❌ Does NOT require Polymarket API credentials
 
-**Important:** Paper trading still costs **~$1 per scan** in API fees (Perplexly + Claude analysis). With $50 SerenBucks, you can run 50 paper trades over 1-2 weeks to validate the strategy.
+**Important:** Paper trading still costs **~$1 per scan** in API fees (Perplexly + Claude analysis). With $25 SerenBucks, you can run 25 paper trades over 1-2 weeks to validate the strategy.
 
 **Recommended paper trading plan:**
 
-1. Fund $50 SerenBucks (covers ~50 scans)
+1. Fund $25 SerenBucks (covers ~25 scans)
 2. Set `"scan_interval_minutes": 120` in config.json (2-hour intervals)
 3. Run paper trading for 5-7 days (60-84 scans)
 4. Analyze results in log files:
    - Win rate: % of paper trades that would have been profitable
    - Average edge: mean expected value per trade
    - Sharpe ratio: risk-adjusted returns
-5. If paper trading shows consistent edge, move to live trading with $550+ budget
+5. If paper trading shows consistent edge, move to live trading with $525+ budget
 
-**Manual paper trading (if <$50 SerenBucks):**
+**Manual paper trading (if <$25 SerenBucks):**
 
 Run scans one at a time when you want:
 
@@ -514,11 +516,11 @@ Once paper trading validates your edge (recommended: 50+ scans with positive exp
 **Requirements for live trading:**
 
 - ✅ Successful paper trading period (1-2 weeks, 50+ scans)
-- ✅ Minimum $550 budget ($500 USDC + $50 SerenBucks)
+- ✅ Minimum $525 budget ($500 USDC + $25 SerenBucks)
 - ✅ Polymarket API credentials (see Phase 2)
 - ✅ Understanding of Kelly Criterion risk management
 
-**If you don't have $550 yet:**
+**If you don't have $525 yet:**
 
 - Continue paper trading to refine strategy
 - Save up capital while accumulating paper trade data
