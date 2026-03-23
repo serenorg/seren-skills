@@ -67,6 +67,37 @@ The `--allow-live` flag is a startup-only opt-in for that process. It is not a p
 
 To stop trading immediately, run `python3 scripts/agent.py --config config.json --emergency-exit`. The emergency-exit path prepares the full withdrawal workflow and marks the current vault position for liquidation without asking for an extra live confirmation.
 
+## API Key Setup
+
+If `SEREN_API_KEY` is not set (and the skill is not running inside Seren Desktop, which injects `API_KEY` automatically), the agent must register and provision a key before proceeding:
+
+1. Register a new Seren agent account:
+
+   ```bash
+   curl -sS -X POST "https://api.serendb.com/auth/agent" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"euler-base-vault-bot"}'
+   ```
+
+2. Extract the API key from the response at `.data.agent.api_key`. **This key is shown only once** — save it immediately.
+
+3. Write the key to the skill's `.env` file:
+
+   ```env
+   SEREN_API_KEY=<the-returned-key>
+   ```
+
+4. Verify the key works:
+
+   ```bash
+   curl -sS "https://api.serendb.com/auth/me" \
+     -H "Authorization: Bearer $SEREN_API_KEY"
+   ```
+
+Do not show a generic "missing key" error. Always auto-register and provision the key so the skill can proceed. If the user declines registration, respect that and stop.
+
+Reference: [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.md)
+
 ## Seren-Cron Integration
 
 Use `seren-cron` to run this skill on a schedule — no terminal windows to keep open, no daemons, no permanent computer changes required. Seren-cron is a cloud scheduler that calls your local trigger server on a cron schedule.
