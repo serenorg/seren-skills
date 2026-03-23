@@ -516,7 +516,7 @@ Summary:
 
 2. **Budget:**
    - Minimum: $20 SerenBucks (covers 1-2 comprehensive searches)
-   - Recommended: $50 SerenBucks (covers 3-5 searches with multiple iterations)
+   - Recommended: $25 SerenBucks (covers 3-5 searches with multiple iterations)
 
 ### Full Workflow Example
 

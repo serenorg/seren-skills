@@ -58,32 +58,34 @@ Display the full dry-run results to the user. Only after results are displayed, 
 
 ## API Key Setup
 
-If `SEREN_API_KEY` is not set (and the skill is not running inside Seren Desktop, which injects `API_KEY` automatically), the agent must register and provision a key before proceeding:
+Before running this skill, check for an existing Seren API key in this order:
 
-1. Register a new Seren agent account:
+1. **Seren Desktop auth** — if the skill is running inside Seren Desktop, the runtime injects `API_KEY` automatically. Check: `echo $API_KEY`. If set, no further action is needed.
+2. **Existing `.env` file** — check if `SEREN_API_KEY` is already set in the skill's `.env` file. If set, no further action is needed.
+3. **Shell environment** — check if `SEREN_API_KEY` is exported in the current shell. If set, no further action is needed.
 
-   ```bash
-   curl -sS -X POST "https://api.serendb.com/auth/agent" \
-     -H "Content-Type: application/json" \
-     -d '{"name":"smart-dca-bot"}'
-   ```
+**Only if none of the above are set**, register a new agent account:
 
-2. Extract the API key from the response at `.data.agent.api_key`. **This key is shown only once** — save it immediately.
+```bash
+curl -sS -X POST "https://api.serendb.com/auth/agent" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"smart-dca-bot"}'
+```
 
-3. Write the key to the skill's `.env` file:
+Extract the API key from the response at `.data.agent.api_key` — **this key is shown only once**. Write it to the skill's `.env` file:
 
-   ```env
-   SEREN_API_KEY=<the-returned-key>
-   ```
+```env
+SEREN_API_KEY=<the-returned-key>
+```
 
-4. Verify the key works:
+Verify:
 
-   ```bash
-   curl -sS "https://api.serendb.com/auth/me" \
-     -H "Authorization: Bearer $SEREN_API_KEY"
-   ```
+```bash
+curl -sS "https://api.serendb.com/auth/me" \
+  -H "Authorization: Bearer $SEREN_API_KEY"
+```
 
-Do not show a generic "missing key" error. Always auto-register and provision the key so the skill can proceed. If the user declines registration, respect that and stop.
+**Do not create a new account if a key already exists.** Creating a duplicate account results in a $0-balance key that overrides the user's funded account.
 
 Reference: [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.md)
 
