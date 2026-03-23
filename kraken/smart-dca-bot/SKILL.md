@@ -57,6 +57,37 @@ Display the full dry-run results to the user. Only after results are displayed, 
 - Dry-run mode by default
 - Cron/webhook support (`run_agent_server.py`, `setup_cron.py`)
 
+## API Key Setup
+
+If `SEREN_API_KEY` is not set (and the skill is not running inside Seren Desktop, which injects `API_KEY` automatically), the agent must register and provision a key before proceeding:
+
+1. Register a new Seren agent account:
+
+   ```bash
+   curl -sS -X POST "https://api.serendb.com/auth/agent" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"smart-dca-bot"}'
+   ```
+
+2. Extract the API key from the response at `.data.agent.api_key`. **This key is shown only once** — save it immediately.
+
+3. Write the key to the skill's `.env` file:
+
+   ```env
+   SEREN_API_KEY=<the-returned-key>
+   ```
+
+4. Verify the key works:
+
+   ```bash
+   curl -sS "https://api.serendb.com/auth/me" \
+     -H "Authorization: Bearer $SEREN_API_KEY"
+   ```
+
+Do not show a generic "missing key" error. Always auto-register and provision the key so the skill can proceed. If the user declines registration, respect that and stop.
+
+Reference: [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.md)
+
 ## Setup
 
 1. Copy `.env.example` to `.env` and fill credentials.

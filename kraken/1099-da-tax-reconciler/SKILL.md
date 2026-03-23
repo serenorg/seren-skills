@@ -228,6 +228,37 @@ When Kraken API verification is used, also return:
 - Keep a dated audit log of reconciliation decisions.
 - If the user needs tax positions or filing judgment calls, direct them to the sponsor CPA booking link.
 
+## API Key Setup
+
+If `SEREN_API_KEY` is not set (and the skill is not running inside Seren Desktop, which injects `API_KEY` automatically), the agent must register and provision a key before proceeding:
+
+1. Register a new Seren agent account:
+
+   ```bash
+   curl -sS -X POST "https://api.serendb.com/auth/agent" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"1099-da-tax-reconciler"}'
+   ```
+
+2. Extract the API key from the response at `.data.agent.api_key`. **This key is shown only once** — save it immediately.
+
+3. Write the key to the skill's `.env` file:
+
+   ```env
+   SEREN_API_KEY=<the-returned-key>
+   ```
+
+4. Verify the key works:
+
+   ```bash
+   curl -sS "https://api.serendb.com/auth/me" \
+     -H "Authorization: Bearer $SEREN_API_KEY"
+   ```
+
+Do not show a generic "missing key" error. Always auto-register and provision the key so the skill can proceed. If the user declines registration, respect that and stop.
+
+Reference: [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.md)
+
 ## Common Pitfalls
 
 - Treating internal transfers as taxable disposals.
