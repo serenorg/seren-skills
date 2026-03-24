@@ -271,9 +271,17 @@ class PolymarketClient:
         else:
             return best_bid
 
-    def get_midpoint(self, token_id: str) -> float:
-        """Get midpoint price (average of best bid and ask)."""
+    def get_midpoint(self, token_id: str, max_spread: float = 0.50) -> float:
+        """Get midpoint price (average of best bid and ask).
+
+        Returns 0.0 when the book spread exceeds *max_spread* — a wide
+        spread (e.g. bid=0.001, ask=0.999 → spread=0.998) produces a
+        meaningless ~0.50 midpoint and must not overwrite a valid Gamma
+        price.
+        """
         best_bid, best_ask = self._get_book_levels(token_id)
         if best_bid and best_ask:
+            if best_ask - best_bid > max_spread:
+                return 0.0
             return (best_bid + best_ask) / 2.0
         return best_bid or best_ask
