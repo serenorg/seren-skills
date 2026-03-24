@@ -20,7 +20,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # Import our modules
@@ -218,7 +218,6 @@ class TradingAgent:
         ranked = sorted(stale_gamma_filtered, key=score, reverse=True)
 
         # Filter out markets resolving too far in the future
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         time_filtered = []
         for m in ranked:
@@ -573,7 +572,7 @@ class TradingAgent:
     def run_scan_cycle(self):
         """Run a single scan cycle"""
         print("=" * 60)
-        print(f"🔍 Polymarket Scan Starting - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        print(f"🔍 Polymarket Scan Starting - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
         print("=" * 60)
         print()
 
