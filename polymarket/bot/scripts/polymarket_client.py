@@ -124,6 +124,43 @@ class PolymarketClient:
                     price = 0.5
                     price_source = 'gamma_fallback'
 
+            # If the Gamma outcomePrices is a stale 0.5/0.5 seed, try CLOB
+            # fields that the Gamma API already includes in the response.
+            is_stale = abs(price - 0.5) < 0.02
+
+            if is_stale:
+                # Try lastTradePrice from the CLOB
+                ltp = market_data.get('lastTradePrice')
+                if ltp is not None:
+                    try:
+                        ltp_val = float(ltp)
+                        if 0.0 < ltp_val < 1.0 and abs(ltp_val - 0.5) >= 0.02:
+                            price = ltp_val
+                            price_source = 'clob_last_trade'
+                            is_stale = False
+                    except (ValueError, TypeError):
+                        pass
+
+            if is_stale:
+                # Try bestBid / bestAsk midpoint from the Gamma response
+                best_bid = market_data.get('bestBid')
+                best_ask = market_data.get('bestAsk')
+                if best_bid is not None and best_ask is not None:
+                    try:
+                        bid_val = float(best_bid)
+                        ask_val = float(best_ask)
+                        if bid_val > 0 and ask_val > 0:
+                            mid = (bid_val + ask_val) / 2.0
+                            if abs(mid - 0.5) >= 0.02:
+                                price = mid
+                                price_source = 'clob_book_mid'
+                                is_stale = False
+                    except (ValueError, TypeError):
+                        pass
+
+            if is_stale:
+                price_source = 'stale_gamma'
+
             volume = float(market_data.get('volume', 0))
             liquidity = float(market_data.get('liquidity', 0))
             end_date = market_data.get('endDateIso') or market_data.get('end_date_iso', '')

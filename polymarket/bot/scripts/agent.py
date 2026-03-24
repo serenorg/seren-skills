@@ -293,8 +293,15 @@ class TradingAgent:
                 print(f"  Skipping stale 50/50 Gamma market (no CLOB): {question}")
                 continue
 
-            if m.get('price_source') == 'gamma':
+            if m.get('price_source') in ('gamma', 'clob_last_trade', 'clob_book_mid'):
                 enriched.append(m)
+                continue
+
+            # stale_gamma price_source means all CLOB fallbacks also failed
+            if m.get('price_source') == 'stale_gamma':
+                stale_gamma_skips += 1
+                question = m.get('question', '')[:60]
+                print(f"  Skipping stale 50/50 market (all CLOB fallbacks failed): {question}")
                 continue
 
             stale_price_skips += 1
