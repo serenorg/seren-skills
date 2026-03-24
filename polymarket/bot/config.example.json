@@ -9,6 +9,14 @@
   "candidate_limit": 80,
   "analyze_limit": 30,
   "min_liquidity": 100.0,
+  "iteration": {
+    "max_iterations": 15,
+    "threshold_step": 0.01,
+    "min_threshold_floor": 0.02,
+    "annualized_return_step": 0.05,
+    "annualized_return_floor": 0.0,
+    "low_balance_threshold": 1.50
+  },
   "cron": {
     "runner_name": "",
     "machine_label": "",

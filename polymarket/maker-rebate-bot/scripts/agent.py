@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -3031,11 +3032,94 @@ def main() -> int:
         return 0 if result.get("status") == "ok" else 1
 
     if args.run_type == "backtest":
-        result = run_backtest(
-            config=config,
-            backtest_file=args.backtest_file,
-            backtest_days_override=args.backtest_days,
-        )
+        # --- iterative scan loop -------------------------------------------
+        iter_cfg = config.get("iteration", {})
+        max_iterations = int(iter_cfg.get("max_iterations", 15))
+        annualized_return_hurdle = float(iter_cfg.get("annualized_return_hurdle", 0.25))
+
+        original_config = copy.deepcopy(config)
+        best_result = None
+        best_return_pct = -math.inf
+
+        for iteration in range(1, max_iterations + 1):
+            result = run_backtest(
+                config=config,
+                backtest_file=args.backtest_file,
+                backtest_days_override=args.backtest_days,
+            )
+
+            # Extract return_pct from the result
+            current_return_pct = -math.inf
+            if result.get("status") == "ok":
+                results_inner = result.get("results", {})
+                if isinstance(results_inner, dict):
+                    current_return_pct = float(results_inner.get("return_pct", -math.inf))
+
+            # Track best result
+            if current_return_pct > best_return_pct:
+                best_return_pct = current_return_pct
+                best_result = copy.deepcopy(result)
+
+            params_changed = []
+
+            # Stop conditions
+            if result.get("status") == "error":
+                print(
+                    f"[iter {iteration}/{max_iterations}] status=error, stopping",
+                    file=sys.stderr,
+                )
+                break
+            if current_return_pct >= annualized_return_hurdle * 100:
+                print(
+                    f"[iter {iteration}/{max_iterations}] return_pct={current_return_pct:.2f} "
+                    f">= hurdle {annualized_return_hurdle * 100:.1f}, stopping",
+                    file=sys.stderr,
+                )
+                break
+            if iteration == max_iterations:
+                print(
+                    f"[iter {iteration}/{max_iterations}] return_pct={current_return_pct:.2f}, "
+                    f"max iterations reached",
+                    file=sys.stderr,
+                )
+                break
+
+            # --- Relaxation strategy ----------------------------------------
+            bt = config.setdefault("backtest", {})
+            ms = config.setdefault("market_selection", {})
+
+            if iteration <= 5:
+                # Reduce min_history_points by 10% (floor 48)
+                cur = int(bt.get("min_history_points", 480))
+                new_val = max(48, int(cur * 0.9))
+                bt["min_history_points"] = new_val
+                params_changed.append(f"min_history_points={new_val}")
+            elif iteration <= 10:
+                # Widen backtest.days by 10 (cap 180)
+                cur = int(bt.get("days", 90))
+                new_val = min(180, cur + 10)
+                bt["days"] = new_val
+                params_changed.append(f"days={new_val}")
+            else:
+                # Widen market_selection.midpoint_band by 0.03 (min 0.15, max 0.45)
+                cur = float(ms.get("midpoint_band", 0.15))
+                new_val = min(0.45, max(0.15, cur + 0.03))
+                ms["midpoint_band"] = round(new_val, 2)
+                params_changed.append(f"midpoint_band={ms['midpoint_band']}")
+
+            print(
+                f"[iter {iteration}/{max_iterations}] return_pct={current_return_pct:.2f}, "
+                f"relaxing: {', '.join(params_changed)}",
+                file=sys.stderr,
+            )
+
+        # Use the best result for final output
+        result = best_result if best_result is not None else result
+
+        # Restore config to original before applying updates
+        config = copy.deepcopy(original_config)
+        # --- end iterative scan loop ---------------------------------------
+
         if result.get("status") == "ok" and isinstance(result.get("config_updates"), dict):
             _apply_config_updates_in_place(config, result["config_updates"])
             try:
