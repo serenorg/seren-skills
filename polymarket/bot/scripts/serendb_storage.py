@@ -62,12 +62,15 @@ class SerenDBStorage:
 
             self.project_id = project['id']
 
-            # Step 2: Get main branch
+            # Step 2: Get default branch (Seren names it 'production'; fall back to 'main')
             branches = self._list_branches(self.project_id)
-            main_branch = next((b for b in branches if b['name'] == 'main'), None)
+            main_branch = next(
+                (b for b in branches if b.get('default') or b['name'] in ('production', 'main')),
+                None,
+            )
 
             if not main_branch:
-                raise Exception("Main branch not found")
+                raise Exception("No default, production, or main branch found")
 
             self.branch_id = main_branch['id']
             print(f"  ✓ Using branch: {self.branch_id}")
@@ -1147,12 +1150,16 @@ class SerenDBStorage:
                 else:
                     query = query.replace('?', str(param), 1)
 
-        # Call Seren Gateway database API
-        url = f"{self.seren.gateway_url}/projects/{self.project_id}/branches/{self.branch_id}/query"
+        # Call Seren Gateway database API via seren-db publisher
+        url = f"{self.seren.gateway_url}/publishers/seren-db/query"
 
         response = self.seren.session.post(
             url,
-            json={'query': query},
+            json={
+                'project_id': self.project_id,
+                'branch_id': self.branch_id,
+                'query': query,
+            },
             timeout=30
         )
 
@@ -1160,15 +1167,15 @@ class SerenDBStorage:
         return self._unwrap_data(response.json())
 
     def _list_projects(self) -> List[Dict[str, Any]]:
-        """List all SerenDB projects"""
-        url = f"{self.seren.gateway_url}/projects"
+        """List all SerenDB projects via seren-db publisher"""
+        url = f"{self.seren.gateway_url}/publishers/seren-db/projects"
         response = self.seren.session.get(url, timeout=10)
         response.raise_for_status()
         return self._unwrap_data(response.json(), default=[])
 
     def _create_project(self, name: str) -> Dict[str, Any]:
-        """Create a new SerenDB project"""
-        url = f"{self.seren.gateway_url}/projects"
+        """Create a new SerenDB project via seren-db publisher"""
+        url = f"{self.seren.gateway_url}/publishers/seren-db/projects"
         response = self.seren.session.post(
             url,
             json={'name': name, 'region': 'aws-us-east-2'},
@@ -1181,15 +1188,15 @@ class SerenDBStorage:
         return self._get_project(project_id)
 
     def _get_project(self, project_id: str) -> Dict[str, Any]:
-        """Get project details"""
-        url = f"{self.seren.gateway_url}/projects/{project_id}"
+        """Get project details via seren-db publisher"""
+        url = f"{self.seren.gateway_url}/publishers/seren-db/projects/{project_id}"
         response = self.seren.session.get(url, timeout=10)
         response.raise_for_status()
         return self._unwrap_data(response.json(), default={})
 
     def _list_branches(self, project_id: str) -> List[Dict[str, Any]]:
-        """List branches for a project"""
-        url = f"{self.seren.gateway_url}/projects/{project_id}/branches"
+        """List branches for a project via seren-db publisher"""
+        url = f"{self.seren.gateway_url}/publishers/seren-db/projects/{project_id}/branches"
         response = self.seren.session.get(url, timeout=10)
         response.raise_for_status()
         return self._unwrap_data(response.json(), default=[])
