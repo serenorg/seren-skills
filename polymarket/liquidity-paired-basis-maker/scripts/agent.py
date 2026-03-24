@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -2426,11 +2427,90 @@ def main() -> int:
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("status") == "ok" else 1
 
-    backtest = run_backtest(
-        config=config,
-        backtest_days=args.backtest_days,
-        backtest_file=args.backtest_file,
-    )
+    # --- Iterative backtest scan -------------------------------------------
+    iter_cfg = config.get("iteration", {}) if isinstance(config.get("iteration"), dict) else {}
+    max_iterations = int(iter_cfg.get("max_iterations", 15))
+    annualized_return_hurdle = float(iter_cfg.get("annualized_return_hurdle", 0.25))
+
+    # Save original config values that may be mutated during iteration.
+    saved_backtest_cfg = copy.deepcopy(config.get("backtest", {}))
+    orig_min_events = int(saved_backtest_cfg.get("min_events", 120))
+    orig_days = int(saved_backtest_cfg.get("days", 90))
+    orig_participation_rate = float(saved_backtest_cfg.get("participation_rate", 0.9))
+
+    best_backtest: dict[str, Any] | None = None
+    best_return_pct: float = -math.inf
+
+    for iteration in range(max_iterations):
+        backtest = run_backtest(
+            config=config,
+            backtest_days=args.backtest_days,
+            backtest_file=args.backtest_file,
+        )
+
+        if backtest.get("status") != "ok":
+            print(
+                f"[iter {iteration}] backtest failed with status={backtest.get('status')!r}",
+                file=sys.stderr,
+            )
+            # Keep best so far if we have one; stop iterating on error.
+            if best_backtest is None:
+                best_backtest = backtest
+            break
+
+        return_pct = _safe_float(backtest.get("results", {}).get("return_pct"), 0.0)
+
+        # Track the best result across all iterations.
+        if return_pct > best_return_pct:
+            best_return_pct = return_pct
+            best_backtest = backtest
+
+        # Determine which params were changed for logging.
+        cur_min_events = config.get("backtest", {}).get("min_events", orig_min_events)
+        cur_days = config.get("backtest", {}).get("days", orig_days)
+        cur_pr = config.get("backtest", {}).get("participation_rate", orig_participation_rate)
+        print(
+            f"[iter {iteration}] return_pct={return_pct:.4f} "
+            f"min_events={cur_min_events} days={cur_days} "
+            f"participation_rate={cur_pr:.2f}",
+            file=sys.stderr,
+        )
+
+        # Stop if hurdle is met.
+        if return_pct >= annualized_return_hurdle:
+            print(
+                f"[iter {iteration}] hurdle {annualized_return_hurdle} met, stopping.",
+                file=sys.stderr,
+            )
+            break
+
+        # Last iteration -- no more relaxation needed.
+        if iteration == max_iterations - 1:
+            break
+
+        # --- Relaxation strategy ---------------------------------------------
+        bt = config.setdefault("backtest", {})
+        if iteration < 5:
+            # Iterations 0-4 (1-5): reduce min_events by 10% per iteration.
+            new_min_events = max(20, int(orig_min_events * (0.9 ** (iteration + 1))))
+            bt["min_events"] = new_min_events
+        elif iteration < 10:
+            # Iterations 5-9 (6-10): widen days by 30 per iteration step.
+            steps = iteration - 5 + 1  # 1..5
+            new_days = min(365, orig_days + 30 * steps)
+            bt["days"] = new_days
+        else:
+            # Iterations 10-14 (11-15): reduce participation_rate by 0.05 per step.
+            steps = iteration - 10 + 1  # 1..5
+            new_pr = max(0.5, orig_participation_rate - 0.05 * steps)
+            bt["participation_rate"] = new_pr
+
+    # Restore original config values after the loop.
+    config["backtest"] = copy.deepcopy(saved_backtest_cfg)
+
+    backtest = best_backtest  # type: ignore[assignment]
+    # --- End iterative backtest scan ----------------------------------------
+
     if backtest.get("status") != "ok":
         print(json.dumps(backtest, sort_keys=True))
         return 1

@@ -578,6 +578,7 @@ class TradingAgent:
 
         # Check balances
         balances = self.check_balances()
+        self._last_serenbucks_balance = balances['serenbucks']
         print(f"Balances:")
         print(f"  SerenBucks: ${balances['serenbucks']:.2f}")
         print(f"  Polymarket: ${balances['polymarket']:.2f}")
@@ -619,7 +620,7 @@ class TradingAgent:
                 polymarket_balance=balances['polymarket'],
                 errors=['No markets returned from polymarket-data']
             )
-            return
+            return 0
 
         # Stage 2: Cheap heuristic ranking — no LLM
         print("Ranking candidates (no LLM)...")
@@ -689,6 +690,8 @@ class TradingAgent:
         print("=" * 60)
         print()
 
+        return len(opportunities)
+
 
 def _bootstrap_config_path(config_path: str) -> Path:
     path = Path(config_path)
@@ -745,9 +748,69 @@ def main():
         print(f"Error initializing agent: {e}")
         sys.exit(1)
 
-    # Run scan cycle
+    # Run iterative scan cycle
     try:
-        agent.run_scan_cycle()
+        iter_cfg = agent.config.get("iteration", {})
+        max_iterations = int(iter_cfg.get("max_iterations", 15))
+        threshold_step = float(iter_cfg.get("threshold_step", 0.01))
+        min_threshold_floor = float(iter_cfg.get("min_threshold_floor", 0.02))
+        annualized_return_step = float(iter_cfg.get("annualized_return_step", 0.05))
+        annualized_return_floor = float(iter_cfg.get("annualized_return_floor", 0.0))
+        low_balance_threshold = float(iter_cfg.get("low_balance_threshold", 1.50))
+
+        # Save original parameters so we can report cumulative deltas
+        original_mispricing_threshold = agent.mispricing_threshold
+        original_scan_limit = agent.scan_limit
+        original_min_annualized_return = agent.min_annualized_return
+
+        total_opportunities = 0
+
+        for iteration in range(1, max_iterations + 1):
+            print(f"\n>>> Iteration {iteration}/{max_iterations}  "
+                  f"mispricing_threshold={agent.mispricing_threshold:.4f}  "
+                  f"scan_limit={agent.scan_limit}  "
+                  f"min_annualized_return={agent.min_annualized_return:.4f}")
+
+            opportunities_found = agent.run_scan_cycle()
+            total_opportunities += (opportunities_found or 0)
+
+            print(f"<<< Iteration {iteration} result: {opportunities_found or 0} opportunities found")
+
+            if opportunities_found and opportunities_found > 0:
+                print(f"    Opportunities found — stopping iteration loop.")
+                break
+
+            # Check SerenBucks balance from the last scan cycle
+            serenbucks_balance = getattr(agent, '_last_serenbucks_balance', None)
+            if serenbucks_balance is not None and serenbucks_balance < low_balance_threshold:
+                print(f"    SerenBucks balance ${serenbucks_balance:.2f} < ${low_balance_threshold:.2f} — stopping iteration loop.")
+                break
+
+            # Progressively relax parameters based on iteration band
+            if iteration <= 5:
+                new_threshold = agent.mispricing_threshold - threshold_step
+                agent.mispricing_threshold = max(new_threshold, min_threshold_floor)
+                print(f"    Relaxed mispricing_threshold → {agent.mispricing_threshold:.4f}")
+            elif iteration <= 10:
+                agent.scan_limit += 100
+                print(f"    Expanded scan_limit → {agent.scan_limit}")
+            else:
+                new_annualized = agent.min_annualized_return - annualized_return_step
+                agent.min_annualized_return = max(new_annualized, annualized_return_floor)
+                print(f"    Relaxed min_annualized_return → {agent.min_annualized_return:.4f}")
+
+        # Cumulative summary
+        print()
+        print("=" * 60)
+        print("Iterative Scan Summary")
+        print("=" * 60)
+        print(f"  Iterations run:           {iteration}")
+        print(f"  Total opportunities:      {total_opportunities}")
+        print(f"  mispricing_threshold:     {original_mispricing_threshold:.4f} → {agent.mispricing_threshold:.4f}")
+        print(f"  scan_limit:               {original_scan_limit} → {agent.scan_limit}")
+        print(f"  min_annualized_return:    {original_min_annualized_return:.4f} → {agent.min_annualized_return:.4f}")
+        print("=" * 60)
+
     except KeyboardInterrupt:
         print("\n\nScan interrupted by user")
         sys.exit(0)
