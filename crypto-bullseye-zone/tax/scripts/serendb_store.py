@@ -55,7 +55,7 @@ class SerenApi:
             raise SerenApiError(f"API request failed for {path}: {exc}") from exc
 
     def list_projects(self) -> List[Dict[str, Any]]:
-        payload = self._request("GET", "/projects")
+        payload = self._request("GET", "/publishers/seren-db/projects")
         data = payload.get("data")
         if isinstance(data, list):
             return data
@@ -64,7 +64,7 @@ class SerenApi:
         return []
 
     def list_branches(self, project_id: str) -> List[Dict[str, Any]]:
-        payload = self._request("GET", f"/projects/{project_id}/branches")
+        payload = self._request("GET", f"/publishers/seren-db/projects/{project_id}/branches")
         data = payload.get("data")
         if isinstance(data, list):
             return data
@@ -75,7 +75,7 @@ class SerenApi:
         return []
 
     def list_databases(self, project_id: str, branch_id: str) -> List[Dict[str, Any]]:
-        payload = self._request("GET", f"/projects/{project_id}/branches/{branch_id}/databases")
+        payload = self._request("GET", f"/publishers/seren-db/projects/{project_id}/branches/{branch_id}/databases")
         data = payload.get("data")
         if isinstance(data, list):
             return data
@@ -88,7 +88,7 @@ class SerenApi:
     def get_connection_string(self, project_id: str, branch_id: str, role: str = "serendb_owner") -> str:
         payload = self._request(
             "GET",
-            f"/projects/{project_id}/branches/{branch_id}/connection-string",
+            f"/publishers/seren-db/projects/{project_id}/branches/{branch_id}/connection-string",
             query={"role": role, "pooled": "false"},
         )
         data = payload.get("data")

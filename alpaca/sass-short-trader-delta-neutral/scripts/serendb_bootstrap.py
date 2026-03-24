@@ -62,28 +62,28 @@ class SerenApi:
         return []
 
     def list_projects(self) -> List[Dict[str, Any]]:
-        return self._as_list(self._request("GET", "/projects"))
+        return self._as_list(self._request("GET", "/publishers/seren-db/projects"))
 
     def create_project(self, name: str, region: str) -> Dict[str, Any]:
-        payload = self._request("POST", "/projects", body={"name": name, "region": region})
+        payload = self._request("POST", "/publishers/seren-db/projects", body={"name": name, "region": region})
         data = payload.get("data")
         return data if isinstance(data, dict) else payload
 
     def list_branches(self, project_id: str) -> List[Dict[str, Any]]:
-        return self._as_list(self._request("GET", f"/projects/{project_id}/branches"))
+        return self._as_list(self._request("GET", f"/publishers/seren-db/projects/{project_id}/branches"))
 
     def list_databases(self, project_id: str, branch_id: str) -> List[Dict[str, Any]]:
-        return self._as_list(self._request("GET", f"/projects/{project_id}/branches/{branch_id}/databases"))
+        return self._as_list(self._request("GET", f"/publishers/seren-db/projects/{project_id}/branches/{branch_id}/databases"))
 
     def create_database(self, project_id: str, branch_id: str, name: str) -> Dict[str, Any]:
-        payload = self._request("POST", f"/projects/{project_id}/branches/{branch_id}/databases", body={"name": name})
+        payload = self._request("POST", f"/publishers/seren-db/projects/{project_id}/branches/{branch_id}/databases", body={"name": name})
         data = payload.get("data")
         return data if isinstance(data, dict) else payload
 
     def get_connection_string(self, project_id: str, branch_id: str, role: str = "serendb_owner") -> str:
         payload = self._request(
             "GET",
-            f"/projects/{project_id}/branches/{branch_id}/connection-string",
+            f"/publishers/seren-db/projects/{project_id}/branches/{branch_id}/connection-string",
             query={"role": role, "pooled": "false"},
         )
         data = payload.get("data")
