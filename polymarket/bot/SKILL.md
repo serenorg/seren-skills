@@ -121,7 +121,7 @@ tail -50 ~/.config/seren/skills/polymarket-bot/logs/trading_*.log
 ⚠️ **Only if user has:**
 
 - Completed paper trading validation (50+ scans)
-- $525+ budget ($500 USDC + $25 SerenBucks)
+- $100+ budget ($75 USDC + $25 SerenBucks)
 - Real Polymarket API credentials
 
 ```bash
@@ -380,77 +380,41 @@ Stop trading if bankroll drops to this amount.
 
 ### Phase 4: Fund Your Wallets
 
-⚠️ **REALITY CHECK: The Economics of Automated Trading**
+#### Minimum Starting Budget: $100
 
-**You need at least $525 total to trade profitably with this bot.**
+The config default bankroll is `$100`. Start small to test the strategy with real capital before scaling up.
 
-This is not a recommendation - it's math. Here's why:
+| Item             | Amount   | Purpose                                        |
+| ---------------- | -------- | ---------------------------------------------- |
+| **Polygon USDC** | $75      | Trading capital (allows $3-6 positions)        |
+| **SerenBucks**   | $25      | API costs (~25 scans at ~$1/scan)              |
+| **Total**        | **$100** | Minimum to start live trading                  |
 
-#### The Problem with Small Bankrolls
+With a $100 bankroll and quarter-Kelly sizing (`max_kelly_fraction: 0.06`):
 
-The bot costs ~$12/day to run (at 2-hour scan intervals). With a $20 bankroll:
+- Position sizes: $3-6 each
+- At lower scan frequency (1-2 scans/day), API costs stay at $1-2/day
+- Enough runway to validate whether the strategy finds real edge before committing more capital
 
-- Max position size: 3% × $20 = **$0.60 per trade**
-- To break even in 3 days: need **224% return** ($45 profit from $20 capital)
-- Reality: Even the best trades return 10-30%, giving you $0.06-0.18 profit per position
-- **You're spending $12/day to make $0.50/day**
+**The key variable is scan frequency, not bankroll size.** Reduce `scan_interval_minutes` to control API costs:
 
-This is like hiring a $100/hour analyst to trade a $10 account. The math doesn't work.
+| Scan interval | Scans/day | API cost/day | Best for                          |
+| ------------- | --------- | ------------ | --------------------------------- |
+| Manual/daily  | 1-2       | $1-2         | Testing with $100 budget          |
+| 120 min       | 12        | $12          | Active trading with $500+ budget  |
+| 60 min        | 24        | $24          | Experienced traders scaling up    |
+| 30 min        | 48        | $48          | High conviction, large bankroll   |
 
-#### Minimum Viable Budget: $525
+#### Scaling Up
 
-To have a realistic chance of offsetting API costs and achieving profitability:
+Once you have validated edge through paper trading and small live trades, increase your bankroll and scan frequency together:
 
-| Item             | Amount   | Purpose                                       |
-| ---------------- | -------- | --------------------------------------------- |
-| **Polygon USDC** | $500     | Trading capital (allows $15-30 positions)     |
-| **SerenBucks**   | $25      | API costs (2+ days of operation)              |
-| **Total**        | **$525** | Minimum to trade with positive expected value |
-
-With $500 bankroll:
-
-- Position sizes: $15-30 each (at 3-6% Kelly sizing)
-- Plausible profit over 4 days: $50-100 (10-20% return on multiple trades)
-- API cost: -$48
-- **Net: +$2-52 profit (break-even to profitable)**
-
----
-
-#### Budget Tiers
-
-##### 🔴 Below Minimum (<$525 total)
-
-- **Status**: 🚨 **WILL LOSE MONEY**
-- **Reality**: Trading profits cannot offset API costs with small positions
-- **Use case**: Educational only - learning how the system works
-- **Expected outcome**: Net loss of ~$40-50 after SerenBucks depleted
-
-##### 🟢 Minimum Viable ($525-800 total)
-
-- **SerenBucks**: $50-100
-- **Polygon USDC**: $500
-- **Scan interval**: 120 minutes (2 hours)
-- **Daily API cost**: $12
-- **Expected outcome**: Break-even to modest profit
-- **Best for**: First serious attempt at profitable automated trading
-
-##### 🟡 Active Trader ($800-1,500 total)
-
-- **SerenBucks**: $100-200
-- **Polygon USDC**: $700-1,300
-- **Scan interval**: 60 minutes (1 hour)
-- **Daily API cost**: $24
-- **Expected outcome**: Profitable if edge is real
-- **Best for**: Experienced traders scaling up
-
-##### 🔵 Serious Trader ($1,500+ total)
-
-- **SerenBucks**: $200+
-- **Polygon USDC**: $1,300+
-- **Scan interval**: 30 minutes
-- **Daily API cost**: $48
-- **Expected outcome**: Maximum opportunity capture
-- **Best for**: High conviction in strategy, willing to scale
+| Budget tier    | USDC     | SerenBucks | Recommended scan interval |
+| -------------- | -------- | ---------- | ------------------------- |
+| Starter        | $75      | $25        | Manual or daily           |
+| Active         | $500     | $50-100    | 120 min                   |
+| Experienced    | $1,000+  | $100-200   | 60 min                    |
+| Serious        | $2,000+  | $200+      | 30 min                    |
 
 ---
 
@@ -492,7 +456,7 @@ python3 scripts/agent.py --config config.json --dry-run
    - Win rate: % of paper trades that would have been profitable
    - Average edge: mean expected value per trade
    - Sharpe ratio: risk-adjusted returns
-5. If paper trading shows consistent edge, move to live trading with $525+ budget
+5. If paper trading shows consistent edge, move to live trading with $100+ budget
 
 **Manual paper trading (if <$25 SerenBucks):**
 
@@ -516,15 +480,15 @@ Once paper trading validates your edge (recommended: 50+ scans with positive exp
 **Requirements for live trading:**
 
 - ✅ Successful paper trading period (1-2 weeks, 50+ scans)
-- ✅ Minimum $525 budget ($500 USDC + $25 SerenBucks)
+- ✅ Minimum $100 budget ($75 USDC + $25 SerenBucks)
 - ✅ Polymarket API credentials (see Phase 2)
 - ✅ Understanding of Kelly Criterion risk management
 
-**If you don't have $525 yet:**
+**If you don't have $100 yet:**
 
 - Continue paper trading to refine strategy
-- Save up capital while accumulating paper trade data
-- Use smaller scan intervals once you have budget
+- Use manual `--once` scans to conserve SerenBucks
+- Start with the minimum $5 Stripe deposit to test a few scans
 
 ---
 
@@ -534,7 +498,7 @@ Once paper trading validates your edge (recommended: 50+ scans with positive exp
 2. Choose deposit method:
    - Credit card (instant)
    - Crypto transfer (USDC, ETH, BTC)
-3. Minimum recommended: $50 for uninterrupted operation
+3. Minimum recommended: $25 for getting started
 
 Current Seren funding flow:
 - Stripe deposits start at `$5`
