@@ -32,6 +32,7 @@ class SerenClient:
             )
 
         self.gateway_url = os.getenv('SEREN_GATEWAY_URL', "https://api.serendb.com")
+        self._perplexity_fallback = False
         self.session = requests.Session()
         self.session.headers.update({
             'Authorization': f'Bearer {self.api_key}',
@@ -279,7 +280,12 @@ Be calibrated and honest about uncertainty."""
         model: str = 'sonar'
     ) -> str:
         """
-        Research a market question using Perplexity
+        Research a market question using Perplexity.
+
+        Falls back to seren-models with perplexity/sonar if the direct
+        Perplexity publisher fails (quota, auth, timeout).  The fallback
+        is sticky for the rest of the scan cycle so we don't retry a
+        broken publisher on every market.
 
         Args:
             market_question: The prediction market question
@@ -301,18 +307,36 @@ Focus on:
 
 Provide a concise summary (200-300 words) with citations."""
 
+        messages = [{'role': 'user', 'content': prompt}]
+
+        # If a previous call already failed, go straight to the fallback.
+        if not self._perplexity_fallback:
+            try:
+                response = self.call_publisher(
+                    publisher='perplexity',
+                    method='POST',
+                    path='/chat/completions',
+                    body={'model': model, 'messages': messages},
+                )
+                return self._extract_text(response)
+            except Exception as exc:
+                self._perplexity_fallback = True
+                print(
+                    f"⚠️  Perplexity publisher failed ({exc}), "
+                    "falling back to seren-models/sonar"
+                )
+
+        # Fallback: route through seren-models with perplexity/sonar
         response = self.call_publisher(
-            publisher='perplexity',
+            publisher='seren-models',
             method='POST',
             path='/chat/completions',
             body={
-                'model': model,
-                'messages': [
-                    {'role': 'user', 'content': prompt}
-                ]
-            }
+                'model': 'perplexity/sonar',
+                'messages': messages,
+                'temperature': 0.3,
+            },
         )
-
         return self._extract_text(response)
 
     def create_cron_job(
