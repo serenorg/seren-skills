@@ -79,9 +79,5 @@
     "config_path": "config.json",
     "yes_live": false
   },
-  "iteration": {
-    "max_iterations": 15,
-    "annualized_return_hurdle": 0.25
-  },
   "markets": []
 }

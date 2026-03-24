@@ -191,36 +191,34 @@ class TestBotIterativeLoop:
 
 
 # ---------------------------------------------------------------------------
-# liquidity-paired-basis-maker: iterative backtest loop
+# liquidity-paired-basis-maker: PR #150 optimization loop (pre-existing)
 # ---------------------------------------------------------------------------
 
-LPBM_SCRIPTS = str(Path(__file__).resolve().parent.parent / "liquidity-paired-basis-maker" / "scripts")
 
+class TestLPBMOptimizationExists:
+    """Verify PR #150 auto-tune optimization loop is present in LPBM."""
 
-class TestLPBMIterativeLoop:
-    """Test iteration loop in liquidity-paired-basis-maker main()."""
-
-    def test_config_example_has_iteration_block(self):
+    def test_config_example_has_optimization_block(self):
         config_path = Path(__file__).resolve().parent.parent / "liquidity-paired-basis-maker" / "config.example.json"
         config = json.loads(config_path.read_text())
-        assert "iteration" in config
-        assert config["iteration"]["max_iterations"] == 15
-        assert config["iteration"]["annualized_return_hurdle"] == 0.25
+        backtest = config.get("backtest", {})
+        optimization = backtest.get("optimization", {})
+        assert "optimization" in backtest, "PR #150 optimization block missing from config"
+        assert optimization.get("target_return_pct") == 25.0
 
 
 # ---------------------------------------------------------------------------
-# maker-rebate-bot: iterative backtest loop
+# maker-rebate-bot: PR #150 optimization loop (pre-existing)
 # ---------------------------------------------------------------------------
 
-MRB_SCRIPTS = str(Path(__file__).resolve().parent.parent / "maker-rebate-bot" / "scripts")
 
+class TestMRBOptimizationExists:
+    """Verify PR #150 auto-tune optimization loop is present in MRB."""
 
-class TestMRBIterativeLoop:
-    """Test iteration loop in maker-rebate-bot main()."""
-
-    def test_config_example_has_iteration_block(self):
+    def test_config_example_has_optimization_block(self):
         config_path = Path(__file__).resolve().parent.parent / "maker-rebate-bot" / "config.example.json"
         config = json.loads(config_path.read_text())
-        assert "iteration" in config
-        assert config["iteration"]["max_iterations"] == 15
-        assert config["iteration"]["annualized_return_hurdle"] == 0.25
+        backtest = config.get("backtest", {})
+        optimization = backtest.get("optimization", {})
+        assert "optimization" in backtest, "PR #150 optimization block missing from config"
+        assert optimization.get("target_return_pct") == 25.0
