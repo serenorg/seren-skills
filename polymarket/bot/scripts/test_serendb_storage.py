@@ -30,20 +30,20 @@ class TestSerenDBStorageRoutes:
 
         def get_side_effect(url, timeout):
             assert timeout == 10
-            if url == "https://api.serendb.com/projects":
+            if url == "https://api.serendb.com/publishers/seren-db/projects":
                 return _response([])
-            if url == "https://api.serendb.com/projects/project-123":
+            if url == "https://api.serendb.com/publishers/seren-db/projects/project-123":
                 return _response({"data": {"id": "project-123", "name": "polymarket-bot"}})
-            if url == "https://api.serendb.com/projects/project-123/branches":
+            if url == "https://api.serendb.com/publishers/seren-db/projects/project-123/branches":
                 return _response([{"id": "branch-main", "name": "main"}])
             raise AssertionError(f"Unexpected GET {url}")
 
         def post_side_effect(url, json, timeout):
-            if url == "https://api.serendb.com/projects":
+            if url == "https://api.serendb.com/publishers/seren-db/projects":
                 assert timeout == 30
                 assert json == {"name": "polymarket-bot", "region": "aws-us-east-2"}
                 return _response({"data": {"id": "project-123"}})
-            if url == "https://api.serendb.com/projects/project-123/branches/branch-main/query":
+            if url == "https://api.serendb.com/publishers/seren-db/query":
                 assert timeout == 30
                 assert "query" in json
                 query_urls.append(url)
@@ -78,8 +78,8 @@ class TestSerenDBStorageRoutes:
 
         assert result == {"rows": [{"count": 1}]}
         session.post.assert_called_once_with(
-            "https://api.serendb.com/projects/project-123/branches/branch-main/query",
-            json={"query": "SELECT 1 AS count"},
+            "https://api.serendb.com/publishers/seren-db/query",
+            json={"query": "SELECT 1 AS count", "project_id": "project-123", "branch_id": "branch-main"},
             timeout=30,
         )
 
