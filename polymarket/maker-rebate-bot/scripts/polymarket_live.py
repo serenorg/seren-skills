@@ -2225,7 +2225,11 @@ def inject_held_position_markets(
             best_ask = safe_float(book.get("best_ask"), 0.0)
             if not (0.0 < best_bid <= 1.0 and 0.0 < best_ask <= 1.0):
                 continue
-            midpoint = fetch_midpoint(token_id, fallback_mid=(best_bid + best_ask) / 2.0, timeout_seconds=timeout_seconds)
+            # Reject wide-spread books (e.g. bid=0.001, ask=0.999 → midpoint=0.50)
+            # as the naive midpoint is meaningless for illiquid markets.
+            spread = best_ask - best_bid
+            fallback_mid = (best_bid + best_ask) / 2.0 if spread <= 0.50 else 0.0
+            midpoint = fetch_midpoint(token_id, fallback_mid=fallback_mid, timeout_seconds=timeout_seconds)
             end_ts = safe_int(book.get("end_date_iso"), 0) or safe_int(book.get("end_ts"), 0)
             seconds_to_res = max(0, end_ts - now_ts) if end_ts else 999999
             injected.append(
