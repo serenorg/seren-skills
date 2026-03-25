@@ -10,7 +10,7 @@
   "analyze_limit": 30,
   "min_liquidity": 100.0,
   "iteration": {
-    "max_iterations": 15,
+    "max_iterations": 2,
     "threshold_step": 0.01,
     "min_threshold_floor": 0.02,
     "annualized_return_step": 0.05,
