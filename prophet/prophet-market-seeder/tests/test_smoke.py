@@ -197,3 +197,158 @@ def test_setup_without_seren_api_key_points_user_to_docs(monkeypatch) -> None:
     assert result["status"] == "error"
     assert result["error_code"] == "missing_seren_api_key"
     assert result["details"]["docs_url"] == "https://docs.serendb.com/skills.md"
+
+
+# ---------------------------------------------------------------------------
+# Pipeline transform tests
+# ---------------------------------------------------------------------------
+
+
+def test_generate_market_candidates_respects_limit() -> None:
+    agent = _load_agent_module()
+    ctx = agent.PipelineContext(
+        session_id="s1", run_id="r1", command="run", dry_run=True,
+        referral_code="TEST", candidate_limit=5, submit_limit=2,
+        strict_mode=True, token="tok",
+    )
+    candidates = agent.generate_market_candidates(ctx)
+    assert len(candidates) == 5
+    assert all(c.question.endswith("?") for c in candidates)
+    assert all(c.candidate_id for c in candidates)
+
+
+def test_score_sorts_by_descending_score() -> None:
+    agent = _load_agent_module()
+    candidates = [
+        agent.MarketCandidate(candidate_id="a", category="Crypto", question="Will BTC hit 100K by Dec?"),
+        agent.MarketCandidate(candidate_id="b", category="Crypto", question="Will ETH hit 5K by Dec?"),
+        agent.MarketCandidate(candidate_id="c", category="Politics", question="Will new law pass by June?"),
+    ]
+    scored = agent.score_market_candidates(candidates)
+    assert scored[0].score >= scored[1].score >= scored[2].score
+    assert all(c.score > 0 for c in scored)
+
+
+def test_filter_dedup_and_limit() -> None:
+    agent = _load_agent_module()
+    candidates = [
+        agent.MarketCandidate(candidate_id="a", category="Crypto", question="Will BTC hit 100K?", score=0.9),
+        agent.MarketCandidate(candidate_id="b", category="Sports", question="Will Lakers win?", score=0.8),
+        agent.MarketCandidate(candidate_id="c", category="Health", question="Will WHO act?", score=0.7),
+    ]
+    filtered = agent.filter_market_candidates(candidates, submit_limit=2, recent_titles=["will btc hit 100k?"])
+    assert len(filtered) == 2
+    assert filtered[0].candidate_id == "b"
+    assert filtered[1].candidate_id == "c"
+
+
+def test_submit_batch_dry_run_skips_api(monkeypatch) -> None:
+    agent = _load_agent_module()
+    ctx = agent.PipelineContext(
+        session_id="s1", run_id="r1", command="run", dry_run=True,
+        referral_code="TEST", candidate_limit=5, submit_limit=2,
+        strict_mode=True, token="tok",
+    )
+    candidates = [
+        agent.MarketCandidate(candidate_id="a", category="Crypto", question="Will BTC moon?", score=0.9),
+    ]
+    api = agent.ProphetApi("fake-token")
+    results = agent.submit_market_batch(ctx, candidates, api)
+    assert len(results) == 1
+    assert results[0].status == "dry_run_skipped"
+
+
+def test_submit_batch_live_calls_initiate_market(monkeypatch) -> None:
+    agent = _load_agent_module()
+    ctx = agent.PipelineContext(
+        session_id="s1", run_id="r1", command="run", dry_run=False,
+        referral_code="TEST", candidate_limit=5, submit_limit=2,
+        strict_mode=True, token="tok",
+    )
+    candidates = [
+        agent.MarketCandidate(candidate_id="a", category="Crypto", question="Will BTC moon?", score=0.9),
+    ]
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return json.dumps({"data": {"initiateMarket": {
+                "isValid": True, "suggestion": None,
+                "title": "Will BTC moon?", "resolutionDate": "2026-12-31",
+                "resolutionRules": "Resolves YES if BTC > 200K",
+            }}}).encode("utf-8")
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", lambda req, timeout=30: FakeResponse())
+    api = agent.ProphetApi("fake-token")
+    results = agent.submit_market_batch(ctx, candidates, api)
+    assert len(results) == 1
+    assert results[0].status == "accepted"
+    assert results[0].payload["title"] == "Will BTC moon?"
+
+
+def test_run_once_pipeline_dry_run_returns_full_report(monkeypatch) -> None:
+    agent = _load_agent_module()
+    monkeypatch.delenv("SEREN_API_KEY", raising=False)
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return json.dumps({"data": {"viewer": {"walletBalance": {
+                "availableCents": 0, "totalCents": 0,
+                "safeAddress": "0xabc", "safeDeployed": True,
+            }}}}).encode("utf-8")
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def execute(self, *a):
+            pass
+        def fetchall(self):
+            return []
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def cursor(self):
+            return FakeCursor()
+        def commit(self):
+            pass
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", lambda req, timeout=30, data=None: FakeResponse())
+    monkeypatch.setattr(agent, "psycopg_connect", lambda dsn: FakeConnection())
+    monkeypatch.setattr(
+        agent, "resolve_or_create_serendb_target",
+        lambda api_key, project_name, database_name, region: SimpleNamespace(
+            project_id="p1", branch_id="b1", branch_name="main",
+            database_name=database_name, connection_string="postgresql://example/prophet",
+            project_name=project_name, created_project=False, created_database=False,
+        ),
+    )
+
+    result = agent.run_once(
+        {
+            "inputs": {"command": "run", "candidate_limit": 3, "submit_limit": 2, "strict_mode": True, "referral_code": "TEST"},
+            "storage": {"auto_bootstrap": True, "schema_name": "prophet_market_seeder"},
+            "secrets": {"SEREN_API_KEY": "sb_test", "PROPHET_SESSION_TOKEN": "privy-jwt"},
+        },
+        dry_run=True,
+    )
+
+    assert result["status"] == "ok"
+    assert result["command"] == "run"
+    assert result["dry_run"] is True
+    assert result["pipeline"]["candidates_generated"] == 3
+    assert result["pipeline"]["candidates_filtered"] <= 2
+    assert result["pipeline"]["submissions_skipped"] == result["pipeline"]["candidates_filtered"]
+    assert len(result["submissions"]) > 0
+    assert all(s["status"] == "dry_run_skipped" for s in result["submissions"])

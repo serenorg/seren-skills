@@ -8,7 +8,9 @@ import json
 import os
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +41,43 @@ query ViewerWalletBalance {
   }
 }
 """.strip()
+
+INITIATE_MARKET_MUTATION = """
+mutation InitiateMarket($input: InitiateMarketInput!) {
+  initiateMarket(input: $input) {
+    isValid
+    suggestion
+    title
+    resolutionDate
+    resolutionRules
+  }
+}
+""".strip()
+
+MARKET_CATEGORIES = [
+    "Politics", "Sports", "Economics", "Financials", "Crypto",
+    "Climate", "Culture", "Companies", "Tech & Science", "Health", "World",
+]
+
+CANDIDATE_TEMPLATES = [
+    ("Politics", "Will the US pass new {topic} legislation by {date}?"),
+    ("Politics", "Will the {office} approval rating exceed 50% by {date}?"),
+    ("Economics", "Will US GDP growth exceed {pct}% in Q{quarter} {year}?"),
+    ("Economics", "Will the Federal Reserve cut interest rates by {date}?"),
+    ("Financials", "Will the S&P 500 close above {level} by {date}?"),
+    ("Financials", "Will Bitcoin ETF daily inflows exceed ${amount}M by {date}?"),
+    ("Crypto", "Will Bitcoin price exceed ${btc_price}K by {date}?"),
+    ("Crypto", "Will Ethereum price exceed ${eth_price}K by {date}?"),
+    ("Crypto", "Will total crypto market cap exceed ${mcap}T by {date}?"),
+    ("Tech & Science", "Will {company} announce a major AI product by {date}?"),
+    ("Tech & Science", "Will a new AI model surpass GPT-4 benchmarks by {date}?"),
+    ("Sports", "Will {team} win the {league} championship in {year}?"),
+    ("Health", "Will the WHO declare a new public health emergency by {date}?"),
+    ("Climate", "Will global average temperature in {year} set a new record?"),
+    ("Companies", "Will {company} stock price exceed ${price} by {date}?"),
+    ("Culture", "Will {movie_or_show} win Best Picture at the {year} Oscars?"),
+    ("World", "Will a new international trade agreement be signed by {date}?"),
+]
 
 
 class ProphetSkillError(RuntimeError):
@@ -169,6 +208,29 @@ class ProphetApi:
         except json.JSONDecodeError as exc:
             raise ProphetAuthError("Prophet auth probe returned invalid JSON") from exc
 
+    def _request_with_variables(self, query: str, operation_name: str, variables: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/graphql"
+        body = {"query": query, "operationName": operation_name, "variables": variables}
+        req = urllib.request.Request(
+            url=url,
+            method="POST",
+            data=json.dumps(body).encode("utf-8"),
+        )
+        req.add_header("Authorization", f"Bearer {self.session_token}")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Accept", "application/json")
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                payload = resp.read().decode("utf-8")
+        except Exception as exc:
+            raise ProphetSkillError(f"Prophet API request failed: {exc}") from exc
+
+        try:
+            return json.loads(payload) if payload else {}
+        except json.JSONDecodeError as exc:
+            raise ProphetSkillError("Prophet API returned invalid JSON") from exc
+
     def viewer_wallet_balance(self) -> dict:
         payload = self._request(VIEWER_WALLET_BALANCE_QUERY, "ViewerWalletBalance")
         viewer = payload.get("data", {}).get("viewer")
@@ -177,6 +239,20 @@ class ProphetApi:
                 "Prophet session token was accepted by the endpoint but did not resolve an authenticated viewer"
             )
         return viewer
+
+    def initiate_market(self, question: str) -> Dict[str, Any]:
+        payload = self._request_with_variables(
+            INITIATE_MARKET_MUTATION,
+            "InitiateMarket",
+            {"input": {"question": question}},
+        )
+        errors = payload.get("errors")
+        if errors:
+            raise ProphetSkillError(f"initiateMarket failed: {errors[0].get('message', errors)}")
+        result = payload.get("data", {}).get("initiateMarket")
+        if not result:
+            raise ProphetSkillError("initiateMarket returned no data")
+        return result
 
 
 class SerenApi:
@@ -399,6 +475,7 @@ def ensure_storage(config: dict) -> dict:
         "project_name": project_name,
         "statements_executed": executed,
         "auto_provisioned": True,
+        "connection_string": connection_string,
     }
     if target:
         result.update(
@@ -411,6 +488,276 @@ def ensure_storage(config: dict) -> dict:
             }
         )
     return result
+
+
+@dataclass
+class MarketCandidate:
+    candidate_id: str
+    category: str
+    question: str
+    score: float = 0.0
+    payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SubmissionResult:
+    submission_id: str
+    candidate_id: str
+    status: str
+    payload: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PipelineContext:
+    session_id: str
+    run_id: str
+    command: str
+    dry_run: bool
+    referral_code: str
+    candidate_limit: int
+    submit_limit: int
+    strict_mode: bool
+    token: str
+    connection_string: Optional[str] = None
+    candidates: List[MarketCandidate] = field(default_factory=list)
+    filtered: List[MarketCandidate] = field(default_factory=list)
+    submissions: List[SubmissionResult] = field(default_factory=list)
+    events: List[Dict[str, Any]] = field(default_factory=list)
+
+
+def _make_id() -> str:
+    return uuid.uuid4().hex[:16]
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def generate_market_candidates(ctx: PipelineContext) -> List[MarketCandidate]:
+    """Generate candidate market questions from templates."""
+    now = datetime.now(timezone.utc)
+    year = now.year
+    quarter = (now.month - 1) // 3 + 1
+    next_quarter = quarter + 1 if quarter < 4 else 1
+    next_q_year = year if next_quarter > quarter else year + 1
+    end_of_year = f"December 31, {year}"
+    end_of_quarter = f"{'March 31' if next_quarter == 1 else 'June 30' if next_quarter == 2 else 'September 30' if next_quarter == 3 else 'December 31'}, {next_q_year}"
+
+    fill_vars = {
+        "date": end_of_quarter,
+        "year": str(year),
+        "quarter": str(next_quarter),
+        "pct": "3",
+        "level": "6000",
+        "amount": "500",
+        "btc_price": "120",
+        "eth_price": "5",
+        "mcap": "4",
+        "company": "Apple",
+        "team": "the Lakers",
+        "league": "NBA",
+        "office": "Presidential",
+        "topic": "AI regulation",
+        "price": "250",
+        "movie_or_show": "a streaming original",
+    }
+
+    candidates: List[MarketCandidate] = []
+    for category, template in CANDIDATE_TEMPLATES:
+        if len(candidates) >= ctx.candidate_limit:
+            break
+        try:
+            question = template.format(**fill_vars)
+        except KeyError:
+            continue
+        candidates.append(MarketCandidate(
+            candidate_id=_make_id(),
+            category=category,
+            question=question,
+        ))
+
+    ctx.events.append({"event_type": "candidates_generated", "payload": {"count": len(candidates)}})
+    return candidates
+
+
+def score_market_candidates(candidates: List[MarketCandidate]) -> List[MarketCandidate]:
+    """Score candidates on clarity and category diversity."""
+    seen_categories: Dict[str, int] = {}
+    for c in candidates:
+        seen_categories[c.category] = seen_categories.get(c.category, 0) + 1
+        clarity = 1.0 if c.question.endswith("?") else 0.5
+        has_date = 1.0 if any(w in c.question for w in ["by", "in 20", "Q1", "Q2", "Q3", "Q4"]) else 0.3
+        diversity = 1.0 / seen_categories[c.category]
+        c.score = round(clarity * 0.3 + has_date * 0.3 + diversity * 0.4, 4)
+    return sorted(candidates, key=lambda c: c.score, reverse=True)
+
+
+def filter_market_candidates(
+    candidates: List[MarketCandidate],
+    submit_limit: int,
+    recent_titles: List[str],
+) -> List[MarketCandidate]:
+    """Dedup against recent submissions and apply submit_limit."""
+    recent_lower = {t.lower() for t in recent_titles}
+    filtered = [c for c in candidates if c.question.lower() not in recent_lower]
+    return filtered[:submit_limit]
+
+
+def load_recent_submissions(connection_string: Optional[str], schema_name: str) -> List[str]:
+    """Load titles of recent submissions from SerenDB for dedup."""
+    if not connection_string:
+        return []
+    try:
+        with psycopg_connect(connection_string) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT payload->>'question' FROM {schema_name}.market_submissions "
+                    f"WHERE created_at > NOW() - INTERVAL '7 days' AND payload->>'question' IS NOT NULL"
+                )
+                return [row[0] for row in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def submit_market_batch(
+    ctx: PipelineContext,
+    candidates: List[MarketCandidate],
+    api: ProphetApi,
+) -> List[SubmissionResult]:
+    """Submit filtered candidates via initiateMarket. Respects dry_run."""
+    results: List[SubmissionResult] = []
+    for c in candidates:
+        sub_id = _make_id()
+        if ctx.dry_run:
+            results.append(SubmissionResult(
+                submission_id=sub_id,
+                candidate_id=c.candidate_id,
+                status="dry_run_skipped",
+                payload={"question": c.question, "category": c.category},
+            ))
+            ctx.events.append({"event_type": "submission_skipped", "payload": {"candidate_id": c.candidate_id, "reason": "dry_run"}})
+            continue
+
+        try:
+            validation = api.initiate_market(c.question)
+            status = "accepted" if validation.get("isValid") else "rejected"
+            results.append(SubmissionResult(
+                submission_id=sub_id,
+                candidate_id=c.candidate_id,
+                status=status,
+                payload={
+                    "question": c.question,
+                    "category": c.category,
+                    "is_valid": validation.get("isValid"),
+                    "suggestion": validation.get("suggestion"),
+                    "title": validation.get("title"),
+                    "resolution_date": validation.get("resolutionDate"),
+                    "resolution_rules": validation.get("resolutionRules"),
+                },
+            ))
+            ctx.events.append({"event_type": "submission_completed", "payload": {"candidate_id": c.candidate_id, "status": status}})
+        except ProphetSkillError as exc:
+            results.append(SubmissionResult(
+                submission_id=sub_id,
+                candidate_id=c.candidate_id,
+                status="error",
+                payload={"question": c.question, "error": str(exc)},
+            ))
+            ctx.events.append({"event_type": "submission_error", "payload": {"candidate_id": c.candidate_id, "error": str(exc)}})
+    return results
+
+
+def persist_run(ctx: PipelineContext, schema_name: str) -> Dict[str, int]:
+    """Write session, run, candidates, submissions, events to SerenDB."""
+    if not ctx.connection_string:
+        return {"persisted": 0, "reason": "no_connection_string"}
+
+    counts: Dict[str, int] = {}
+    try:
+        with psycopg_connect(ctx.connection_string) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"INSERT INTO {schema_name}.sessions (session_id, referral_code, command) "
+                    f"VALUES (%s, %s, %s) ON CONFLICT (session_id) DO NOTHING",
+                    (ctx.session_id, ctx.referral_code, ctx.command),
+                )
+                counts["sessions"] = 1
+
+                cur.execute(
+                    f"INSERT INTO {schema_name}.runs (run_id, session_id, status, dry_run) "
+                    f"VALUES (%s, %s, %s, %s) ON CONFLICT (run_id) DO NOTHING",
+                    (ctx.run_id, ctx.session_id, "completed", ctx.dry_run),
+                )
+                counts["runs"] = 1
+
+                for c in ctx.candidates:
+                    cur.execute(
+                        f"INSERT INTO {schema_name}.market_candidates "
+                        f"(candidate_id, run_id, title, score, payload) "
+                        f"VALUES (%s, %s, %s, %s, %s) ON CONFLICT (candidate_id) DO NOTHING",
+                        (c.candidate_id, ctx.run_id, c.question, c.score, json.dumps({"category": c.category})),
+                    )
+                counts["market_candidates"] = len(ctx.candidates)
+
+                for s in ctx.submissions:
+                    cur.execute(
+                        f"INSERT INTO {schema_name}.market_submissions "
+                        f"(submission_id, run_id, candidate_id, status, payload) "
+                        f"VALUES (%s, %s, %s, %s, %s) ON CONFLICT (submission_id) DO NOTHING",
+                        (s.submission_id, ctx.run_id, s.candidate_id, s.status, json.dumps(s.payload)),
+                    )
+                counts["market_submissions"] = len(ctx.submissions)
+
+                for evt in ctx.events:
+                    cur.execute(
+                        f"INSERT INTO {schema_name}.events (run_id, event_type, payload) "
+                        f"VALUES (%s, %s, %s)",
+                        (ctx.run_id, evt["event_type"], json.dumps(evt.get("payload", {}))),
+                    )
+                counts["events"] = len(ctx.events)
+
+            conn.commit()
+    except Exception as exc:
+        return {"persisted": 0, "error": str(exc)}
+    return counts
+
+
+def render_report(ctx: PipelineContext, storage_result: dict, persist_counts: dict) -> dict:
+    """Build the final structured run report."""
+    accepted = [s for s in ctx.submissions if s.status == "accepted"]
+    rejected = [s for s in ctx.submissions if s.status == "rejected"]
+    skipped = [s for s in ctx.submissions if s.status == "dry_run_skipped"]
+    errored = [s for s in ctx.submissions if s.status == "error"]
+
+    return {
+        "status": "ok",
+        "skill": "prophet-market-seeder",
+        "command": ctx.command,
+        "dry_run": ctx.dry_run,
+        "session_id": ctx.session_id,
+        "run_id": ctx.run_id,
+        "referral_code": ctx.referral_code,
+        "pipeline": {
+            "candidates_generated": len(ctx.candidates),
+            "candidates_filtered": len(ctx.filtered),
+            "submissions_accepted": len(accepted),
+            "submissions_rejected": len(rejected),
+            "submissions_skipped": len(skipped),
+            "submissions_errored": len(errored),
+        },
+        "submissions": [
+            {
+                "candidate_id": s.candidate_id,
+                "status": s.status,
+                "question": s.payload.get("question", ""),
+                "title": s.payload.get("title"),
+                "is_valid": s.payload.get("is_valid"),
+            }
+            for s in ctx.submissions
+        ],
+        "storage": storage_result,
+        "persistence": persist_counts,
+    }
 
 
 def validate_prophet_access(config: dict) -> dict:
@@ -481,24 +828,66 @@ def run_once(config: dict, dry_run: bool) -> dict:
 
     testnet = resolve_testnet_config(config)
 
-    run_summary = {
-        "status": "ok",
-        "skill": "prophet-market-seeder",
-        "command": command,
-        "dry_run": dry_run,
-        "connectors": AVAILABLE_CONNECTORS,
-        "input_keys": sorted(inputs.keys()),
-        "auth": auth,
-        "storage": storage,
-        "limits": {"candidate_limit": candidate_limit, "submit_limit": submit_limit},
-        "referral_code": referral_code,
-    }
+    if command != "run":
+        run_summary = {
+            "status": "ok",
+            "skill": "prophet-market-seeder",
+            "command": command,
+            "dry_run": dry_run,
+            "connectors": AVAILABLE_CONNECTORS,
+            "input_keys": sorted(inputs.keys()),
+            "auth": auth,
+            "storage": storage,
+            "limits": {"candidate_limit": candidate_limit, "submit_limit": submit_limit},
+            "referral_code": referral_code,
+        }
+        if testnet:
+            run_summary["testnet"] = testnet
+        return run_summary
+
+    # --- Full pipeline for command=run ---
+    token = resolve_secret(config, "PROPHET_SESSION_TOKEN") or ""
+    storage_cfg = config.get("storage") if isinstance(config.get("storage"), dict) else {}
+    schema_name = str(storage_cfg.get("schema_name") or DEFAULT_SCHEMA_NAME)
+
+    ctx = PipelineContext(
+        session_id=_make_id(),
+        run_id=_make_id(),
+        command=command,
+        dry_run=dry_run,
+        referral_code=referral_code,
+        candidate_limit=candidate_limit,
+        submit_limit=submit_limit,
+        strict_mode=strict_mode,
+        token=token,
+        connection_string=storage.get("connection_string"),
+    )
+
+    # Step 6: generate candidates
+    ctx.candidates = generate_market_candidates(ctx)
+
+    # Step 7: score candidates
+    ctx.candidates = score_market_candidates(ctx.candidates)
+
+    # Step 8: filter candidates (dedup + limit)
+    recent_titles = load_recent_submissions(ctx.connection_string, schema_name)
+    ctx.filtered = filter_market_candidates(ctx.candidates, submit_limit, recent_titles)
+
+    # Step 9: submit candidates
+    api = ProphetApi(token) if token else None
+    if api:
+        ctx.submissions = submit_market_batch(ctx, ctx.filtered, api)
+    else:
+        ctx.events.append({"event_type": "submission_skipped", "payload": {"reason": "no_token"}})
+
+    # Step 10: persist run
+    persist_counts = persist_run(ctx, schema_name)
+
+    # Step 11: render report
+    report = render_report(ctx, storage, persist_counts)
     if testnet:
-        run_summary["testnet"] = testnet
-    if command == "run":
-        run_summary["submission_mode"] = "dry-run" if dry_run else "live"
-        run_summary["selected_candidates"] = min(candidate_limit, submit_limit)
-    return run_summary
+        report["testnet"] = testnet
+    return report
 
 
 def main() -> int:
