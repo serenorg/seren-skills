@@ -60,6 +60,28 @@ The runtime now auto-bootstraps Prophet storage on first run:
 
 If `SEREN_API_KEY` is missing, the runtime does not pause for DB setup questions. It fails immediately with a setup message that points the user to `https://docs.serendb.com/skills.md`.
 
+## Testnet Mode
+
+To run against Prophet Testnet instead of production, enable testnet in your config:
+
+```json
+{
+  "testnet": {
+    "enabled": true,
+    "base_url": "https://testnet.prophetmarket.ai",
+    "usdc_faucet": "0xa0f2da5e260486895d73086dd98af09c25dc2883c6ac96025a688f855c180d06"
+  }
+}
+```
+
+Or set the environment variable:
+
+```bash
+export PROPHET_TESTNET_MODE=true
+```
+
+The USDC faucet contract at `0xa0f2da5e260486895d73086dd98af09c25dc2883c6ac96025a688f855c180d06` can be used to mint fake USDC for testnet wallets. When testnet mode is active, the run output includes a `testnet` block with the faucet address and testnet base URL.
+
 ## Minimal Run
 
 ```bash
