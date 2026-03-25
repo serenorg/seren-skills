@@ -73,15 +73,16 @@ def register_job(conn_str: str, runner_id: str, agent_wallet: str) -> str:
             cur.execute(
                 "INSERT INTO public.jobs "
                 "(id, agent_wallet, name, cron_expression, timezone, timeout_seconds, "
-                " enabled, execution_mode, runner_id, local_payload) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                " enabled, execution_mode, runner_id, local_payload, next_run_time) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                " (NOW() AT TIME ZONE 'UTC' + INTERVAL '1 day')::timestamp) RETURNING id",
                 (
                     job_id,
                     agent_wallet,
                     "prophet-daily-seeder",
                     "0 14 * * *",  # daily at 2pm UTC
                     "UTC",
-                    300,
+                    30,
                     True,
                     "local_pull",
                     runner_id,
