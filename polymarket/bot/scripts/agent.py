@@ -794,7 +794,7 @@ def main():
     # Run iterative scan cycle
     try:
         iter_cfg = agent.config.get("iteration", {})
-        max_iterations = int(iter_cfg.get("max_iterations", 15))
+        max_iterations = min(int(iter_cfg.get("max_iterations", 15)), 2)
         threshold_step = float(iter_cfg.get("threshold_step", 0.01))
         min_threshold_floor = float(iter_cfg.get("min_threshold_floor", 0.02))
         annualized_return_step = float(iter_cfg.get("annualized_return_step", 0.05))
@@ -818,6 +818,11 @@ def main():
             total_opportunities += (opportunities_found or 0)
 
             print(f"<<< Iteration {iteration} result: {opportunities_found or 0} opportunities found")
+
+            # Early-exit: stop iterating once we find opportunities
+            if (opportunities_found or 0) > 0:
+                print(f"    Found {opportunities_found} opportunities — stopping iteration loop.")
+                break
 
             # Check SerenBucks balance from the last scan cycle
             serenbucks_balance = getattr(agent, '_last_serenbucks_balance', None)
