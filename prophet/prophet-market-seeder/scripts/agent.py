@@ -20,6 +20,8 @@ DEFAULT_DATABASE_NAME = "prophet"
 DEFAULT_SCHEMA_NAME = "prophet_market_seeder"
 DEFAULT_REGION = "aws-us-east-2"
 DEFAULT_PROPHET_BASE_URL = "https://app.prophetmarket.ai"
+DEFAULT_PROPHET_TESTNET_BASE_URL = "https://testnet.prophetmarket.ai"
+PROPHET_TESTNET_USDC_FAUCET = "0xa0f2da5e260486895d73086dd98af09c25dc2883c6ac96025a688f855c180d06"
 SEREN_SKILLS_DOCS_URL = "https://docs.serendb.com/skills.md"
 AVAILABLE_CONNECTORS = ["storage"]
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "serendb_schema.sql"
@@ -432,6 +434,18 @@ def validate_prophet_access(config: dict) -> dict:
     }
 
 
+def resolve_testnet_config(config: dict) -> Optional[dict]:
+    testnet_cfg = config.get("testnet") if isinstance(config.get("testnet"), dict) else {}
+    enabled = _bool(testnet_cfg.get("enabled") or os.getenv("PROPHET_TESTNET_MODE"), False)
+    if not enabled:
+        return None
+    return {
+        "enabled": True,
+        "base_url": str(testnet_cfg.get("base_url") or os.getenv("PROPHET_TESTNET_BASE_URL") or DEFAULT_PROPHET_TESTNET_BASE_URL),
+        "usdc_faucet": str(testnet_cfg.get("usdc_faucet") or PROPHET_TESTNET_USDC_FAUCET),
+    }
+
+
 def run_once(config: dict, dry_run: bool) -> dict:
     inputs = _config_inputs(config)
     command = _normalize_command(inputs.get("command"))
@@ -465,6 +479,8 @@ def run_once(config: dict, dry_run: bool) -> dict:
             "token_source": "localStorage['privy:token'] from an authenticated Prophet browser session",
         }
 
+    testnet = resolve_testnet_config(config)
+
     run_summary = {
         "status": "ok",
         "skill": "prophet-market-seeder",
@@ -477,6 +493,8 @@ def run_once(config: dict, dry_run: bool) -> dict:
         "limits": {"candidate_limit": candidate_limit, "submit_limit": submit_limit},
         "referral_code": referral_code,
     }
+    if testnet:
+        run_summary["testnet"] = testnet
     if command == "run":
         run_summary["submission_mode"] = "dry-run" if dry_run else "live"
         run_summary["selected_candidates"] = min(candidate_limit, submit_limit)

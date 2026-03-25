@@ -19,5 +19,10 @@
     "strict_mode": true,
     "submit_limit": 3
   },
+  "testnet": {
+    "enabled": false,
+    "base_url": "https://testnet.prophetmarket.ai",
+    "usdc_faucet": "0xa0f2da5e260486895d73086dd98af09c25dc2883c6ac96025a688f855c180d06"
+  },
   "skill": "prophet-market-seeder"
 }

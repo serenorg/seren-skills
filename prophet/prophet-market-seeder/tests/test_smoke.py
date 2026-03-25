@@ -166,6 +166,20 @@ def test_storage_bootstrap_sql_reads_checked_in_schema_file() -> None:
     assert any("CREATE TABLE IF NOT EXISTS prophet_market_seeder.artifacts" in stmt for stmt in statements)
 
 
+def test_resolve_testnet_config_returns_faucet_when_enabled(monkeypatch) -> None:
+    agent = _load_agent_module()
+    monkeypatch.delenv("PROPHET_TESTNET_MODE", raising=False)
+
+    assert agent.resolve_testnet_config({}) is None
+    assert agent.resolve_testnet_config({"testnet": {"enabled": False}}) is None
+
+    result = agent.resolve_testnet_config({"testnet": {"enabled": True}})
+    assert result is not None
+    assert result["enabled"] is True
+    assert result["usdc_faucet"] == "0xa0f2da5e260486895d73086dd98af09c25dc2883c6ac96025a688f855c180d06"
+    assert result["base_url"] == "https://testnet.prophetmarket.ai"
+
+
 def test_setup_without_seren_api_key_points_user_to_docs(monkeypatch) -> None:
     agent = _load_agent_module()
     monkeypatch.delenv("SEREN_API_KEY", raising=False)
