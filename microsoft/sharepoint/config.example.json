@@ -1,0 +1,13 @@
+{
+  "connectors": [
+    "sharepoint"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "drive_id": "",
+    "path": "",
+    "query": "",
+    "site_id": ""
+  },
+  "skill": "microsoft-sharepoint"
+}

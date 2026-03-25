@@ -1,0 +1,27 @@
+{
+  "status": "ok",
+  "skill": "asana",
+  "workflow_step_count": 4,
+  "dry_run": true,
+  "inputs": {
+    "assignee": "",
+    "due_date": "",
+    "project_gid": "",
+    "task_name": "",
+    "workspace_gid": ""
+  },
+  "connectors": {
+    "asana": {
+      "get": {
+        "status": "ok",
+        "connector": "asana",
+        "action": "get"
+      },
+      "post": {
+        "status": "ok",
+        "connector": "asana",
+        "action": "post"
+      }
+    }
+  }
+}

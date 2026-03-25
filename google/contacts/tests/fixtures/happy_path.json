@@ -1,0 +1,20 @@
+{
+  "status": "ok",
+  "skill": "google-contacts",
+  "workflow_step_count": 3,
+  "dry_run": true,
+  "inputs": {
+    "page_size": 20,
+    "query": "",
+    "resource_name": ""
+  },
+  "connectors": {
+    "contacts": {
+      "get": {
+        "status": "ok",
+        "connector": "contacts",
+        "action": "get"
+      }
+    }
+  }
+}

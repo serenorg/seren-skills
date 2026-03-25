@@ -1,0 +1,23 @@
+{
+  "status": "error",
+  "skill": "asana",
+  "error_code": "connector_failure",
+  "connector": "asana",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "asana": {
+      "get": {
+        "status": "error",
+        "connector": "asana",
+        "action": "get",
+        "error_code": "connector_failure"
+      },
+      "post": {
+        "status": "error",
+        "connector": "asana",
+        "action": "post",
+        "error_code": "connector_failure"
+      }
+    }
+  }
+}

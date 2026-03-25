@@ -1,0 +1,25 @@
+{
+  "status": "ok",
+  "skill": "google-docs",
+  "workflow_step_count": 3,
+  "dry_run": true,
+  "inputs": {
+    "content": "",
+    "document_id": "",
+    "title": ""
+  },
+  "connectors": {
+    "docs": {
+      "get": {
+        "status": "ok",
+        "connector": "docs",
+        "action": "get"
+      },
+      "post": {
+        "status": "ok",
+        "connector": "docs",
+        "action": "post"
+      }
+    }
+  }
+}

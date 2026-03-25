@@ -1,0 +1,26 @@
+{
+  "status": "ok",
+  "skill": "attio",
+  "workflow_step_count": 5,
+  "dry_run": true,
+  "inputs": {
+    "list_id": "",
+    "object_type": "",
+    "query": "",
+    "record_id": ""
+  },
+  "connectors": {
+    "attio": {
+      "get": {
+        "status": "ok",
+        "connector": "attio",
+        "action": "get"
+      },
+      "post": {
+        "status": "ok",
+        "connector": "attio",
+        "action": "post"
+      }
+    }
+  }
+}

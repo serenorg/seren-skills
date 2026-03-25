@@ -1,0 +1,13 @@
+{
+  "connectors": [
+    "drive"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "file_id": "",
+    "folder_id": "",
+    "name": "",
+    "query": ""
+  },
+  "skill": "google-drive"
+}

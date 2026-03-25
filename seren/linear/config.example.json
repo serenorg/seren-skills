@@ -1,0 +1,17 @@
+{
+  "connectors": [
+    "linear"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "assignee_id": "",
+    "description": "",
+    "issue_id": "",
+    "priority": 0,
+    "project_id": "",
+    "status": "",
+    "team_id": "",
+    "title": ""
+  },
+  "skill": "linear"
+}

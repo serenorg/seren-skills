@@ -1,0 +1,26 @@
+{
+  "status": "ok",
+  "skill": "google-drive",
+  "workflow_step_count": 4,
+  "dry_run": true,
+  "inputs": {
+    "file_id": "",
+    "folder_id": "",
+    "name": "",
+    "query": ""
+  },
+  "connectors": {
+    "drive": {
+      "get": {
+        "status": "ok",
+        "connector": "drive",
+        "action": "get"
+      },
+      "post": {
+        "status": "ok",
+        "connector": "drive",
+        "action": "post"
+      }
+    }
+  }
+}

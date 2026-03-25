@@ -1,0 +1,23 @@
+{
+  "status": "error",
+  "skill": "google-docs",
+  "error_code": "connector_failure",
+  "connector": "docs",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "docs": {
+      "get": {
+        "status": "error",
+        "connector": "docs",
+        "action": "get",
+        "error_code": "connector_failure"
+      },
+      "post": {
+        "status": "error",
+        "connector": "docs",
+        "action": "post",
+        "error_code": "connector_failure"
+      }
+    }
+  }
+}

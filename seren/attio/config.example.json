@@ -1,0 +1,13 @@
+{
+  "connectors": [
+    "attio"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "list_id": "",
+    "object_type": "",
+    "query": "",
+    "record_id": ""
+  },
+  "skill": "attio"
+}

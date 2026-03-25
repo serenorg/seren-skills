@@ -1,0 +1,27 @@
+{
+  "status": "ok",
+  "skill": "google-calendar",
+  "workflow_step_count": 3,
+  "dry_run": true,
+  "inputs": {
+    "attendees": "",
+    "calendar_id": "primary",
+    "end": "",
+    "start": "",
+    "summary": ""
+  },
+  "connectors": {
+    "calendar": {
+      "get": {
+        "status": "ok",
+        "connector": "calendar",
+        "action": "get"
+      },
+      "post": {
+        "status": "ok",
+        "connector": "calendar",
+        "action": "post"
+      }
+    }
+  }
+}
