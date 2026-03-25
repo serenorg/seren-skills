@@ -1,0 +1,23 @@
+{
+  "status": "error",
+  "skill": "attio",
+  "error_code": "connector_failure",
+  "connector": "attio",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "attio": {
+      "get": {
+        "status": "error",
+        "connector": "attio",
+        "action": "get",
+        "error_code": "connector_failure"
+      },
+      "post": {
+        "status": "error",
+        "connector": "attio",
+        "action": "post",
+        "error_code": "connector_failure"
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "connectors": [
+    "docs"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "content": "",
+    "document_id": "",
+    "title": ""
+  },
+  "skill": "google-docs"
+}

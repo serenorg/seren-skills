@@ -1,0 +1,11 @@
+{
+  "connectors": [
+    "meet"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "meeting_type": "MEETING_TYPE_DEFAULT",
+    "space_name": ""
+  },
+  "skill": "google-meet"
+}

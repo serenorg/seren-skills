@@ -1,0 +1,14 @@
+{
+  "connectors": [
+    "asana"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "assignee": "",
+    "due_date": "",
+    "project_gid": "",
+    "task_name": "",
+    "workspace_gid": ""
+  },
+  "skill": "asana"
+}

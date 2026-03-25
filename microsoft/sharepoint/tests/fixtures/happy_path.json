@@ -1,0 +1,26 @@
+{
+  "status": "ok",
+  "skill": "microsoft-sharepoint",
+  "workflow_step_count": 4,
+  "dry_run": true,
+  "inputs": {
+    "drive_id": "",
+    "path": "",
+    "query": "",
+    "site_id": ""
+  },
+  "connectors": {
+    "sharepoint": {
+      "get": {
+        "status": "ok",
+        "connector": "sharepoint",
+        "action": "get"
+      },
+      "post": {
+        "status": "ok",
+        "connector": "sharepoint",
+        "action": "post"
+      }
+    }
+  }
+}

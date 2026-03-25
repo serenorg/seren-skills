@@ -1,0 +1,23 @@
+{
+  "status": "error",
+  "skill": "microsoft-sharepoint",
+  "error_code": "connector_failure",
+  "connector": "sharepoint",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "sharepoint": {
+      "get": {
+        "status": "error",
+        "connector": "sharepoint",
+        "action": "get",
+        "error_code": "connector_failure"
+      },
+      "post": {
+        "status": "error",
+        "connector": "sharepoint",
+        "action": "post",
+        "error_code": "connector_failure"
+      }
+    }
+  }
+}

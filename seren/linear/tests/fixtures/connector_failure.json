@@ -1,0 +1,29 @@
+{
+  "status": "error",
+  "skill": "linear",
+  "error_code": "connector_failure",
+  "connector": "linear",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "linear": {
+      "get": {
+        "status": "error",
+        "connector": "linear",
+        "action": "get",
+        "error_code": "connector_failure"
+      },
+      "patch": {
+        "status": "error",
+        "connector": "linear",
+        "action": "patch",
+        "error_code": "connector_failure"
+      },
+      "post": {
+        "status": "error",
+        "connector": "linear",
+        "action": "post",
+        "error_code": "connector_failure"
+      }
+    }
+  }
+}

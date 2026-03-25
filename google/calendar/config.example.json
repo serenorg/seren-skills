@@ -1,0 +1,14 @@
+{
+  "connectors": [
+    "calendar"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "attendees": "",
+    "calendar_id": "primary",
+    "end": "",
+    "start": "",
+    "summary": ""
+  },
+  "skill": "google-calendar"
+}

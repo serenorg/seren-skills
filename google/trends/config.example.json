@@ -1,0 +1,13 @@
+{
+  "connectors": [
+    "trends"
+  ],
+  "dry_run": false,
+  "inputs": {
+    "category": 0,
+    "geo": "",
+    "keywords": "",
+    "timeframe": "today 12-m"
+  },
+  "skill": "google-trends"
+}

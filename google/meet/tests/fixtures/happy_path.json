@@ -1,0 +1,24 @@
+{
+  "status": "ok",
+  "skill": "google-meet",
+  "workflow_step_count": 2,
+  "dry_run": true,
+  "inputs": {
+    "meeting_type": "MEETING_TYPE_DEFAULT",
+    "space_name": ""
+  },
+  "connectors": {
+    "meet": {
+      "get": {
+        "status": "ok",
+        "connector": "meet",
+        "action": "get"
+      },
+      "post": {
+        "status": "ok",
+        "connector": "meet",
+        "action": "post"
+      }
+    }
+  }
+}

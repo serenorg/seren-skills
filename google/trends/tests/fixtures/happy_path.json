@@ -1,0 +1,21 @@
+{
+  "status": "ok",
+  "skill": "google-trends",
+  "workflow_step_count": 3,
+  "dry_run": false,
+  "inputs": {
+    "category": 0,
+    "geo": "",
+    "keywords": "",
+    "timeframe": "today 12-m"
+  },
+  "connectors": {
+    "trends": {
+      "get": {
+        "status": "ok",
+        "connector": "trends",
+        "action": "get"
+      }
+    }
+  }
+}

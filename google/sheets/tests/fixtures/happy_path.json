@@ -1,0 +1,26 @@
+{
+  "status": "ok",
+  "skill": "google-sheets",
+  "workflow_step_count": 3,
+  "dry_run": true,
+  "inputs": {
+    "range": "",
+    "spreadsheet_id": "",
+    "title": "",
+    "values": ""
+  },
+  "connectors": {
+    "sheets": {
+      "get": {
+        "status": "ok",
+        "connector": "sheets",
+        "action": "get"
+      },
+      "post": {
+        "status": "ok",
+        "connector": "sheets",
+        "action": "post"
+      }
+    }
+  }
+}

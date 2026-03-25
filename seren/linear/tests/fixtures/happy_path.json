@@ -1,0 +1,35 @@
+{
+  "status": "ok",
+  "skill": "linear",
+  "workflow_step_count": 5,
+  "dry_run": true,
+  "inputs": {
+    "assignee_id": "",
+    "description": "",
+    "issue_id": "",
+    "priority": 0,
+    "project_id": "",
+    "status": "",
+    "team_id": "",
+    "title": ""
+  },
+  "connectors": {
+    "linear": {
+      "get": {
+        "status": "ok",
+        "connector": "linear",
+        "action": "get"
+      },
+      "patch": {
+        "status": "ok",
+        "connector": "linear",
+        "action": "patch"
+      },
+      "post": {
+        "status": "ok",
+        "connector": "linear",
+        "action": "post"
+      }
+    }
+  }
+}

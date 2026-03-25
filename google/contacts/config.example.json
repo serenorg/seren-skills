@@ -1,0 +1,12 @@
+{
+  "connectors": [
+    "contacts"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "page_size": 20,
+    "query": "",
+    "resource_name": ""
+  },
+  "skill": "google-contacts"
+}

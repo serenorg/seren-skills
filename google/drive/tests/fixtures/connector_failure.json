@@ -1,0 +1,23 @@
+{
+  "status": "error",
+  "skill": "google-drive",
+  "error_code": "connector_failure",
+  "connector": "drive",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "drive": {
+      "get": {
+        "status": "error",
+        "connector": "drive",
+        "action": "get",
+        "error_code": "connector_failure"
+      },
+      "post": {
+        "status": "error",
+        "connector": "drive",
+        "action": "post",
+        "error_code": "connector_failure"
+      }
+    }
+  }
+}

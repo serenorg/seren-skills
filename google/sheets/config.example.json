@@ -1,0 +1,13 @@
+{
+  "connectors": [
+    "sheets"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "range": "",
+    "spreadsheet_id": "",
+    "title": "",
+    "values": ""
+  },
+  "skill": "google-sheets"
+}

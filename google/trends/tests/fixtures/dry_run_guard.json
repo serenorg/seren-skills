@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "skill": "google-trends",
+  "dry_run": true,
+  "blocked_action": "live_execution"
+}
