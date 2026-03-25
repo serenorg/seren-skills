@@ -180,6 +180,19 @@ class TradingAgent:
 
         stale_demotion = self.stale_price_demotion
 
+        def _parse_best_price(m):
+            """Return YES-outcome price as float in [0,1], or None."""
+            op = m.get('outcomePrices', '')
+            if not op:
+                return None
+            try:
+                parts = [float(p.strip()) for p in op.split(',')]
+                if parts:
+                    return parts[0]
+            except (ValueError, TypeError):
+                pass
+            return None
+
         def _parse_price_asymmetry(m: Dict) -> float:
             """Return abs(p1 - p2) from outcomePrices string, or -1 if unparseable."""
             raw = m.get('outcomePrices', '')
@@ -207,6 +220,13 @@ class TradingAgent:
             # Demote markets whose outcomePrices are still at the Gamma 0.5/0.5 default
             if _is_stale_gamma(m):
                 return base * stale_demotion
+
+            price = _parse_best_price(m)
+            if price is not None:
+                if price < 0.05 or price > 0.95:
+                    base *= 0.3
+                elif 0.15 <= price <= 0.85:
+                    base *= 1.5
             return base
 
         # Hard-filter stale 50/50 Gamma markets before ranking — they waste LLM budget
@@ -244,7 +264,30 @@ class TradingAgent:
         if len(ranked) - len(time_filtered) > 0:
             print(f"  Filtered {len(ranked) - len(time_filtered)} markets resolving >{self.max_resolution_days} days out")
 
-        pre_selected = time_filtered[:limit]
+        # --- Slug-group deduplication: max 3 markets per slug prefix ---
+        MAX_PER_SLUG_GROUP = 3
+        slug_group_counts = {}
+        deduped = []
+        slug_skips = 0
+        for m in time_filtered:
+            slug = m.get('market_slug', m.get('question', ''))
+            parts = slug.lower().replace(' ', '-').split('-')
+            # Check both head-4 and tail-4 to catch prefix- and suffix-similar slugs
+            head_key = 'h:' + ('-'.join(parts[:4]) if len(parts) >= 4 else slug.lower())
+            tail_key = 't:' + ('-'.join(parts[-4:]) if len(parts) >= 4 else slug.lower())
+            head_count = slug_group_counts.get(head_key, 0)
+            tail_count = slug_group_counts.get(tail_key, 0)
+            if head_count >= MAX_PER_SLUG_GROUP or tail_count >= MAX_PER_SLUG_GROUP:
+                slug_skips += 1
+                continue
+            slug_group_counts[head_key] = head_count + 1
+            slug_group_counts[tail_key] = tail_count + 1
+            deduped.append(m)
+
+        if slug_skips > 0:
+            print(f"  Deduped {slug_skips} markets exceeding {MAX_PER_SLUG_GROUP}/slug-group cap")
+
+        pre_selected = deduped[:limit]
 
         # Enrich with live CLOB midpoint prices. If CLOB is unavailable, keep only
         # markets that already have a non-fallback Gamma price.
@@ -775,10 +818,6 @@ def main():
             total_opportunities += (opportunities_found or 0)
 
             print(f"<<< Iteration {iteration} result: {opportunities_found or 0} opportunities found")
-
-            if opportunities_found and opportunities_found > 0:
-                print(f"    Opportunities found — stopping iteration loop.")
-                break
 
             # Check SerenBucks balance from the last scan cycle
             serenbucks_balance = getattr(agent, '_last_serenbucks_balance', None)
