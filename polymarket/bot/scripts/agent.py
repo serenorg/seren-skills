@@ -103,6 +103,10 @@ class TradingAgent:
         self.min_liquidity = float(self.config.get('min_liquidity', 100.0))
         self.stale_price_demotion = float(self.config.get('stale_price_demotion', 0.1))
 
+        # Market selection sanity gates
+        self.max_divergence = float(self.config.get('max_divergence', 0.50))
+        self.min_buy_price = float(self.config.get('min_buy_price', 0.02))
+
         print(f"✓ Agent initialized (Dry-run: {dry_run})")
         print(f"  Bankroll: ${self.bankroll:.2f}")
         print(f"  Mispricing threshold: {self.mispricing_threshold * 100:.1f}%")
@@ -152,7 +156,8 @@ class TradingAgent:
 
     def scan_markets(self, limit: int = 100) -> List[Dict]:
         """
-        Scan Polymarket for active markets
+        Scan Polymarket for active markets, sorted by volume with server-side
+        end_date filtering to avoid fetching markets that will be discarded.
 
         Args:
             limit: Max markets to fetch
@@ -161,8 +166,24 @@ class TradingAgent:
             List of market dicts
         """
         try:
-            print(f"  Fetching up to {limit} active markets from Polymarket...")
-            markets = self.polymarket.get_markets(limit=limit, active=True)
+            # Server-side date filter: only fetch markets resolving within our window
+            end_date_min = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            max_end = datetime.now(timezone.utc).replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+            # Advance to first day of month + max_resolution_days
+            from datetime import timedelta
+            max_end = datetime.now(timezone.utc) + timedelta(days=self.max_resolution_days)
+            end_date_max = max_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            print(f"  Fetching up to {limit} active markets (sorted by volume, resolving within {self.max_resolution_days}d)...")
+            markets = self.polymarket.get_markets(
+                limit=limit,
+                active=True,
+                sort_by="volume",
+                end_date_min=end_date_min,
+                end_date_max=end_date_max,
+            )
             print(f"  ✓ Retrieved {len(markets)} markets with sufficient liquidity")
             return markets
         except Exception as e:
@@ -438,6 +459,26 @@ class TradingAgent:
             Trade recommendation dict or None if no opportunity
         """
         current_price = market['price']
+
+        # --- Fix 3: Min buy price floor ---
+        # Markets priced below min_buy_price should not generate BUY signals.
+        # At these prices the CLOB book is typically one-sided or empty, slippage
+        # consumes most of the theoretical edge, and the market is likely resolved,
+        # abandoned, or data-broken.
+        if current_price < self.min_buy_price and fair_value > current_price:
+            print(f"    ✗ BLOCKED: market price {current_price*100:.1f}% below {self.min_buy_price*100:.0f}% buy floor")
+            return None
+
+        # --- Fix 2: Extreme-divergence sanity gate ---
+        # A >max_divergence gap between AI estimate and market price almost always
+        # means the AI misunderstood the question, the market data is stale/broken,
+        # or the market is too illiquid for the price to be meaningful.
+        divergence = abs(fair_value - current_price)
+        if divergence > self.max_divergence:
+            print(f"    ✗ BLOCKED: {divergence*100:.0f}pp divergence exceeds {self.max_divergence*100:.0f}pp sanity limit")
+            print(f"      AI fair value: {fair_value*100:.1f}% vs market: {current_price*100:.1f}%")
+            print(f"      This likely indicates a data issue or model misunderstanding, not real edge")
+            return None
 
         # Calculate edge
         edge = kelly.calculate_edge(fair_value, current_price)
