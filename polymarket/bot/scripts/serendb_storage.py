@@ -1136,19 +1136,28 @@ class SerenDBStorage:
         if not self.project_id or not self.branch_id:
             raise Exception("Database not initialized. Call setup_database() first.")
 
-        # Format parameterized query
+        # Format parameterized query by splitting on '?' placeholders.
+        # IMPORTANT: cannot use str.replace('?', val, 1) because substituted
+        # string values may contain literal '?' characters (e.g., every
+        # Polymarket question ends with '?'), which would be consumed as
+        # placeholders by subsequent replacements and corrupt the SQL.
         if params:
-            # Convert Python parameterized query to SQL
-            # Replace ? with actual values (properly escaped)
-            for param in params:
+            parts = query.split('?')
+            if len(parts) != len(params) + 1:
+                raise ValueError(
+                    f"Query has {len(parts) - 1} placeholder(s) but {len(params)} param(s)"
+                )
+            built = [parts[0]]
+            for i, param in enumerate(params):
                 if isinstance(param, str):
-                    # Escape single quotes in strings
                     escaped = param.replace("'", "''")
-                    query = query.replace('?', f"'{escaped}'", 1)
+                    built.append(f"'{escaped}'")
                 elif param is None:
-                    query = query.replace('?', 'NULL', 1)
+                    built.append('NULL')
                 else:
-                    query = query.replace('?', str(param), 1)
+                    built.append(str(param))
+                built.append(parts[i + 1])
+            query = ''.join(built)
 
         # Call Seren Gateway database API via seren-db publisher
         url = f"{self.seren.gateway_url}/publishers/seren-db/query"
