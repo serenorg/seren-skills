@@ -190,131 +190,101 @@ class SerenDBStorage:
                 )
             """)
 
-            self._execute_sql("""
-                CREATE SCHEMA IF NOT EXISTS trading;
-
-                CREATE TABLE IF NOT EXISTS trading.strategy_runs (
-                    run_id UUID PRIMARY KEY,
-                    skill_slug TEXT NOT NULL,
-                    venue TEXT NOT NULL,
-                    strategy_name TEXT NOT NULL,
-                    mode TEXT NOT NULL,
-                    status TEXT NOT NULL,
+            # Extended trading schema — each statement executed individually.
+            # On Python 3.14 + macOS, a multi-statement DDL that returns 400
+            # hangs the process indefinitely (serenorg/seren-skills#298).
+            # Isolating each statement prevents the hang and allows the bot
+            # to continue with basic tables if the extended schema fails.
+            _extended_ddl = [
+                "CREATE SCHEMA IF NOT EXISTS trading",
+                """CREATE TABLE IF NOT EXISTS trading.strategy_runs (
+                    run_id UUID PRIMARY KEY, skill_slug TEXT NOT NULL,
+                    venue TEXT NOT NULL, strategy_name TEXT NOT NULL,
+                    mode TEXT NOT NULL, status TEXT NOT NULL,
                     dry_run BOOLEAN NOT NULL DEFAULT TRUE,
                     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     completed_at TIMESTAMPTZ,
                     config JSONB NOT NULL DEFAULT '{}'::jsonb,
                     summary JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    error_code TEXT,
-                    error_message TEXT,
+                    error_code TEXT, error_message TEXT,
                     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_strategy_runs_skill_mode_started
-                    ON trading.strategy_runs (skill_slug, mode, started_at DESC);
-
-                CREATE TABLE IF NOT EXISTS trading.order_events (
+                )""",
+                """CREATE INDEX IF NOT EXISTS idx_strategy_runs_skill_mode_started
+                    ON trading.strategy_runs (skill_slug, mode, started_at DESC)""",
+                """CREATE TABLE IF NOT EXISTS trading.order_events (
                     id BIGSERIAL PRIMARY KEY,
                     run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
-                    order_id TEXT,
-                    instrument_id TEXT,
-                    symbol TEXT,
-                    side TEXT,
-                    order_type TEXT,
-                    event_type TEXT NOT NULL,
-                    status TEXT,
-                    price NUMERIC(24, 10),
-                    quantity NUMERIC(24, 10),
-                    notional_usd NUMERIC(24, 10),
+                    order_id TEXT, instrument_id TEXT, symbol TEXT, side TEXT,
+                    order_type TEXT, event_type TEXT NOT NULL, status TEXT,
+                    price NUMERIC(24,10), quantity NUMERIC(24,10), notional_usd NUMERIC(24,10),
                     event_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_order_events_run_time
-                    ON trading.order_events (run_id, event_time DESC);
-
-                CREATE TABLE IF NOT EXISTS trading.fills (
+                )""",
+                """CREATE INDEX IF NOT EXISTS idx_order_events_run_time
+                    ON trading.order_events (run_id, event_time DESC)""",
+                """CREATE TABLE IF NOT EXISTS trading.fills (
                     id BIGSERIAL PRIMARY KEY,
                     run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
-                    order_id TEXT,
-                    venue_fill_id TEXT,
-                    instrument_id TEXT,
-                    symbol TEXT,
-                    side TEXT,
-                    fill_price NUMERIC(24, 10),
-                    fill_quantity NUMERIC(24, 10),
-                    fee_usd NUMERIC(24, 10),
-                    notional_usd NUMERIC(24, 10),
-                    realized_pnl_usd NUMERIC(24, 10),
+                    order_id TEXT, venue_fill_id TEXT, instrument_id TEXT, symbol TEXT, side TEXT,
+                    fill_price NUMERIC(24,10), fill_quantity NUMERIC(24,10),
+                    fee_usd NUMERIC(24,10), notional_usd NUMERIC(24,10),
+                    realized_pnl_usd NUMERIC(24,10),
                     fill_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_fills_run_time
-                    ON trading.fills (run_id, fill_time DESC);
-
-                CREATE TABLE IF NOT EXISTS trading.positions (
+                )""",
+                """CREATE INDEX IF NOT EXISTS idx_fills_run_time
+                    ON trading.fills (run_id, fill_time DESC)""",
+                """CREATE TABLE IF NOT EXISTS trading.positions (
                     id BIGSERIAL PRIMARY KEY,
                     run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
-                    position_key TEXT NOT NULL,
-                    instrument_id TEXT,
-                    symbol TEXT,
-                    side TEXT,
-                    quantity NUMERIC(24, 10),
-                    entry_price NUMERIC(24, 10),
-                    cost_basis_usd NUMERIC(24, 10),
-                    market_price NUMERIC(24, 10),
-                    market_value_usd NUMERIC(24, 10),
-                    unrealized_pnl_usd NUMERIC(24, 10),
-                    realized_pnl_usd NUMERIC(24, 10),
-                    status TEXT,
-                    opened_at TIMESTAMPTZ,
-                    closed_at TIMESTAMPTZ,
+                    position_key TEXT NOT NULL, instrument_id TEXT, symbol TEXT, side TEXT,
+                    quantity NUMERIC(24,10), entry_price NUMERIC(24,10), cost_basis_usd NUMERIC(24,10),
+                    market_price NUMERIC(24,10), market_value_usd NUMERIC(24,10),
+                    unrealized_pnl_usd NUMERIC(24,10), realized_pnl_usd NUMERIC(24,10),
+                    status TEXT, opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ,
                     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
                     UNIQUE (run_id, position_key)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_positions_run_status
-                    ON trading.positions (run_id, status);
-
-                CREATE TABLE IF NOT EXISTS trading.position_marks (
+                )""",
+                """CREATE INDEX IF NOT EXISTS idx_positions_run_status
+                    ON trading.positions (run_id, status)""",
+                """CREATE TABLE IF NOT EXISTS trading.position_marks (
                     id BIGSERIAL PRIMARY KEY,
                     run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
-                    position_key TEXT NOT NULL,
-                    instrument_id TEXT,
-                    symbol TEXT,
-                    side TEXT,
-                    quantity NUMERIC(24, 10),
-                    mark_price NUMERIC(24, 10),
-                    market_value_usd NUMERIC(24, 10),
-                    unrealized_pnl_usd NUMERIC(24, 10),
-                    realized_pnl_usd NUMERIC(24, 10),
+                    position_key TEXT NOT NULL, instrument_id TEXT, symbol TEXT, side TEXT,
+                    quantity NUMERIC(24,10), mark_price NUMERIC(24,10), market_value_usd NUMERIC(24,10),
+                    unrealized_pnl_usd NUMERIC(24,10), realized_pnl_usd NUMERIC(24,10),
                     mark_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_position_marks_run_time
-                    ON trading.position_marks (run_id, mark_time DESC);
-
-                CREATE TABLE IF NOT EXISTS trading.pnl_periods (
+                )""",
+                """CREATE INDEX IF NOT EXISTS idx_position_marks_run_time
+                    ON trading.position_marks (run_id, mark_time DESC)""",
+                """CREATE TABLE IF NOT EXISTS trading.pnl_periods (
                     id BIGSERIAL PRIMARY KEY,
                     run_id UUID NOT NULL REFERENCES trading.strategy_runs(run_id) ON DELETE CASCADE,
-                    period_type TEXT NOT NULL,
-                    period_start TIMESTAMPTZ,
+                    period_type TEXT NOT NULL, period_start TIMESTAMPTZ,
                     period_end TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    realized_pnl_usd NUMERIC(24, 10),
-                    unrealized_pnl_usd NUMERIC(24, 10),
-                    fees_usd NUMERIC(24, 10),
-                    gross_pnl_usd NUMERIC(24, 10),
-                    net_pnl_usd NUMERIC(24, 10),
-                    equity_start_usd NUMERIC(24, 10),
-                    equity_end_usd NUMERIC(24, 10),
+                    realized_pnl_usd NUMERIC(24,10), unrealized_pnl_usd NUMERIC(24,10),
+                    fees_usd NUMERIC(24,10), gross_pnl_usd NUMERIC(24,10), net_pnl_usd NUMERIC(24,10),
+                    equity_start_usd NUMERIC(24,10), equity_end_usd NUMERIC(24,10),
                     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
-                );
+                )""",
+                """CREATE INDEX IF NOT EXISTS idx_pnl_periods_run_end
+                    ON trading.pnl_periods (run_id, period_end DESC)""",
+            ]
 
-                CREATE INDEX IF NOT EXISTS idx_pnl_periods_run_end
-                    ON trading.pnl_periods (run_id, period_end DESC);
-            """)
+            extended_ok = 0
+            extended_fail = 0
+            for ddl in _extended_ddl:
+                try:
+                    self._execute_sql(ddl)
+                    extended_ok += 1
+                except Exception:
+                    extended_fail += 1
+
+            if extended_fail:
+                print(f"  Extended schema: {extended_ok} OK, {extended_fail} failed (non-blocking)")
+            else:
+                print(f"  Extended schema: {extended_ok} statements OK")
 
             print(f"✅ SerenDB setup complete")
             return True
