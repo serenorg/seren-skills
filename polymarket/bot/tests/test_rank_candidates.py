@@ -31,6 +31,7 @@ def _make_agent():
     a.candidate_limit = 80
     a.analyze_limit = 80
     a.min_liquidity = 0
+    a.min_volume = 0
     a.stale_price_demotion = 0.1
     a.polymarket = _FakePolymarket()
     return a

@@ -102,13 +102,13 @@ class TradingAgent:
         self.scan_limit = int(self.config.get('scan_limit', 100))
         self.candidate_limit = int(self.config.get('candidate_limit', 20))
         self.analyze_limit = int(self.config.get('analyze_limit', self.candidate_limit))
-        self.min_liquidity = float(self.config.get('min_liquidity', 100.0))
+        self.min_liquidity = float(self.config.get('min_liquidity', 10000.0))
         self.stale_price_demotion = float(self.config.get('stale_price_demotion', 0.1))
 
         # Market selection sanity gates
         self.max_divergence = float(self.config.get('max_divergence', 0.50))
         self.min_buy_price = float(self.config.get('min_buy_price', 0.02))
-        self.min_volume = float(self.config.get('min_volume', 1000.0))
+        self.min_volume = float(self.config.get('min_volume', 5000.0))
 
         # Calibration-driven threshold override
         self._calibration = calibration.load_calibration()
