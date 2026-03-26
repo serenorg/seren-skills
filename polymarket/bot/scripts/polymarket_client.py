@@ -55,18 +55,34 @@ class PolymarketClient:
 
     # -- Market discovery (polymarket-data publisher) -------------------------
 
-    def get_markets(self, limit: int = 500, active: bool = True) -> List[Dict]:
+    def get_markets(
+        self,
+        limit: int = 500,
+        active: bool = True,
+        sort_by: str = "volume",
+        end_date_min: str = "",
+        end_date_max: str = "",
+    ) -> List[Dict]:
         """
         Get list of prediction markets via polymarket-data publisher.
 
         Args:
             limit: Max markets to return
             active: Only active markets
+            sort_by: Sort field for Gamma API (volume, liquidity, or default)
+            end_date_min: ISO date string; exclude markets resolving before this
+            end_date_max: ISO date string; exclude markets resolving after this
 
         Returns:
             List of market dicts
         """
         params = f"?limit={limit}&active={'true' if active else 'false'}&closed=false"
+        if sort_by:
+            params += f"&order={sort_by}&ascending=false"
+        if end_date_min:
+            params += f"&end_date_min={end_date_min}"
+        if end_date_max:
+            params += f"&end_date_max={end_date_max}"
 
         response = self.seren.call_publisher(
             publisher='polymarket-data',
