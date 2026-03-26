@@ -19,6 +19,14 @@ from urllib.request import Request, urlopen
 from normalized_trade_store import NormalizedTradingStore
 import sys
 
+# --- Force unbuffered stdout so piped/background output is visible immediately ---
+if not sys.stdout.isatty():
+    os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+# --- End unbuffered stdout fix ---
+
+
 DEFAULT_DRY_RUN = True
 DEFAULT_API_BASE = "https://api.serendb.com"
 DEFAULT_WALLET_PATH = "state/wallet.local.json"
