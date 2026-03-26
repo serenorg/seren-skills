@@ -856,6 +856,9 @@ class TradingAgent:
         print(f"  Estimated API cost: ~${api_cost:.2f} SerenBucks")
         print("=" * 60)
 
+        # Structured trade summary for LLM agents (issue #296)
+        print_trade_summary(opportunities, capital_deployed=capital_deployed)
+
         # Non-blocking post-scan calibration
         try:
             cal = calibration.run_post_scan_calibration(
@@ -872,6 +875,43 @@ class TradingAgent:
         print()
 
         return len(opportunities)
+
+
+def print_trade_summary(opportunities, *, capital_deployed=0.0, file=None):
+    """Print a structured, grep-able trade summary block.
+
+    Emits a contiguous block delimited by marker lines so any LLM agent
+    can extract the complete trade table without partial-read errors.
+    """
+    if not opportunities:
+        return
+
+    import sys as _sys
+    out = file or _sys.stdout
+
+    total_ev = sum(o['expected_value'] for o in opportunities)
+
+    print("=== DRY-RUN TRADE SUMMARY ===", file=out)
+    print("| # | Market | Side | Price | FV | Edge | Size | EV |", file=out)
+    print("|---|--------|------|-------|----|------|------|----|", file=out)
+    for i, opp in enumerate(opportunities, 1):
+        m = opp['market']
+        print(
+            f"| {i} "
+            f"| {m['question']} "
+            f"| {opp['side']} "
+            f"| {m['price'] * 100:.1f}% "
+            f"| {opp['fair_value'] * 100:.1f}% "
+            f"| {opp['edge'] * 100:.1f}% "
+            f"| ${opp['position_size']:.2f} "
+            f"| {'+' if opp['expected_value'] >= 0 else '-'}${abs(opp['expected_value']):.2f} |",
+            file=out,
+        )
+    print(
+        f"TOTAL_DEPLOYED: ${capital_deployed:.2f} | TOTAL_EV: {'+' if total_ev >= 0 else '-'}${abs(total_ev):.2f}",
+        file=out,
+    )
+    print("=== END TRADE SUMMARY ===", file=out)
 
 
 def _bootstrap_config_path(config_path: str) -> Path:
