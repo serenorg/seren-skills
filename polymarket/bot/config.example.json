@@ -8,8 +8,8 @@
   "scan_limit": 300,
   "candidate_limit": 80,
   "analyze_limit": 30,
-  "min_liquidity": 100.0,
-  "min_volume": 1000.0,
+  "min_liquidity": 10000.0,
+  "min_volume": 5000.0,
   "max_divergence": 0.50,
   "min_buy_price": 0.02,
   "iteration": {

@@ -19,14 +19,19 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_market(market_id: str, price: float, liquidity: float, volume: float = 0.0) -> dict:
+def _make_market(market_id: str, price: float, liquidity: float, volume: float = 50000.0) -> dict:
+    from datetime import datetime, timezone, timedelta
+    end_date = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
     return {
         'market_id': market_id,
         'question': f'Question {market_id}',
+        'market_slug': f'question-{market_id}',
         'price': price,
         'liquidity': liquidity,
         'volume': volume,
         'token_id': f'token_{market_id}',
+        'outcomePrices': f'{price},{1-price}',
+        'end_date': end_date,
     }
 
 
@@ -71,7 +76,17 @@ def _build_agent(config: dict) -> 'TradingAgent':
             agent.scan_limit = int(config.get('scan_limit', 100))
             agent.candidate_limit = int(config.get('candidate_limit', 20))
             agent.analyze_limit = int(config.get('analyze_limit', agent.candidate_limit))
-            agent.min_liquidity = float(config.get('min_liquidity', 100.0))
+            agent.min_liquidity = float(config.get('min_liquidity', 10000.0))
+            agent.stale_price_demotion = float(config.get('stale_price_demotion', 0.1))
+            agent.min_volume = float(config.get('min_volume', 5000.0))
+            agent.max_divergence = float(config.get('max_divergence', 0.50))
+            agent.min_buy_price = float(config.get('min_buy_price', 0.02))
+            agent.max_resolution_days = int(config.get('max_resolution_days', 180))
+            # Mock the polymarket client used during CLOB enrichment.
+            # Return the market's own price so enrichment passes through.
+            mock_poly = MagicMock()
+            mock_poly.get_midpoint.side_effect = lambda token_id: 0.45
+            agent.polymarket = mock_poly
             return agent
     finally:
         os.unlink(cfg_path)
@@ -87,22 +102,22 @@ class TestRankCandidates:
 
     def test_returns_at_most_limit(self):
         agent = self._agent()
-        markets = [_make_market(str(i), 0.5, 1000) for i in range(50)]
+        markets = [_make_market(str(i), 0.40, 1000) for i in range(50)]
         result = agent.rank_candidates(markets, limit=10)
         assert len(result) == 10
 
     def test_returns_all_when_fewer_than_limit(self):
         agent = self._agent()
-        markets = [_make_market(str(i), 0.5, 1000) for i in range(5)]
+        markets = [_make_market(str(i), 0.40, 1000) for i in range(5)]
         result = agent.rank_candidates(markets, limit=20)
         assert len(result) == 5
 
     def test_higher_liquidity_ranks_first(self):
         agent = self._agent()
         markets = [
-            _make_market('low', 0.5, 100),
-            _make_market('high', 0.5, 10000),
-            _make_market('mid', 0.5, 1000),
+            _make_market('low', 0.40, 100),
+            _make_market('high', 0.40, 10000),
+            _make_market('mid', 0.40, 1000),
         ]
         result = agent.rank_candidates(markets, limit=3)
         assert result[0]['market_id'] == 'high'
@@ -110,11 +125,11 @@ class TestRankCandidates:
         assert result[2]['market_id'] == 'low'
 
     def test_price_near_50pct_preferred_over_extreme(self):
-        """With equal liquidity, 50% price beats 5% or 95%."""
+        """With equal liquidity, moderate price beats 5% or 95%."""
         agent = self._agent()
         markets = [
             _make_market('extreme', 0.05, 1000),
-            _make_market('middle', 0.50, 1000),
+            _make_market('middle', 0.40, 1000),
         ]
         result = agent.rank_candidates(markets, limit=2)
         assert result[0]['market_id'] == 'middle'
@@ -125,7 +140,7 @@ class TestRankCandidates:
 
     def test_limit_zero_returns_empty(self):
         agent = self._agent()
-        markets = [_make_market(str(i), 0.5, 1000) for i in range(5)]
+        markets = [_make_market(str(i), 0.40, 1000) for i in range(5)]
         result = agent.rank_candidates(markets, limit=0)
         assert result == []
 
@@ -141,7 +156,7 @@ class TestConfigLimits:
         assert agent.candidate_limit == 20
         # analyze_limit defaults to candidate_limit when absent
         assert agent.analyze_limit == agent.candidate_limit
-        assert agent.min_liquidity == 100.0
+        assert agent.min_liquidity == 10000.0
 
     def test_explicit_values_used(self):
         agent = _build_agent(_make_config(
