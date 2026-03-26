@@ -6,6 +6,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+
+# --- Force unbuffered stdout so piped/background output is visible immediately ---
+if not sys.stdout.isatty():
+    os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+# --- End unbuffered stdout fix ---
+
 import urllib.parse
 import urllib.request
 import uuid

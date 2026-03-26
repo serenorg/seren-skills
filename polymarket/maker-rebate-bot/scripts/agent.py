@@ -957,6 +957,14 @@ def _fetch_predictions_signals(
     estimated_cost = 0.30  # batch consensus ($0.15) + batch divergence ($0.15)
     if balance < estimated_cost:
         import sys
+
+# --- Force unbuffered stdout so piped/background output is visible immediately ---
+if not sys.stdout.isatty():
+    os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+# --- End unbuffered stdout fix ---
+
         print(
             f"WARNING: SerenBucks balance (${balance:.2f}) may be insufficient for "
             f"predictions intelligence (estimated ${estimated_cost:.2f}). "
