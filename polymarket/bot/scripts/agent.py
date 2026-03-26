@@ -39,6 +39,7 @@ from position_tracker import PositionTracker
 from logger import TradingLogger
 from serendb_storage import SerenDBStorage
 import kelly
+import calibration
 
 
 class TradingAgent:
@@ -109,9 +110,15 @@ class TradingAgent:
         self.min_buy_price = float(self.config.get('min_buy_price', 0.02))
         self.min_volume = float(self.config.get('min_volume', 1000.0))
 
+        # Calibration-driven threshold override
+        self._calibration = calibration.load_calibration()
+        self.effective_mispricing_threshold, self._threshold_reason = (
+            calibration.effective_threshold(self.mispricing_threshold, self._calibration)
+        )
+
         print(f"✓ Agent initialized (Dry-run: {dry_run})")
         print(f"  Bankroll: ${self.bankroll:.2f}")
-        print(f"  Mispricing threshold: {self.mispricing_threshold * 100:.1f}%")
+        print(f"  Mispricing threshold: {self.effective_mispricing_threshold * 100:.1f}% ({self._threshold_reason})")
         print(f"  Max Kelly fraction: {self.max_kelly_fraction * 100:.1f}%")
         print(f"  Max positions: {self.max_positions}")
         print(f"  Scan pipeline: fetch={self.scan_limit} → candidates={self.candidate_limit} → analyze={self.analyze_limit}")
@@ -536,9 +543,9 @@ class TradingAgent:
         # Calculate edge
         edge = kelly.calculate_edge(fair_value, current_price)
 
-        # Check if edge exceeds threshold
-        if edge < self.mispricing_threshold:
-            print(f"    ✗ Edge {edge * 100:.1f}% below threshold {self.mispricing_threshold * 100:.1f}%")
+        # Check if edge exceeds threshold (uses calibrated threshold if available)
+        if edge < self.effective_mispricing_threshold:
+            print(f"    ✗ Edge {edge * 100:.1f}% below threshold {self.effective_mispricing_threshold * 100:.1f}%")
             return None
 
         # Annualized return gate: edge must justify the lockup period
@@ -793,6 +800,21 @@ class TradingAgent:
             if not fair_value:
                 continue
 
+            # Save prediction for calibration tracking
+            if self.storage:
+                try:
+                    self.storage.save_prediction({
+                        'market_id': market['market_id'],
+                        'market_question': market['question'],
+                        'predicted_fair_value': fair_value,
+                        'market_price_at_prediction': market['price'],
+                        'edge_calculated': abs(fair_value - market['price']),
+                        'prediction_timestamp': datetime.now(timezone.utc).isoformat(),
+                        'confidence': confidence,
+                    })
+                except Exception:
+                    pass  # Non-blocking
+
             opp = self.evaluate_opportunity(market, research, fair_value, confidence)
             if opp:
                 opportunities.append(opp)
@@ -833,6 +855,20 @@ class TradingAgent:
         print(f"  Capital deployed: ${capital_deployed:.2f}")
         print(f"  Estimated API cost: ~${api_cost:.2f} SerenBucks")
         print("=" * 60)
+
+        # Non-blocking post-scan calibration
+        try:
+            cal = calibration.run_post_scan_calibration(
+                self.polymarket, self.storage, self.mispricing_threshold
+            )
+            if cal:
+                self._calibration = cal
+                self.effective_mispricing_threshold, self._threshold_reason = (
+                    calibration.effective_threshold(self.mispricing_threshold, cal)
+                )
+        except Exception as e:
+            print(f"  Calibration error (non-blocking): {e}")
+
         print()
 
         return len(opportunities)
@@ -912,7 +948,7 @@ def main():
 
         for iteration in range(1, max_iterations + 1):
             print(f"\n>>> Iteration {iteration}/{max_iterations}  "
-                  f"mispricing_threshold={agent.mispricing_threshold:.4f}  "
+                  f"effective_threshold={agent.effective_mispricing_threshold:.4f}  "
                   f"scan_limit={agent.scan_limit}  "
                   f"min_annualized_return={agent.min_annualized_return:.4f}")
 
