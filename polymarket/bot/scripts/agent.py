@@ -17,6 +17,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 
 # --- Force unbuffered stdout so piped/background output is visible immediately ---
@@ -106,6 +107,7 @@ class TradingAgent:
         # Market selection sanity gates
         self.max_divergence = float(self.config.get('max_divergence', 0.50))
         self.min_buy_price = float(self.config.get('min_buy_price', 0.02))
+        self.min_volume = float(self.config.get('min_volume', 1000.0))
 
         print(f"✓ Agent initialized (Dry-run: {dry_run})")
         print(f"  Bankroll: ${self.bankroll:.2f}")
@@ -156,8 +158,11 @@ class TradingAgent:
 
     def scan_markets(self, limit: int = 100) -> List[Dict]:
         """
-        Scan Polymarket for active markets, sorted by volume with server-side
-        end_date filtering to avoid fetching markets that will be discarded.
+        Scan Polymarket for active markets with server-side end_date filtering.
+
+        Does NOT rely on Gamma's sort order (tested unreliable — returns
+        zero-volume seeded markets above actually-traded ones). Instead fetches
+        a large batch and lets rank_candidates do client-side scoring.
 
         Args:
             limit: Max markets to fetch
@@ -167,20 +172,16 @@ class TradingAgent:
         """
         try:
             # Server-side date filter: only fetch markets resolving within our window
-            end_date_min = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            max_end = datetime.now(timezone.utc).replace(
-                day=1, hour=0, minute=0, second=0, microsecond=0
-            )
-            # Advance to first day of month + max_resolution_days
             from datetime import timedelta
+            end_date_min = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             max_end = datetime.now(timezone.utc) + timedelta(days=self.max_resolution_days)
             end_date_max = max_end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-            print(f"  Fetching up to {limit} active markets (sorted by volume, resolving within {self.max_resolution_days}d)...")
+            print(f"  Fetching up to {limit} active markets (resolving within {self.max_resolution_days}d)...")
             markets = self.polymarket.get_markets(
                 limit=limit,
                 active=True,
-                sort_by="volume",
+                sort_by="",
                 end_date_min=end_date_min,
                 end_date_max=end_date_max,
             )
@@ -264,7 +265,14 @@ class TradingAgent:
         if stale_gamma_pre_filter:
             print(f"  Filtered {stale_gamma_pre_filter} stale 50/50 Gamma-seeded markets")
 
-        ranked = sorted(stale_gamma_filtered, key=score, reverse=True)
+        # Hard-filter zero/low-volume markets — seeded but never traded
+        min_vol = self.min_volume
+        volume_filtered = [m for m in stale_gamma_filtered if float(m.get('volume', 0)) >= min_vol]
+        low_vol_count = len(stale_gamma_filtered) - len(volume_filtered)
+        if low_vol_count:
+            print(f"  Filtered {low_vol_count} markets with volume < ${min_vol:,.0f}")
+
+        ranked = sorted(volume_filtered, key=score, reverse=True)
 
         # Filter out markets resolving too far in the future
         now = datetime.now(timezone.utc)
@@ -316,7 +324,52 @@ class TradingAgent:
         if slug_skips > 0:
             print(f"  Deduped {slug_skips} markets exceeding {MAX_PER_SLUG_GROUP}/slug-group cap")
 
-        pre_selected = deduped[:limit]
+        # --- Event-group deduplication: max 5 markets per sporting/political event ---
+        # Polymarket templates one market per team/candidate for multi-outcome events
+        # (e.g. 30 "Will X win the NBA Finals?" markets). The slug dedup catches some
+        # but misses variants with different slug prefixes. This extracts the event
+        # name and caps per event.
+        MAX_PER_EVENT_GROUP = 5
+        EVENT_PATTERNS = [
+            # "Will X win the 2026 NBA Finals?" → "2026 nba finals"
+            re.compile(r'win (?:the )?((?:\d{4}[\s\-])?(?:nba|nhl|mlb|nfl|fifa|uefa|f1|afl|mls|wnba|ncaa)[\w\s\-]+(?:finals?|cup|championship|trophy|series|prix|bowl|league|tournament|primary|election|season))', re.IGNORECASE),
+            # "X: Points O/U 12.5" → extract sport event from context
+            re.compile(r'((?:nba|nhl|mlb|nfl|fifa|uefa|f1|eurovision|oscar|emmy|grammy)[\w\s\-]*(?:finals?|cup|championship|trophy|series|prix|bowl|league|tournament|award|contest|song))', re.IGNORECASE),
+            # "Will X be the {party} nominee for {office}" → "{party} nominee {office}"
+            re.compile(r'((?:republican|democratic|democrat) nominee (?:for )?[\w\s]+(?:senate|governor|house|president))', re.IGNORECASE),
+        ]
+
+        def _extract_event(question: str) -> str:
+            """Extract event name from market question, or empty string."""
+            for pattern in EVENT_PATTERNS:
+                match = pattern.search(question)
+                if match:
+                    # Normalize: lowercase, collapse whitespace
+                    return re.sub(r'\s+', ' ', match.group(1).strip().lower())
+            return ''
+
+        event_group_counts: Dict[str, int] = {}
+        event_deduped = []
+        event_skips = 0
+        for m in deduped:
+            event = _extract_event(m.get('question', ''))
+            if not event:
+                event_deduped.append(m)
+                continue
+            count = event_group_counts.get(event, 0)
+            if count >= MAX_PER_EVENT_GROUP:
+                event_skips += 1
+                continue
+            event_group_counts[event] = count + 1
+            event_deduped.append(m)
+
+        if event_skips > 0:
+            top_events = sorted(event_group_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            print(f"  Deduped {event_skips} template markets exceeding {MAX_PER_EVENT_GROUP}/event cap")
+            for ev, ct in top_events:
+                print(f"    {ev}: {ct} kept, rest deduped")
+
+        pre_selected = event_deduped[:limit]
 
         # Enrich with live CLOB midpoint prices. If CLOB is unavailable, keep only
         # markets that already have a non-fallback Gamma price.
