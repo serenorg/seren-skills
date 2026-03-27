@@ -1,0 +1,55 @@
+{
+  "status": "ok",
+  "skill": "knowledge",
+  "workflow_step_count": 16,
+  "dry_run": true,
+  "inputs": {
+    "asana_sync_enabled": true,
+    "command": "capture",
+    "current_date_label": "March 27, 2026",
+    "department": "investments",
+    "interview_mode": "freeform",
+    "organization_name": "Rendero Trust",
+    "query_text": "",
+    "reward_base_usd": 100,
+    "reward_per_retrieval_usd": 1,
+    "role_template": "general",
+    "sharepoint_sync_enabled": true,
+    "top_k": 5
+  },
+  "connectors": {
+    "asana": {
+      "get": {
+        "status": "ok",
+        "connector": "asana",
+        "action": "get"
+      }
+    },
+    "docreader": {
+      "post": {
+        "status": "ok",
+        "connector": "docreader",
+        "action": "post"
+      }
+    },
+    "sharepoint": {
+      "get": {
+        "status": "ok",
+        "connector": "sharepoint",
+        "action": "get"
+      }
+    },
+    "storage": {
+      "query": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "query"
+      },
+      "upsert": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "upsert"
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "connectors": [
+    "asana",
+    "docreader",
+    "sharepoint",
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "asana_sync_enabled": true,
+    "command": "capture",
+    "current_date_label": "March 27, 2026",
+    "department": "investments",
+    "interview_mode": "freeform",
+    "organization_name": "Rendero Trust",
+    "query_text": "",
+    "reward_base_usd": 100,
+    "reward_per_retrieval_usd": 1,
+    "role_template": "general",
+    "sharepoint_sync_enabled": true,
+    "top_k": 5
+  },
+  "skill": "knowledge"
+}

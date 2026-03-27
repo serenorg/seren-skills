@@ -1,0 +1,43 @@
+{
+  "status": "error",
+  "skill": "knowledge",
+  "error_code": "connector_failure",
+  "connector": "asana",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "asana": {
+      "get": {
+        "status": "error",
+        "connector": "asana",
+        "action": "get",
+        "error_code": "connector_failure"
+      }
+    },
+    "docreader": {
+      "post": {
+        "status": "ok",
+        "connector": "docreader",
+        "action": "post"
+      }
+    },
+    "sharepoint": {
+      "get": {
+        "status": "ok",
+        "connector": "sharepoint",
+        "action": "get"
+      }
+    },
+    "storage": {
+      "query": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "query"
+      },
+      "upsert": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "upsert"
+      }
+    }
+  }
+}
