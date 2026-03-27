@@ -20,5 +20,8 @@
     "sharepoint_sync_enabled": true,
     "top_k": 5
   },
-  "skill": "knowledge"
+  "skill": "knowledge",
+  "affiliates_webhook_url": "",
+  "affiliates_webhook_secret": "",
+  "affiliates_publisher_id": ""
 }
