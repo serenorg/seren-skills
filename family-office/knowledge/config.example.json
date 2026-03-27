@@ -5,8 +5,11 @@
     "sharepoint",
     "storage"
   ],
+  "current_date": "2026-03-27",
   "dry_run": true,
   "inputs": {
+    "access_scope": "team",
+    "agent_id": "user-123",
     "asana_sync_enabled": true,
     "command": "capture",
     "current_date_label": "March 27, 2026",
@@ -14,12 +17,24 @@
     "interview_mode": "freeform",
     "organization_name": "Rendero Trust",
     "query_text": "",
+    "requester_id": "user-123",
     "reward_base_usd": 100,
     "reward_per_retrieval_usd": 1,
     "role_template": "general",
     "sharepoint_sync_enabled": true,
     "top_k": 5
   },
+  "storage_records": {
+    "briefs": [],
+    "knowledge_entries": [],
+    "retrieval_events": [],
+    "reward_audits": [],
+    "transcripts": []
+  },
+  "sharepoint_context": [],
+  "asana_context": [],
+  "documents": [],
+  "interview_transcript": [],
   "skill": "knowledge",
   "affiliates_webhook_url": "",
   "affiliates_webhook_secret": "",
