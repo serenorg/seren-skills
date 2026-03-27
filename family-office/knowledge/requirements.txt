@@ -1,1 +1,2 @@
-# No third-party runtime dependencies are required for knowledge.
+requests
+psycopg[binary]

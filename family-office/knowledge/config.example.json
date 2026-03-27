@@ -7,6 +7,7 @@
   ],
   "current_date": "2026-03-27",
   "dry_run": true,
+  "live_connectors": false,
   "inputs": {
     "access_scope": "team",
     "agent_id": "user-123",
@@ -31,8 +32,24 @@
     "reward_audits": [],
     "transcripts": []
   },
+  "storage": {
+    "mode": "memory",
+    "project_name": "knowledge-live-example",
+    "database_name": "knowledge",
+    "region": "us-east-1",
+    "project_id": "",
+    "branch_id": "",
+    "connection_string": ""
+  },
   "sharepoint_context": [],
+  "sharepoint": {
+    "site_path": "/sites/root"
+  },
   "asana_context": [],
+  "asana": {
+    "workspace_gid": "",
+    "limit": 5
+  },
   "documents": [],
   "interview_transcript": [],
   "skill": "knowledge",

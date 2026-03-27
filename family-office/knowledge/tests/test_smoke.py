@@ -229,3 +229,70 @@ def test_diff_workflow_compares_current_brief_against_first_brief() -> None:
     assert result["normalized_request"]["mode"] == "diff"
     assert any(change["field"] == "summary" for change in changes)
     assert {"field": "priorities", "change": "added", "value": "Close Fund IV anchor"} in changes
+
+
+def test_live_storage_uses_direct_connection_string_without_gateway_bootstrap(monkeypatch) -> None:
+    agent = _load_agent_module()
+
+    class FakeCursor:
+        def execute(self, *_args, **_kwargs) -> None:
+            return None
+
+        def fetchall(self) -> list:
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def cursor(self) -> FakeCursor:
+            return FakeCursor()
+
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    connect_calls = []
+
+    def fake_connect(connection_string: str) -> FakeConnection:
+        connect_calls.append(connection_string)
+        return FakeConnection()
+
+    monkeypatch.setattr(agent.psycopg, "connect", fake_connect)
+
+    class GatewayStub:
+        def __getattr__(self, name: str):
+            raise AssertionError(f"gateway bootstrap should not be called: {name}")
+
+    config = {
+        "storage": {
+            "mode": "serendb",
+            "connection_string": "postgresql://user:pass@example.com/knowledge?sslmode=require",
+            "database_name": "knowledge",
+        }
+    }
+    request = {
+        "organization_name": "Rendero Trust",
+        "department": "investments",
+        "topic": "tax strategy",
+    }
+
+    storage = agent.LiveStorageConnector(config, request, GatewayStub())
+    try:
+        assert connect_calls == ["postgresql://user:pass@example.com/knowledge?sslmode=require"]
+        assert storage.project_id == ""
+        assert storage.branch_id == ""
+        assert storage.snapshot()["_meta"] == [{"project_id": "", "branch_id": "", "database_name": "knowledge"}]
+    finally:
+        storage.close()
