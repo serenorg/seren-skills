@@ -167,7 +167,6 @@ These are required for Step 1 (fiat deposit). Full onramp instructions at [peer-
 | Variable | Required | How to Get |
 | --- | --- | --- |
 | `PRIVATE_KEY` | Yes | Base wallet private key (use same as `POLYMARKET_PRIVATE_KEY`) |
-| `ZKP2P_API_KEY` | No | Only needed for LP operations and quotes — **not required for on-ramp** |
 | `WISE_API_TOKEN` | For Wise | Log in to [wise.com](https://wise.com) → Settings → API tokens → Create a personal token (recommended — **100% autonomous**) |
 | `VENMO_COOKIES` | For Venmo | Log in to Venmo in your browser → extract `api_access_token`, `v_id`, `login` cookies via DevTools (**80% autonomous**) |
 | `PAYPAL_CLIENT_ID` | For PayPal | Create app at [developer.paypal.com](https://developer.paypal.com) → copy Client ID (**100% autonomous**) |
