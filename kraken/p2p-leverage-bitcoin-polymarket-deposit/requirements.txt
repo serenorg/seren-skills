@@ -1,0 +1,1 @@
+# No third-party runtime dependencies — uses only stdlib (urllib, json, hmac).
