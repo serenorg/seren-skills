@@ -1,8 +1,7 @@
 skill: p2p-leverage-bitcoin-polymarket-deposit
 description: >-
   Deposit up to 5x leveraged cash into Polymarket using Kraken margin trading.
-  Use any supported Payment app on Peer for fiat onramp.
-  Uses Kraken REST API directly — user supplies their own API keys.
+  Fiat onramp via Kraken Ramp API. Uses Kraken REST API directly — user supplies their own API keys.
 triggers:
   - leverage bitcoin on kraken to fund polymarket
   - kraken margin leveraged bitcoin polymarket deposit
@@ -53,10 +52,10 @@ workflow:
       use: transform.kraken_api
       with:
         endpoint: /0/private/TradeBalance
-    - id: get_deposit_address
+    - id: ramp_buy_usdc
       use: transform.kraken_api
       with:
-        endpoint: /0/private/DepositAddresses
+        endpoint: /b2b/ramp/checkout
         asset: USDC
     - id: buy_btc_margin
       use: transform.kraken_api

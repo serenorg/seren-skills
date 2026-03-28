@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """P2P Cash Leveraged Bitcoin Polymarket Deposits (Kraken) — 5x margin via direct Kraken REST API.
 
-Pipeline: Cash → ZKP2P → USDC (Base) → Kraken deposit → margin buy BTC 5x →
+Pipeline: Cash → Kraken Ramp (fiat → USDC) → margin buy BTC 5x →
           withdraw USDC → Polygon → Polymarket funded.
 """
 
@@ -129,16 +129,20 @@ class KrakenClient:
     def open_positions(self) -> dict:
         return self._private("/0/private/OpenPositions")
 
-    # ── Deposit ──────────────────────────────────────────────────────
-    def deposit_methods(self, asset: str = "USDC") -> list:
-        return self._private("/0/private/DepositMethods", {"asset": asset})
+    # ── Kraken Ramp (fiat onramp) ───────────────────────────────────
+    def ramp_payment_methods(self) -> dict:
+        return self._public("/b2b/ramp/payment-methods")
 
-    def deposit_addresses(self, asset: str = "USDC",
-                          method: str = "") -> list:
-        data: dict[str, Any] = {"asset": asset}
-        if method:
-            data["method"] = method
-        return self._private("/0/private/DepositAddresses", data)
+    def ramp_quote(self, fiat_amount: str, fiat_currency: str = "USD",
+                   crypto_asset: str = "USDC") -> dict:
+        return self._public("/b2b/ramp/quotes/prospective", {
+            "fiat_amount": fiat_amount,
+            "fiat_currency": fiat_currency,
+            "crypto_asset": crypto_asset,
+        })
+
+    def ramp_checkout(self, quote_id: str) -> dict:
+        return self._public("/b2b/ramp/checkout", {"quote_id": quote_id})
 
     # ── Trading ──────────────────────────────────────────────────────
     def add_order(self, *, pair: str, side: str, ordertype: str,
@@ -201,12 +205,36 @@ def step_setup(kraken: KrakenClient) -> dict:
     leverage_buy = pair_info.get("leverage_buy", [])
     _info("BTC/USD margin leverage options", leverage_buy=leverage_buy)
 
+    # Verify Kraken Ramp is available
+    try:
+        ramp_methods = kraken.ramp_payment_methods()
+        _info("Kraken Ramp payment methods available", methods=ramp_methods)
+    except KrakenAPIError as exc:
+        _info(f"Kraken Ramp check failed: {exc} — fiat onramp may not be available")
+        ramp_methods = {}
+
     return {
         "status": "ok", "balance": bal,
         "equity": float(tb.get("e", "0")),
         "free_margin": float(tb.get("mf", "0")),
         "leverage_options": leverage_buy,
+        "ramp_available": bool(ramp_methods),
     }
+
+
+def step_quote_ramp(kraken: KrakenClient, fiat_amount: float,
+                    fiat_currency: str = "USD") -> dict:
+    """Quote fiat-to-USDC purchase via Kraken Ramp API."""
+    _info("Step: quote_ramp — getting fiat-to-USDC quote via Kraken Ramp")
+    try:
+        quote = kraken.ramp_quote(str(fiat_amount), fiat_currency, "USDC")
+        _info("Kraken Ramp quote", quote=quote)
+        return {"ramp_quote": quote, "fiat_amount": fiat_amount,
+                "fiat_currency": fiat_currency}
+    except KrakenAPIError as exc:
+        _info(f"Kraken Ramp quote failed: {exc}")
+        return {"ramp_quote": None, "error": str(exc),
+                "fiat_amount": fiat_amount}
 
 
 def step_get_btc_price(kraken: KrakenClient) -> float:
@@ -261,6 +289,10 @@ def run_pipeline(cfg: dict, dry_run: bool) -> dict:
 
     setup = step_setup(kraken)
     results["setup"] = setup
+
+    # 1. Quote Kraken Ramp (fiat → USDC)
+    ramp = step_quote_ramp(kraken, deposit_usd)
+    results["ramp_quote"] = ramp
 
     btc_price = step_get_btc_price(kraken)
     results["btc_price"] = btc_price
