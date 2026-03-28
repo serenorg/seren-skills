@@ -1,6 +1,6 @@
 ---
 name: p2p-leverage-bitcoin-polymarket-deposit
-description: "Deposit up to 5x leveraged cash into Polymarket using Kraken margin trading. Use any supported Payment app on Peer for fiat onramp. Uses Kraken REST API directly — user supplies their own API keys."
+description: "Deposit up to 5x leveraged cash into Polymarket using Kraken margin trading. Fiat onramp via Kraken Ramp API. Uses Kraken REST API directly — user supplies their own API keys."
 ---
 
 # P2P Cash Leveraged Bitcoin Polymarket Deposits (Kraken)
@@ -18,37 +18,33 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 
 ## What This Skill Does
 
-Converts a cash deposit into a 5x leveraged Bitcoin position on Kraken, then withdraws borrowed USDC directly to a Polymarket wallet on Polygon. The user holds a leveraged long BTC position on Kraken while trading on Polymarket with the borrowed funds.
+Converts a cash deposit into a 5x leveraged Bitcoin position on Kraken, then withdraws borrowed USDC directly to a Polymarket wallet on Polygon. Uses Kraken Ramp API for fiat onramp — no external onramp service needed.
 
 ### Pipeline
 
 ```text
-Cash ($200 via any payment app)
+Cash ($200 via bank/card)
  │
- ▼ ① ZKP2P peer-onramp (fiat → USDC on Base)
-USDC on Base
- │
- ▼ ② Deposit USDC to Kraken (API: DepositAddresses + send)
+ ▼ ① Kraken Ramp API — buy USDC with fiat (payment-methods → quote → checkout)
 USDC on Kraken
  │
- ▼ ③ Buy BTC on 5x margin (API: AddOrder with leverage:5)
+ ▼ ② Buy BTC on 5x margin (API: AddOrder with leverage:5)
 BTC position on Kraken (5x leveraged)
  │
- ▼ ④ Withdraw borrowed USDC to Polygon (API: Withdraw)
+ ▼ ③ Withdraw borrowed USDC to Polygon (API: Withdraw)
 USDC on Polygon
  │
- ▼ ⑤ Polymarket wallet funded
+ ▼ ④ Polymarket wallet funded
 ```
 
 ### Example ($200 deposit at 5x leverage)
 
 | Step | In | Out |
 | --- | --- | --- |
-| ① Onramp | $200 cash | ~200 USDC (Base) |
-| ② Deposit | 200 USDC | Kraken balance |
-| ③ Margin Buy 5x | 200 USDC collateral | ~$1,000 BTC position |
-| ④ Withdraw | Borrowed ~$800 USDC | ~$800 USDC on Polygon |
-| ⑤ Funded | — | Polymarket ready |
+| ① Kraken Ramp | $200 fiat | ~200 USDC on Kraken |
+| ② Margin Buy 5x | 200 USDC collateral | ~$1,000 BTC position |
+| ③ Withdraw | Borrowed ~$800 USDC | ~$800 USDC on Polygon |
+| ④ Funded | — | Polymarket ready |
 
 **Net position**: Long ~$1,000 BTC on Kraken (5x) + ~$800 on Polymarket.
 
@@ -75,7 +71,7 @@ Before executing any live transaction the agent must:
 2. Verify Kraken API connectivity (`SystemStatus`)
 3. Check account balance via `Balance`
 4. Check margin eligibility via `TradeBalance`
-5. Verify USDC deposit method is available (`DepositMethods`)
+5. Verify Kraken Ramp payment methods are available (`/b2b/ramp/payment-methods`)
 6. Verify BTC/USD margin pair is available with requested leverage
 7. Verify Polygon USDC withdrawal is available (`WithdrawMethods`)
 8. Fail-closed if any check fails
@@ -127,10 +123,11 @@ python scripts/agent.py --config config.json
 | `/0/public/SystemStatus` | GET | Health check |
 | `/0/public/Ticker` | GET | BTC/USD price |
 | `/0/public/AssetPairs` | GET | Verify margin pair availability |
+| `/b2b/ramp/payment-methods` | GET | Available fiat payment methods |
+| `/b2b/ramp/quotes/prospective` | GET | Get fiat-to-USDC quote |
+| `/b2b/ramp/checkout` | GET | Execute fiat purchase |
 | `/0/private/Balance` | POST | Account balances |
 | `/0/private/TradeBalance` | POST | Margin status and equity |
-| `/0/private/DepositMethods` | POST | Available deposit methods |
-| `/0/private/DepositAddresses` | POST | Get USDC deposit address |
 | `/0/private/AddOrder` | POST | Place margin buy order (with `leverage` param) |
 | `/0/private/Withdraw` | POST | Withdraw USDC to Polygon address |
 | `/0/private/WithdrawInfo` | POST | Withdrawal fee estimate |
@@ -158,18 +155,6 @@ python scripts/agent.py --config config.json
 | --- | --- | --- |
 | `SEREN_API_KEY` | Yes | Seren API key — get from Seren Desktop or [serendb.com](https://serendb.com) |
 
-### ZKP2P Peer Onramp
-
-Required for Step 1 (fiat deposit). Full instructions at [peer-onramp SKILL.md](https://github.com/zkp2p/zkp2p-skills/blob/main/skills/peer-onramp/SKILL.md).
-
-| Variable | Required | How to Get |
-| --- | --- | --- |
-| `PRIVATE_KEY` | Yes | Base wallet private key (for receiving USDC from ZKP2P) |
-| `WISE_API_TOKEN` | For Wise | [wise.com](https://wise.com) → Settings → API tokens → Create personal token (recommended — **100% autonomous**) |
-| `VENMO_COOKIES` | For Venmo | Browser DevTools → extract `api_access_token`, `v_id`, `login` cookies (**80% autonomous**) |
-| `PAYPAL_CLIENT_ID` | For PayPal | [developer.paypal.com](https://developer.paypal.com) → Create app → copy Client ID (**100% autonomous**) |
-| `PAYPAL_CLIENT_SECRET` | For PayPal | Same PayPal app → copy Secret |
-
 ## Kraken Account Requirements
 
 - **KYC**: Intermediate verification or higher required for margin trading
@@ -177,19 +162,15 @@ Required for Step 1 (fiat deposit). Full instructions at [peer-onramp SKILL.md](
 - **API permissions**: The API key must have **Query Funds**, **Deposit Funds**, **Trade**, and **Withdraw Funds** enabled
 - **Margin**: Account must be approved for margin trading (automatic with Intermediate+ verification in eligible regions)
 
-## Upstream Skills
-
-- [zkp2p/peer-onramp](https://github.com/zkp2p/zkp2p-skills/blob/main/skills/peer-onramp/SKILL.md) — fiat-to-USDC onramp with headless Reclaim proofs
-
 ## Cost Breakdown
 
 | Component | Estimated Cost |
 | --- | --- |
-| ZKP2P onramp fee | ~0.1-0.5% of deposit |
+| Kraken Ramp fee | Varies by payment method (card ~1.5%, bank ~0%) |
 | Kraken trading fee | 0.16-0.26% (maker/taker) |
 | Kraken margin open fee | 0.01-0.05% |
 | Kraken withdrawal fee | ~1 USDC (Polygon) |
-| **Total overhead** | **~$1-3 on a $200 deposit** |
+| **Total overhead** | **~$1-4 on a $200 deposit** |
 
 ## Risks and Disclaimers
 
