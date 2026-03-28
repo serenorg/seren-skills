@@ -162,24 +162,44 @@ python scripts/agent.py --config config.json
 
 ### ZKP2P Peer Onramp
 
-These are required for Step 1 (fiat deposit). See the upstream skill at https://github.com/zkp2p/zkp2p-skills#environment-variables for full details.
+These are required for Step 1 (fiat deposit). Full onramp instructions at [peer-onramp SKILL.md](https://github.com/zkp2p/zkp2p-skills/blob/main/skills/peer-onramp/SKILL.md).
 
 | Variable | Required | How to Get |
 | --- | --- | --- |
 | `PRIVATE_KEY` | Yes | Base wallet private key (use same as `POLYMARKET_PRIVATE_KEY`) |
-| `ZKP2P_API_KEY` | Yes | Contact ZKP2P team or their developer portal |
-| `WISE_API_TOKEN` | For Wise | Create Wise account, generate personal API token from settings (recommended — 100% autonomous) |
-| `VENMO_COOKIES` | For Venmo | Extract from browser session after Venmo login (80% autonomous) |
+| `ZKP2P_API_KEY` | No | Only needed for LP operations and quotes — **not required for on-ramp** |
+| `WISE_API_TOKEN` | For Wise | Log in to [wise.com](https://wise.com) → Settings → API tokens → Create a personal token (recommended — **100% autonomous**) |
+| `VENMO_COOKIES` | For Venmo | Log in to Venmo in your browser → extract `api_access_token`, `v_id`, `login` cookies via DevTools (**80% autonomous**) |
+| `PAYPAL_CLIENT_ID` | For PayPal | Create app at [developer.paypal.com](https://developer.paypal.com) → copy Client ID (**100% autonomous**) |
+| `PAYPAL_CLIENT_SECRET` | For PayPal | Same PayPal app → copy Secret |
 
-**Payment app options:**
+**Payment app autonomy (from [peer-onramp](https://github.com/zkp2p/zkp2p-skills/blob/main/skills/peer-onramp/SKILL.md)):**
 
-- **Wise** — fully autonomous agent operation (recommended)
-- **Venmo** — semi-autonomous (agent handles most steps)
-- **CashApp / Zelle** — human-in-the-loop (agent guides, user completes payment)
+| Platform | Agent Autonomy | Auth Setup |
+| --- | --- | --- |
+| **Wise** | 100% | API token from settings — no 2FA needed |
+| **PayPal Business** | 100% | OAuth client ID + secret |
+| **Venmo** | 80% | One-time cookie export from browser |
+| **Revolut Business** | 70% | Device trust setup needed |
+| **CashApp** | 20% | Human sends payment, agent proves + fulfills |
+| **Zelle** | 20% | Human sends payment, agent proves + fulfills |
+
+### How the ZKP2P Onramp Works
+
+The onramp runs 6 steps (all handled by the [peer-onramp skill](https://github.com/zkp2p/zkp2p-skills/blob/main/skills/peer-onramp/SKILL.md)):
+
+1. **Get Quote** — find best LP rate for your platform, currency, and amount
+2. **Signal Intent** — lock LP's USDC in escrow on-chain (Base)
+3. **Send Fiat** — agent sends payment via the payment platform API
+4. **Generate Proof** — headless Reclaim proof via `@reclaimprotocol/attestor-core`
+5. **Submit Proof** — POST proof to attestation service for EIP-712 signing
+6. **Fulfill Intent** — submit attestation on-chain, receive USDC on Base
+
+Setup: `npm install @zkp2p/sdk @reclaimprotocol/attestor-core @zkp2p/providers viem`
 
 ## Upstream Skills
 
-- `zkp2p/peer-to-peer-payments-exchange` — fiat onramp via `peer-onramp` (see https://github.com/zkp2p/zkp2p-skills)
+- [zkp2p/peer-onramp](https://github.com/zkp2p/zkp2p-skills/blob/main/skills/peer-onramp/SKILL.md) — fiat-to-USDC onramp with headless Reclaim proofs
 
 ## Cost Breakdown
 
