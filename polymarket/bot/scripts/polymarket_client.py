@@ -287,6 +287,46 @@ class PolymarketClient:
         else:
             return best_bid
 
+    def get_book_metrics(self, token_id: str) -> Dict:
+        """Get spread and visible depth from the CLOB orderbook.
+
+        Returns:
+            Dict with keys: best_bid, best_ask, spread, mid, bid_depth_usd, ask_depth_usd
+        """
+        from polymarket_live import fetch_book
+        book = fetch_book(token_id)
+        bids = book.get('bids', [])
+        asks = book.get('asks', [])
+        if not bids or not asks:
+            raw = book.get('raw', {})
+            if isinstance(raw, dict):
+                bids = bids or raw.get('bids', [])
+                asks = asks or raw.get('asks', [])
+
+        best_bid = float(bids[0]['price']) if bids else 0.0
+        best_ask = float(asks[0]['price']) if asks else 0.0
+        mid = (best_bid + best_ask) / 2.0 if best_bid and best_ask else 0.0
+        spread = (best_ask - best_bid) if best_bid and best_ask else 0.0
+
+        # Visible depth in USD: sum(price * size) for each level
+        bid_depth = sum(
+            float(level.get('price', 0)) * float(level.get('size', 0))
+            for level in bids
+        )
+        ask_depth = sum(
+            float(level.get('price', 0)) * float(level.get('size', 0))
+            for level in asks
+        )
+
+        return {
+            'best_bid': best_bid,
+            'best_ask': best_ask,
+            'spread': spread,
+            'mid': mid,
+            'bid_depth_usd': bid_depth,
+            'ask_depth_usd': ask_depth,
+        }
+
     def get_midpoint(self, token_id: str, max_spread: float = 0.50) -> float:
         """Get midpoint price (average of best bid and ask).
 

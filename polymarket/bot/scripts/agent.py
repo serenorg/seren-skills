@@ -110,6 +110,10 @@ class TradingAgent:
         self.min_buy_price = float(self.config.get('min_buy_price', 0.02))
         self.min_volume = float(self.config.get('min_volume', 5000.0))
 
+        # Execution quality gates
+        self.min_edge_to_spread_ratio = float(self.config.get('min_edge_to_spread_ratio', 3.0))
+        self.max_depth_fraction = float(self.config.get('max_depth_fraction', 0.25))
+
         # Calibration-driven threshold override
         self._calibration = calibration.load_calibration()
         self.effective_mispricing_threshold, self._threshold_reason = (
@@ -560,16 +564,28 @@ class TradingAgent:
             print(f"    ✗ Annualized return {annualized_return * 100:.1f}% below {self.min_annualized_return * 100:.0f}% hurdle ({days_to_resolution}d to resolution)")
             return None
 
-        # Exit liquidity check: ensure we can sell what we buy
+        # --- Execution quality gates: spread, depth, and exit liquidity ---
+        book_metrics = None
         try:
-            token_to_check = market.get('no_token_id') or market.get('token_id')
+            token_to_check = market.get('token_id')
             if token_to_check:
-                bid_price = self.polymarket.get_price(token_to_check, 'SELL')
-                if bid_price <= 0:
+                book_metrics = self.polymarket.get_book_metrics(token_to_check)
+
+                # Exit liquidity: must have bids
+                if book_metrics['best_bid'] <= 0:
                     print(f"    ✗ No exit liquidity: zero bids on order book")
                     return None
+
+                # Edge-to-spread ratio gate: edge must exceed spread cost by min_edge_to_spread_ratio
+                spread = book_metrics['spread']
+                if spread > 0:
+                    edge_to_spread = edge / spread
+                    if edge_to_spread < self.min_edge_to_spread_ratio:
+                        print(f"    ✗ BLOCKED: edge/spread ratio {edge_to_spread:.1f}x below {self.min_edge_to_spread_ratio:.1f}x minimum")
+                        print(f"      Edge: {edge*100:.1f}%, spread: {spread*100:.1f}% — spread eats the edge")
+                        return None
         except Exception:
-            print(f"    ✗ Could not verify exit liquidity")
+            print(f"    ✗ Could not verify exit liquidity or book metrics")
             return None
 
         # Reject low confidence estimates
@@ -607,6 +623,19 @@ class TradingAgent:
         if position_size == 0:
             print(f"    ✗ Position size too small")
             return None
+
+        # Depth-constrained sizing: cap position at max_depth_fraction of visible book
+        if book_metrics:
+            relevant_depth = book_metrics['ask_depth_usd'] if side == 'BUY' else book_metrics['bid_depth_usd']
+            if relevant_depth > 0:
+                max_from_depth = relevant_depth * self.max_depth_fraction
+                if position_size > max_from_depth:
+                    print(f"    Depth cap: ${position_size:.2f} → ${max_from_depth:.2f} "
+                          f"({self.max_depth_fraction*100:.0f}% of ${relevant_depth:.0f} visible depth)")
+                    position_size = max_from_depth
+                    if position_size < 1.0:
+                        print(f"    ✗ Position too small after depth cap")
+                        return None
 
         # Calculate expected value
         ev = kelly.calculate_expected_value(fair_value, current_price, position_size, side)
