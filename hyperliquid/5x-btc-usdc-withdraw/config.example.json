@@ -1,0 +1,15 @@
+{
+  "dry_run": true,
+  "api": {
+    "base_url": "https://api.serendb.com"
+  },
+  "inputs": {
+    "deposit_amount_usd": 200,
+    "leverage": 5
+  },
+  "hyperliquid": {
+    "api_url": "https://api.hyperliquid.xyz",
+    "asset_index": 0
+  },
+  "skill": "5x-btc-usdc-withdraw"
+}
