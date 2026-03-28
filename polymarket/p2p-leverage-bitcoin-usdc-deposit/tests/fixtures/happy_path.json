@@ -1,0 +1,26 @@
+{
+  "status": "ok",
+  "skill": "p2p-leverage-bitcoin-usdc-deposit",
+  "workflow_step_count": 9,
+  "dry_run": true,
+  "inputs": {
+    "deposit_amount_usd": 200,
+    "max_slippage_bps": 50
+  },
+  "connectors": {
+    "rpc_base": {
+      "post": {
+        "status": "ok",
+        "connector": "rpc_base",
+        "action": "post"
+      }
+    },
+    "rpc_polygon": {
+      "post": {
+        "status": "ok",
+        "connector": "rpc_polygon",
+        "action": "post"
+      }
+    }
+  }
+}

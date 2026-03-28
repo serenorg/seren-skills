@@ -1,0 +1,115 @@
+skill: p2p-leverage-bitcoin-usdc-deposit
+description: >-
+  This skill will allow you to deposit 73% of your cash into Polymarket,
+  on Base, with Bitcoin Leverage. Use any supported Payment app on Peer.
+triggers:
+  - leverage bitcoin to fund polymarket
+  - p2p cash leveraged bitcoin polymarket deposit
+  - deposit cash into polymarket with bitcoin leverage
+
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+
+inputs:
+  deposit_amount_usd:
+    type: number
+    min: 1
+    max: 200
+    default: 200
+    description: Amount of cash to deposit via P2P onramp (USD)
+  max_slippage_bps:
+    type: integer
+    min: 1
+    max: 500
+    default: 50
+    description: Maximum swap slippage in basis points (0.50% default)
+
+secrets:
+  - POLYMARKET_PRIVATE_KEY
+  - SEREN_API_KEY
+
+connectors:
+  rpc_base:
+    kind: seren_publisher
+    publisher: seren-base
+  rpc_polygon:
+    kind: seren_publisher
+    publisher: seren-polygon
+
+policies:
+  dry_run_default: true
+  idempotency_required: true
+  max_daily_spend_usd: 200
+  max_notional_usd: 200
+
+workflow:
+  steps:
+    - id: setup
+      use: transform.validate_environment
+      with:
+        required_keys:
+          - POLYMARKET_PRIVATE_KEY
+        contracts:
+          - aave_v3_pool
+          - cbbtc
+          - usdc_base
+          - stargate_usdc_base
+    - id: receive_p2p_deposit
+      use: connector.rpc_base.post
+      with:
+        description: Confirm USDC received on Polymarket wallet via ZKP2P peer-onramp
+        method: eth_call
+        check: usdc_balance
+    - id: quote_swap
+      use: connector.rpc_base.post
+      with:
+        description: Get best USDC-to-cbBTC quote across Base DEXs (Aerodrome, Uniswap V3)
+        method: eth_call
+        check: best_price
+    - id: swap_usdc_to_cbbtc
+      use: connector.rpc_base.post
+      with:
+        description: Swap USDC for cbBTC on lowest-spread DEX
+        method: eth_sendRawTransaction
+    - id: supply_cbbtc_aave
+      use: connector.rpc_base.post
+      with:
+        description: Supply cbBTC as collateral on Aave V3 Base
+        method: eth_sendRawTransaction
+    - id: borrow_usdc_aave
+      use: connector.rpc_base.post
+      with:
+        description: Borrow max USDC (73% LTV) against cbBTC on Aave V3 Base
+        method: eth_sendRawTransaction
+    - id: quote_bridge
+      use: connector.rpc_base.post
+      with:
+        description: Quote Stargate V2 bridge fee for USDC Base to Polygon
+        method: eth_call
+        function: quoteSend
+    - id: bridge_usdc_to_polygon
+      use: connector.rpc_base.post
+      with:
+        description: Bridge USDC from Base to Polygon via Stargate V2 LayerZero OFT
+        method: eth_sendRawTransaction
+    - id: confirm_funded
+      use: connector.rpc_polygon.post
+      with:
+        description: Confirm USDC arrived on Polymarket wallet on Polygon
+        method: eth_call
+        check: usdc_balance_polygon
+
+tests:
+  quick:
+    - validates_env_config
+  smoke:
+    - dry_run_quotes_full_pipeline
+    - rejects_without_private_key
+
+publish:
+  org: polymarket
+  slug: p2p-leverage-bitcoin-usdc-deposit
+
+metadata:
+  category: trading
