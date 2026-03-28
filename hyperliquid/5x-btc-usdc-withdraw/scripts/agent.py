@@ -24,7 +24,7 @@ LIVE_SAFETY_VERSION = "2026-03-28.hyperliquid-5x-btc-withdraw-v1"
 DEFAULT_DRY_RUN = True
 DEFAULT_LEVERAGE = 5
 DEFAULT_API_BASE = "https://api.serendb.com"
-HYPERLIQUID_API = "https://api.hyperliquid.xyz"
+HYPERLIQUID_PUBLISHER = "seren-hyperliquid"
 
 
 def _ts() -> str:

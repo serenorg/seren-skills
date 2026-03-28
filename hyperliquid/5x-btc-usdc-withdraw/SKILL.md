@@ -17,7 +17,7 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 
 ## What This Skill Does
 
-Deposits USDC to Hyperliquid, opens a 5x BTC-PERP long, and withdraws the free USDC (deposit minus margin). No debt — the withdrawn USDC is yours. Uses Hyperliquid Python SDK for wallet-signed execution and Seren publishers for RPC and price data.
+Deposits USDC to Hyperliquid, opens a 5x BTC-PERP long, and withdraws the free USDC (deposit minus margin). No debt — the withdrawn USDC is yours. All Hyperliquid API calls route through the `seren-hyperliquid` publisher (HyperEVM + HyperCore via QuickNode). Backtest uses `coingecko-serenai` publisher for BTC prices.
 
 ### Pipeline
 

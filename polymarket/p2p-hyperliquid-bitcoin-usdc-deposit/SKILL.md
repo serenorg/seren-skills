@@ -17,7 +17,7 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 
 ## What This Skill Does
 
-Converts a cash deposit into a 5x leveraged BTC-PERP on Hyperliquid, then withdraws free USDC directly to Polymarket on Polygon via CCTP. No debt is created — the Polymarket funds are free from day one.
+Converts a cash deposit into a 5x leveraged BTC-PERP on Hyperliquid, then withdraws free USDC directly to Polymarket on Polygon via CCTP. No debt is created — the Polymarket funds are free from day one. All Hyperliquid API calls route through the `seren-hyperliquid` publisher. Backtest uses `coingecko-serenai` publisher for BTC prices.
 
 ### Pipeline
 

@@ -8,7 +8,7 @@
     "leverage": 5
   },
   "hyperliquid": {
-    "api_url": "https://api.hyperliquid.xyz",
+    "publisher": "seren-hyperliquid",
     "asset_index": 0
   },
   "skill": "p2p-hyperliquid-bitcoin-usdc-deposit"
