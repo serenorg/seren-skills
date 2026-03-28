@@ -1,6 +1,6 @@
 {
   "status": "ok",
-  "skill": "p2p-leverage-bitcoin-polymarket-deposit",
+  "skill": "ramp-leverage-bitcoin-polymarket-deposit",
   "workflow_step_count": 6,
   "dry_run": true,
   "inputs": {

@@ -1,6 +1,6 @@
 {
   "status": "error",
-  "skill": "p2p-leverage-bitcoin-polymarket-deposit",
+  "skill": "ramp-leverage-bitcoin-polymarket-deposit",
   "error_code": "connector_failure",
   "connector": "unknown_connector",
   "message": "Connector call failed during smoke test.",

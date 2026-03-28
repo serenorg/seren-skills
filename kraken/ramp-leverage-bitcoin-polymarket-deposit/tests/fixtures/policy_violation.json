@@ -1,6 +1,6 @@
 {
   "status": "error",
-  "skill": "p2p-leverage-bitcoin-polymarket-deposit",
+  "skill": "ramp-leverage-bitcoin-polymarket-deposit",
   "error_code": "policy_violation",
   "policy": "max_notional_usd",
   "message": "Requested notional exceeds configured cap."
