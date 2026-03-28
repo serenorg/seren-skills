@@ -1,4 +1,4 @@
-"""Critical smoke tests for kraken/p2p-leverage-bitcoin-polymarket-deposit."""
+"""Critical smoke tests for kraken/ramp-leverage-bitcoin-polymarket-deposit."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _load_agent():
 def test_happy_path_fixture() -> None:
     payload = _read_fixture("happy_path.json")
     assert payload["status"] == "ok"
-    assert payload["skill"] == "p2p-leverage-bitcoin-polymarket-deposit"
+    assert payload["skill"] == "ramp-leverage-bitcoin-polymarket-deposit"
 
 
 def test_connector_failure_fixture() -> None:
