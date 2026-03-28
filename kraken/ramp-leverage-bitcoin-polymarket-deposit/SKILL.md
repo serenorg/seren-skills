@@ -3,7 +3,7 @@ name: ramp-leverage-bitcoin-polymarket-deposit
 description: "Deposit up to 5x leveraged cash into Polymarket using Kraken margin trading. Fiat onramp via Kraken Ramp API. Uses Kraken REST API directly — user supplies their own API keys."
 ---
 
-# P2P Cash Leveraged Bitcoin Polymarket Deposits (Kraken)
+# Ramp Leveraged Bitcoin Polymarket Deposits (Kraken)
 
 ## For Claude: How to Use This Skill
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P2P Cash Leveraged Bitcoin Polymarket Deposits (Kraken) — 5x margin via direct Kraken REST API.
+"""Ramp Leveraged Bitcoin Polymarket Deposits (Kraken) — 5x margin via direct Kraken REST API.
 
 Pipeline: Cash → Kraken Ramp (fiat → USDC) → margin buy BTC 5x →
           withdraw USDC → Polygon → Polymarket funded.
@@ -28,7 +28,7 @@ if not sys.stdout.isatty():
     sys.stdout.reconfigure(line_buffering=True)
     sys.stderr.reconfigure(line_buffering=True)
 
-LIVE_SAFETY_VERSION = "2026-03-28.kraken-p2p-leverage-live-safety-v1"
+LIVE_SAFETY_VERSION = "2026-03-28.kraken-ramp-leverage-live-safety-v1"
 DEFAULT_DRY_RUN = True
 DEFAULT_KRAKEN_BASE = "https://api.kraken.com"
 DEFAULT_LEVERAGE = 5
@@ -375,7 +375,7 @@ def run_status(cfg: dict) -> dict:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="P2P Cash Leveraged Bitcoin Polymarket Deposits (Kraken)")
+        description="Ramp Leveraged Bitcoin Polymarket Deposits (Kraken)")
     p.add_argument("command", nargs="?", default="run",
                    choices=["run", "status", "stop"])
     p.add_argument("--config", default="config.json")
