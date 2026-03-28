@@ -265,19 +265,15 @@ class PolymarketClient:
             return 0.0
 
     def _get_book_levels(self, token_id: str):
-        """Get best bid/ask from CLOB, falling back to raw data if parsed lists are empty."""
+        """Get best bid/ask from CLOB.
+
+        Uses parse_book_payload which correctly handles the Polymarket CLOB
+        sort order (bids ascending, asks descending) by scanning for the
+        true max bid and min ask.
+        """
         from polymarket_live import fetch_book
         book = fetch_book(token_id)
-        bids = book.get('bids', [])
-        asks = book.get('asks', [])
-        if not bids or not asks:
-            raw = book.get('raw', {})
-            if isinstance(raw, dict):
-                bids = bids or raw.get('bids', [])
-                asks = asks or raw.get('asks', [])
-        best_bid = float(bids[0]['price']) if bids else 0.0
-        best_ask = float(asks[0]['price']) if asks else 0.0
-        return best_bid, best_ask
+        return book.get('best_bid', 0.0), book.get('best_ask', 0.0)
 
     def get_price(self, token_id: str, side: str) -> float:
         """Get current price for a token from the CLOB orderbook."""
@@ -295,18 +291,18 @@ class PolymarketClient:
         """
         from polymarket_live import fetch_book
         book = fetch_book(token_id)
-        bids = book.get('bids', [])
-        asks = book.get('asks', [])
-        if not bids or not asks:
-            raw = book.get('raw', {})
-            if isinstance(raw, dict):
-                bids = bids or raw.get('bids', [])
-                asks = asks or raw.get('asks', [])
 
-        best_bid = float(bids[0]['price']) if bids else 0.0
-        best_ask = float(asks[0]['price']) if asks else 0.0
+        # best_bid/best_ask are correctly computed by parse_book_payload
+        # (scans for max bid and min ask regardless of sort order)
+        best_bid = book.get('best_bid', 0.0)
+        best_ask = book.get('best_ask', 0.0)
         mid = (best_bid + best_ask) / 2.0 if best_bid and best_ask else 0.0
         spread = (best_ask - best_bid) if best_bid and best_ask else 0.0
+
+        # Get raw levels for depth calculation
+        raw = book.get('raw', {})
+        bids = raw.get('bids', []) if isinstance(raw, dict) else []
+        asks = raw.get('asks', []) if isinstance(raw, dict) else []
 
         # Visible depth in USD: sum(price * size) for each level
         bid_depth = sum(

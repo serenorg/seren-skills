@@ -177,15 +177,32 @@ def last_move_bps(history: list[tuple[int, float]]) -> float:
     return abs((history[-1][1] - history[-2][1]) * 10000.0)
 
 
-def best_price(levels: Any, fallback: float = 0.0) -> float:
+def best_price(levels: Any, fallback: float = 0.0, side: str = "bid") -> float:
+    """Return the best price from a list of order book levels.
+
+    The Polymarket CLOB /book endpoint returns bids sorted ascending
+    (worst→best) and asks sorted descending (worst→best).  Therefore:
+      - Best bid  = highest price  = last element of bids list
+      - Best ask  = lowest  price  = last element of asks list
+    """
     if not isinstance(levels, list) or not levels:
         return fallback
-    level = levels[0]
-    if isinstance(level, dict):
-        return safe_float(level.get("price"), fallback)
-    if isinstance(level, (list, tuple)) and level:
-        return safe_float(level[0], fallback)
-    return fallback
+
+    def _extract(level: Any) -> float:
+        if isinstance(level, dict):
+            return safe_float(level.get("price"), fallback)
+        if isinstance(level, (list, tuple)) and level:
+            return safe_float(level[0], fallback)
+        return fallback
+
+    # CLOB returns bids ascending, asks descending — best price is at the end
+    # for both sides.  As a safety net, scan all levels to find the true best.
+    if side.lower() == "bid":
+        return max((_extract(lv) for lv in levels), default=fallback)
+    else:
+        prices = [_extract(lv) for lv in levels]
+        valid = [p for p in prices if p > 0]
+        return min(valid, default=fallback)
 
 
 def snap_price(price: float, tick_size: str, side: str) -> float:
@@ -219,8 +236,8 @@ def parse_book_payload(payload: Any) -> dict[str, Any]:
             "neg_risk": False,
             "raw": payload,
         }
-    best_bid = best_price(payload.get("bids"), 0.0)
-    best_ask = best_price(payload.get("asks"), 0.0)
+    best_bid = best_price(payload.get("bids"), 0.0, side="bid")
+    best_ask = best_price(payload.get("asks"), 0.0, side="ask")
     tick_size = safe_str(
         payload.get("tick_size", payload.get("minimum_tick_size", "0.01")),
         "0.01",
