@@ -12,6 +12,8 @@
   "min_volume": 5000.0,
   "max_divergence": 0.50,
   "min_buy_price": 0.02,
+  "min_edge_to_spread_ratio": 3.0,
+  "max_depth_fraction": 0.25,
   "iteration": {
     "max_iterations": 2,
     "threshold_step": 0.01,
