@@ -1,0 +1,11 @@
+{
+  "status": "ok",
+  "skill": "p2p-leverage-bitcoin-polymarket-deposit",
+  "workflow_step_count": 6,
+  "dry_run": true,
+  "inputs": {
+    "deposit_amount_usd": 200,
+    "leverage": 5
+  },
+  "connectors": {}
+}

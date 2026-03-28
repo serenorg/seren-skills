@@ -1,0 +1,18 @@
+{
+  "dry_run": true,
+  "inputs": {
+    "deposit_amount_usd": 200,
+    "leverage": 5
+  },
+  "kraken": {
+    "base_url": "https://api.kraken.com",
+    "margin_pair": "XBTUSD",
+    "withdrawal_key_name": ""
+  },
+  "warnings": [
+    "Dry-run is the default. No orders or withdrawals without --yes-live.",
+    "Set kraken.withdrawal_key_name to your pre-configured Kraken withdrawal address name for Polygon USDC.",
+    "At 5x leverage, a ~20% BTC drop triggers liquidation."
+  ],
+  "skill": "p2p-leverage-bitcoin-polymarket-deposit"
+}

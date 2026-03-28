@@ -1,0 +1,86 @@
+skill: p2p-leverage-bitcoin-polymarket-deposit
+description: >-
+  Deposit up to 5x leveraged cash into Polymarket using Kraken margin trading.
+  Use any supported Payment app on Peer for fiat onramp.
+  Uses Kraken REST API directly — user supplies their own API keys.
+triggers:
+  - leverage bitcoin on kraken to fund polymarket
+  - kraken margin leveraged bitcoin polymarket deposit
+  - deposit cash into polymarket with kraken bitcoin leverage
+
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+
+inputs:
+  deposit_amount_usd:
+    type: number
+    min: 1
+    max: 200
+    default: 200
+    description: Amount of cash to deposit via P2P onramp (USD)
+  leverage:
+    type: integer
+    min: 2
+    max: 5
+    default: 5
+    description: Kraken margin leverage multiplier (2x-5x)
+
+secrets:
+  - KRAKEN_API_KEY
+  - KRAKEN_API_SECRET
+  - SEREN_API_KEY
+
+policies:
+  dry_run_default: true
+  idempotency_required: true
+  max_daily_spend_usd: 200
+  max_notional_usd: 1000
+
+workflow:
+  steps:
+    - id: setup
+      use: transform.validate_environment
+      with:
+        required_keys:
+          - KRAKEN_API_KEY
+          - KRAKEN_API_SECRET
+    - id: check_kraken_balance
+      use: transform.kraken_api
+      with:
+        endpoint: /0/private/Balance
+    - id: check_margin_status
+      use: transform.kraken_api
+      with:
+        endpoint: /0/private/TradeBalance
+    - id: get_deposit_address
+      use: transform.kraken_api
+      with:
+        endpoint: /0/private/DepositAddresses
+        asset: USDC
+    - id: buy_btc_margin
+      use: transform.kraken_api
+      with:
+        endpoint: /0/private/AddOrder
+        pair: XBTUSD
+        leverage: 5
+    - id: withdraw_usdc_polygon
+      use: transform.kraken_api
+      with:
+        endpoint: /0/private/Withdraw
+        asset: USDC
+        network: polygon
+
+tests:
+  quick:
+    - validates_env_config
+  smoke:
+    - dry_run_quotes_full_pipeline
+    - rejects_without_api_key
+
+publish:
+  org: kraken
+  slug: p2p-leverage-bitcoin-polymarket-deposit
+
+metadata:
+  category: trading
