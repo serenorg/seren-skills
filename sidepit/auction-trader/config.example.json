@@ -1,0 +1,35 @@
+{
+  "skill": "auction-trader",
+  "dry_run": true,
+  "inputs": {
+    "ticker": "USDBTCH26",
+    "max_position_size": 10,
+    "max_order_size": 5,
+    "auction_cycle_ms": 1000
+  },
+  "connectors": {
+    "sidepit_exchange": {
+      "protocol": "tcp://",
+      "host": "api.sidepit.com",
+      "client_port": 12121,
+      "feed_port": 12122,
+      "echo_port": 12123,
+      "position_port": 12125
+    }
+  },
+  "serendb": {
+    "enabled": true,
+    "dsn": "",
+    "project_name": "sidepit-auction-trader",
+    "database_name": "sidepit_auction_trader",
+    "branch_name": "production",
+    "schema_path": "sql/schema.sql"
+  },
+  "policies": {
+    "dry_run_default": true,
+    "idempotency_required": true,
+    "max_daily_spend_usd": 500,
+    "max_notional_usd": 5000,
+    "max_slippage_bps": 100
+  }
+}

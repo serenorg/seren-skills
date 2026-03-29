@@ -33,6 +33,7 @@ TAARIQ_SKILLS: list[str] = [
     "prophet/prophet-growth-agent",
     "prophet/prophet-adversarial-auditor",
     "prophet/prophet-market-seeder",
+    "sidepit/auction-trader",
 ]
 
 # Skills that have the full ## API Key Setup section (not just a docs link)

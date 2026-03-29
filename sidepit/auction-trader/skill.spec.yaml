@@ -1,0 +1,108 @@
+skill: auction-trader
+description: >-
+  AI agent trading skill for Sidepit's 1-second discrete auction exchange —
+  submit orders, subscribe to market data, manage positions, and persist all
+  auction activity to SerenDB via NNG/protobuf API.
+
+triggers:
+  - trade on sidepit
+  - sidepit auction trading
+  - submit orders to sidepit exchange
+  - sidepit market data feed
+  - sidepit agent trading bot
+  - discrete auction trading
+  - DLOB trading
+
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+
+secrets:
+  - SIDEPIT_ID
+  - SIDEPIT_SECRET
+  - SEREN_API_KEY
+
+connectors:
+  sidepit_exchange:
+    kind: seren_publisher
+    publisher: sidepit
+
+state:
+  auction_activity:
+    kind: serendb
+    database: sidepit_auction_trader
+    table: auction_orders
+
+inputs:
+  ticker:
+    type: string
+    description: Contract symbol to trade
+    default: USDBTCH26
+  max_position_size:
+    type: integer
+    description: Maximum position size in contracts
+    default: 10
+  max_order_size:
+    type: integer
+    description: Maximum single order size
+    default: 5
+  auction_cycle_ms:
+    type: integer
+    description: Auction cycle duration in milliseconds
+    default: 1000
+
+policies:
+  dry_run_default: true
+  idempotency_required: true
+  max_daily_spend_usd: 500
+  max_notional_usd: 5000
+  max_slippage_bps: 100
+
+workflow:
+  steps:
+    - id: connect_feed
+      use: connector.sidepit_exchange.subscribe_feed
+      with:
+        port: 12122
+        transport: nng_sub
+    - id: fetch_depth
+      use: connector.sidepit_exchange.get_depth
+      with:
+        port: 12125
+        transport: nng_reqrep
+    - id: reason
+      use: transform.agent_inference
+      with:
+        budget_ms: 800
+    - id: submit_order
+      use: connector.sidepit_exchange.send_order
+      with:
+        port: 12121
+        transport: nng_push
+    - id: persist_activity
+      use: state.auction_activity.upsert
+      with:
+        tables:
+          - auction_orders
+          - auction_fills
+          - market_snapshots
+          - position_snapshots
+
+tests:
+  quick:
+    - schema_validation
+    - semantic_validation
+  smoke:
+    - happy_path
+    - connector_failure
+    - policy_violation
+    - dry_run_guard
+
+publish:
+  org: sidepit
+  slug: auction-trader
+
+metadata:
+  category: trading
+  patent: US10608825B2
+  source: https://github.com/sidepit/Public-API

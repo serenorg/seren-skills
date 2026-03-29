@@ -24,6 +24,7 @@ TRADING_SKILLS: list[tuple[str, str]] = [
     ("curve/curve-gauge-yield-trader", "dry-run"),
     ("spectra/spectra-pt-yield-trader", "dry-run"),
     ("alphagrowth/euler-base-vault-bot", "dry-run"),
+    ("sidepit/auction-trader", "dry-run"),
 ]
 
 

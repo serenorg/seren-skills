@@ -38,6 +38,7 @@ TARGET_FILES = [
     "wellsfargo/tax-prep/scripts/agent.py",
     "wellsfargo/vendor-analysis/scripts/agent.py",
     "zkp2p/peer-to-peer-payments-exchange/scripts/agent.py",
+    "sidepit/auction-trader/scripts/agent.py",
 ]
 
 
