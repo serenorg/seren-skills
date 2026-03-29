@@ -1,0 +1,15 @@
+{
+  "status": "ok",
+  "skill": "auction-trader",
+  "workflow_step_count": 5,
+  "dry_run": true,
+  "inputs": {
+    "ticker": "USDBTCH26",
+    "max_position_size": 10,
+    "max_order_size": 5,
+    "auction_cycle_ms": 1000
+  },
+  "connectors": {
+    "sidepit_exchange": "ok"
+  }
+}

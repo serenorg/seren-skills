@@ -1,0 +1,6 @@
+{
+  "status": "error",
+  "skill": "auction-trader",
+  "error_code": "policy_violation",
+  "message": "Policy limit exceeded."
+}

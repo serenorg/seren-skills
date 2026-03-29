@@ -1,0 +1,7 @@
+{
+  "status": "error",
+  "skill": "auction-trader",
+  "error_code": "connector_failure",
+  "connector": "sidepit_exchange",
+  "message": "Connector call failed during smoke test."
+}
