@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-DEFAULT_DRY_RUN = True
+DEFAULT_DRY_RUN = False
 DEFAULT_COMMAND = "run"
 DEFAULT_PROJECT_NAME = "prophet"
 DEFAULT_DATABASE_NAME = "prophet"
@@ -514,6 +514,7 @@ class SubmissionResult:
     candidate_id: str
     status: str
     payload: Dict[str, Any] = field(default_factory=dict)
+    prophet_market_id: Optional[str] = None
 
 
 @dataclass
@@ -628,12 +629,69 @@ def load_recent_submissions(connection_string: Optional[str], schema_name: str) 
         return []
 
 
+def _create_market_via_playwright(
+    question: str,
+    base_url: str,
+) -> Optional[str]:
+    """Attempt to create a market on Prophet via browser UI.
+
+    Returns the prophet market ID on success, or None on failure.
+    Requires playwright and a browser with an active Prophet session.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp("http://localhost:9222")
+            context = browser.contexts[0] if browser.contexts else None
+            if not context:
+                return None
+            page = context.pages[0] if context.pages else context.new_page()
+
+            page.goto(f"{base_url}/create", wait_until="networkidle", timeout=15000)
+
+            # Fill the question textarea
+            textarea = page.locator("textarea").first
+            textarea.fill(question)
+            textarea.press("Enter")
+
+            # Wait for validation result to appear
+            page.wait_for_timeout(3000)
+
+            # Click the create/submit button
+            create_btn = page.locator("button:has-text('Create'), button:has-text('Submit'), button:has-text('Confirm')").first
+            if create_btn.is_visible():
+                create_btn.click()
+                page.wait_for_timeout(5000)
+
+            # Check if we landed on a market page
+            current_url = page.url
+            if "/market/" in current_url or "/markets/" in current_url:
+                # Extract market ID from URL
+                parts = current_url.rstrip("/").split("/")
+                return parts[-1] if parts else None
+
+            # Try to find market ID in the page
+            market_link = page.locator("a[href*='/market/']").first
+            if market_link.is_visible():
+                href = market_link.get_attribute("href") or ""
+                parts = href.rstrip("/").split("/")
+                return parts[-1] if parts else None
+
+            return None
+    except Exception:
+        return None
+
+
 def submit_market_batch(
     ctx: PipelineContext,
     candidates: List[MarketCandidate],
     api: ProphetApi,
 ) -> List[SubmissionResult]:
-    """Submit filtered candidates via initiateMarket. Respects dry_run."""
+    """Validate candidates via initiateMarket, then create via Playwright UI."""
     results: List[SubmissionResult] = []
     for c in candidates:
         sub_id = _make_id()
@@ -649,22 +707,51 @@ def submit_market_batch(
 
         try:
             validation = api.initiate_market(c.question)
-            status = "accepted" if validation.get("isValid") else "rejected"
+            is_valid = validation.get("isValid", False)
+            base_payload = {
+                "question": c.question,
+                "category": c.category,
+                "is_valid": is_valid,
+                "suggestion": validation.get("suggestion"),
+                "title": validation.get("title"),
+                "resolution_date": validation.get("resolutionDate"),
+                "resolution_rules": validation.get("resolutionRules"),
+            }
+
+            if not is_valid:
+                results.append(SubmissionResult(
+                    submission_id=sub_id,
+                    candidate_id=c.candidate_id,
+                    status="rejected",
+                    payload=base_payload,
+                ))
+                ctx.events.append({"event_type": "submission_completed", "payload": {"candidate_id": c.candidate_id, "status": "rejected"}})
+                continue
+
+            # Validated — attempt creation via Playwright
+            prophet_market_id = None
+            status = "validated"
+            try:
+                prophet_market_id = _create_market_via_playwright(c.question, api.base_url)
+                if prophet_market_id:
+                    status = "created"
+                    ctx.events.append({"event_type": "market_created", "payload": {"candidate_id": c.candidate_id, "prophet_market_id": prophet_market_id}})
+                else:
+                    base_payload["creation_error"] = "Playwright creation returned no market ID"
+                    ctx.events.append({"event_type": "creation_failed", "payload": {"candidate_id": c.candidate_id, "reason": "no_market_id"}})
+            except Exception as create_exc:
+                base_payload["creation_error"] = str(create_exc)
+                ctx.events.append({"event_type": "creation_failed", "payload": {"candidate_id": c.candidate_id, "error": str(create_exc)}})
+
             results.append(SubmissionResult(
                 submission_id=sub_id,
                 candidate_id=c.candidate_id,
                 status=status,
-                payload={
-                    "question": c.question,
-                    "category": c.category,
-                    "is_valid": validation.get("isValid"),
-                    "suggestion": validation.get("suggestion"),
-                    "title": validation.get("title"),
-                    "resolution_date": validation.get("resolutionDate"),
-                    "resolution_rules": validation.get("resolutionRules"),
-                },
+                payload=base_payload,
+                prophet_market_id=prophet_market_id,
             ))
             ctx.events.append({"event_type": "submission_completed", "payload": {"candidate_id": c.candidate_id, "status": status}})
+
         except ProphetSkillError as exc:
             results.append(SubmissionResult(
                 submission_id=sub_id,
@@ -711,9 +798,9 @@ def persist_run(ctx: PipelineContext, schema_name: str) -> Dict[str, int]:
                 for s in ctx.submissions:
                     cur.execute(
                         f"INSERT INTO {schema_name}.market_submissions "
-                        f"(submission_id, run_id, candidate_id, status, payload) "
-                        f"VALUES (%s, %s, %s, %s, %s) ON CONFLICT (submission_id) DO NOTHING",
-                        (s.submission_id, ctx.run_id, s.candidate_id, s.status, json.dumps(s.payload)),
+                        f"(submission_id, run_id, candidate_id, status, prophet_market_id, payload) "
+                        f"VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (submission_id) DO NOTHING",
+                        (s.submission_id, ctx.run_id, s.candidate_id, s.status, s.prophet_market_id, json.dumps(s.payload)),
                     )
                 counts["market_submissions"] = len(ctx.submissions)
 
@@ -733,7 +820,8 @@ def persist_run(ctx: PipelineContext, schema_name: str) -> Dict[str, int]:
 
 def render_report(ctx: PipelineContext, storage_result: dict, persist_counts: dict) -> dict:
     """Build the final structured run report."""
-    accepted = [s for s in ctx.submissions if s.status == "accepted"]
+    validated = [s for s in ctx.submissions if s.status == "validated"]
+    created = [s for s in ctx.submissions if s.status == "created"]
     rejected = [s for s in ctx.submissions if s.status == "rejected"]
     skipped = [s for s in ctx.submissions if s.status == "dry_run_skipped"]
     errored = [s for s in ctx.submissions if s.status == "error"]
@@ -749,7 +837,8 @@ def render_report(ctx: PipelineContext, storage_result: dict, persist_counts: di
         "pipeline": {
             "candidates_generated": len(ctx.candidates),
             "candidates_filtered": len(ctx.filtered),
-            "submissions_accepted": len(accepted),
+            "submissions_validated": len(validated),
+            "submissions_created": len(created),
             "submissions_rejected": len(rejected),
             "submissions_skipped": len(skipped),
             "submissions_errored": len(errored),
@@ -761,6 +850,7 @@ def render_report(ctx: PipelineContext, storage_result: dict, persist_counts: di
                 "question": s.payload.get("question", ""),
                 "title": s.payload.get("title"),
                 "is_valid": s.payload.get("is_valid"),
+                "prophet_market_id": s.prophet_market_id,
             }
             for s in ctx.submissions
         ],

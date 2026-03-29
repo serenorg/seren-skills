@@ -2,7 +2,7 @@
   "connectors": [
     "storage"
   ],
-  "dry_run": true,
+  "dry_run": false,
   "storage": {
     "auto_bootstrap": true,
     "project_name": "prophet",

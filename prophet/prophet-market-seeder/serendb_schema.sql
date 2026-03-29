@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS {{schema_name}}.market_submissions (
     run_id TEXT NOT NULL,
     candidate_id TEXT,
     status TEXT NOT NULL,
+    prophet_market_id TEXT,
     payload JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
