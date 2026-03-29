@@ -285,8 +285,41 @@ def test_submit_batch_live_calls_initiate_market(monkeypatch) -> None:
     api = agent.ProphetApi("fake-token")
     results = agent.submit_market_batch(ctx, candidates, api)
     assert len(results) == 1
-    assert results[0].status == "accepted"
+    assert results[0].status == "validated"
     assert results[0].payload["title"] == "Will BTC moon?"
+
+
+def test_submit_batch_creates_market_via_playwright(monkeypatch) -> None:
+    agent = _load_agent_module()
+    ctx = agent.PipelineContext(
+        session_id="s1", run_id="r1", command="run", dry_run=False,
+        referral_code="TEST", candidate_limit=5, submit_limit=2,
+        strict_mode=True, token="tok",
+    )
+    candidates = [
+        agent.MarketCandidate(candidate_id="a", category="Crypto", question="Will BTC moon?", score=0.9),
+    ]
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return json.dumps({"data": {"initiateMarket": {
+                "isValid": True, "suggestion": None,
+                "title": "Will BTC moon?", "resolutionDate": "2026-12-31",
+                "resolutionRules": "Resolves YES if BTC > 200K",
+            }}}).encode("utf-8")
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", lambda req, timeout=30: FakeResponse())
+    monkeypatch.setattr(agent, "_create_market_via_playwright", lambda question, base_url: "mkt_456")
+
+    api = agent.ProphetApi("fake-token")
+    results = agent.submit_market_batch(ctx, candidates, api)
+    assert len(results) == 1
+    assert results[0].status == "created"
+    assert results[0].prophet_market_id == "mkt_456"
 
 
 def test_run_once_pipeline_dry_run_returns_full_report(monkeypatch) -> None:
