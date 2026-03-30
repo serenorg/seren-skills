@@ -22,6 +22,12 @@
     "annualized_return_floor": 0.0,
     "low_balance_threshold": 1.50
   },
+  "execution": {
+    "max_drawdown_pct": 15.0,
+    "max_position_age_hours": 72,
+    "min_serenbucks_balance": 1.0,
+    "auto_pause_on_exhaustion": true
+  },
   "cron": {
     "runner_name": "",
     "machine_label": "",

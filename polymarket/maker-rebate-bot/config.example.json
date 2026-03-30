@@ -12,7 +12,11 @@
     "operation_timeout_seconds": 10,
     "operation_retry_attempts": 1,
     "min_cash_reserve_usd": 100,
-    "max_live_drawdown_pct": 15
+    "max_live_drawdown_pct": 15,
+    "max_drawdown_pct": 15.0,
+    "max_position_age_hours": 72,
+    "min_serenbucks_balance": 1.0,
+    "auto_pause_on_exhaustion": true
   },
   "backtest": {
     "bankroll_usd": 100,

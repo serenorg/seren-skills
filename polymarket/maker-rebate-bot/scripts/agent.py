@@ -36,6 +36,12 @@ from polymarket_live import (
     single_market_inventory_notional,
 )
 from normalized_trade_store import NormalizedTradingStore
+from risk_guards import (
+    auto_pause_cron,
+    check_drawdown_stop_loss,
+    check_position_age,
+    sync_position_timestamps,
+)
 
 SEREN_POLYMARKET_PUBLISHER_HOST = "api.serendb.com"
 SEREN_PUBLISHERS_PREFIX = "/publishers/"
@@ -957,14 +963,6 @@ def _fetch_predictions_signals(
     estimated_cost = 0.30  # batch consensus ($0.15) + batch divergence ($0.15)
     if balance < estimated_cost:
         import sys
-
-# --- Force unbuffered stdout so piped/background output is visible immediately ---
-if not sys.stdout.isatty():
-    os.environ.setdefault("PYTHONUNBUFFERED", "1")
-    sys.stdout.reconfigure(line_buffering=True)
-    sys.stderr.reconfigure(line_buffering=True)
-# --- End unbuffered stdout fix ---
-
         print(
             f"WARNING: SerenBucks balance (${balance:.2f}) may be insufficient for "
             f"predictions intelligence (estimated ${estimated_cost:.2f}). "
@@ -2774,6 +2772,38 @@ def run_once(
             payload["status"] = "error"
             payload["error_code"] = live_execution.get("error_code")
             payload["message"] = live_execution.get("message")
+
+        # ── risk guards ──────────────────────────────────────────
+        live_risk = live_execution.get("live_risk", {})
+        max_dd = config.get("execution", {}).get("max_drawdown_pct", 15.0)
+
+        unwind_result = check_drawdown_stop_loss(
+            live_risk=live_risk,
+            max_drawdown_pct=float(max_dd),
+            unwind_fn=lambda: run_unwind_all(config),
+            log_fn=print,
+        )
+        if unwind_result:
+            payload["risk_guard_triggered"] = "drawdown_stop_loss"
+            payload["unwind_result"] = unwind_result
+            cron_job_id = config.get("cron", {}).get("job_id", "")
+            if cron_job_id:
+                try:
+                    from setup_cron import pause_job
+                    auto_pause_cron(serenbucks_balance=0.0, trading_balance=0.0, min_serenbucks=1.0, job_id=cron_job_id, pause_fn=pause_job)
+                except Exception:
+                    pass
+
+        # position age tracking
+        max_age_h = float(config.get("execution", {}).get("max_position_age_hours", 72.0))
+        inventory = live_execution.get("updated_inventory", config.get("state", {}).get("inventory", {}))
+        pos_ts = config.get("state", {}).get("position_timestamps", {})
+        pos_ts = sync_position_timestamps(position_timestamps=pos_ts, current_exposure=inventory)
+        aged_tokens = check_position_age(position_timestamps=pos_ts, current_exposure=inventory, max_age_hours=max_age_h)
+        if aged_tokens:
+            print(f"    POSITION AGE LIMIT: {len(aged_tokens)} positions exceed {max_age_h}h. Tokens: {aged_tokens}")
+
+        payload["state"]["position_timestamps"] = pos_ts
     return payload
 
 
