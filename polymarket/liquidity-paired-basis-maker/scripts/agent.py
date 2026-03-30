@@ -52,6 +52,12 @@ from pair_stateful_replay import (
     write_telemetry_records,
 )
 from normalized_trade_store import NormalizedTradingStore
+from risk_guards import (
+    auto_pause_cron,
+    check_drawdown_stop_loss,
+    check_position_age,
+    sync_position_timestamps,
+)
 
 SEREN_POLYMARKET_PUBLISHER_HOST = "api.serendb.com"
 SEREN_PUBLISHERS_PREFIX = "/publishers/"
@@ -2172,6 +2178,38 @@ def run_trade(config: dict[str, Any], markets_file: str | None, yes_live: bool) 
             payload["status"] = "error"
             payload["error_code"] = live_execution.get("error_code")
             payload["message"] = live_execution.get("message")
+
+        # ── risk guards ──────────────────────────────────────────
+        live_risk = live_execution.get("live_risk", {})
+        max_dd = config.get("execution", {}).get("max_drawdown_pct", 15.0)
+
+        unwind_result = check_drawdown_stop_loss(
+            live_risk=live_risk,
+            max_drawdown_pct=float(max_dd),
+            unwind_fn=lambda: run_unwind_all(config),
+            log_fn=print,
+        )
+        if unwind_result:
+            payload["risk_guard_triggered"] = "drawdown_stop_loss"
+            payload["unwind_result"] = unwind_result
+            cron_job_id = config.get("cron", {}).get("job_id", "")
+            if cron_job_id:
+                try:
+                    from setup_cron import pause_job
+                    auto_pause_cron(serenbucks_balance=0.0, trading_balance=0.0, min_serenbucks=1.0, job_id=cron_job_id, pause_fn=pause_job)
+                except Exception:
+                    pass
+
+        # position age tracking
+        max_age_h = float(config.get("execution", {}).get("max_position_age_hours", 72.0))
+        leg_exposure = live_execution.get("updated_leg_exposure", config.get("state", {}).get("leg_exposure", {}))
+        pos_ts = config.get("state", {}).get("position_timestamps", {})
+        pos_ts = sync_position_timestamps(position_timestamps=pos_ts, current_exposure=leg_exposure)
+        aged_tokens = check_position_age(position_timestamps=pos_ts, current_exposure=leg_exposure, max_age_hours=max_age_h)
+        if aged_tokens:
+            print(f"    POSITION AGE LIMIT: {len(aged_tokens)} positions exceed {max_age_h}h. Tokens: {aged_tokens}")
+
+        payload["state"]["position_timestamps"] = pos_ts
     return payload
 
 

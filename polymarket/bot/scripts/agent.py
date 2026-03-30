@@ -40,6 +40,12 @@ from logger import TradingLogger
 from serendb_storage import SerenDBStorage
 import kelly
 import calibration
+from risk_guards import (
+    auto_pause_cron,
+    check_drawdown_stop_loss,
+    check_position_age,
+    sync_position_timestamps,
+)
 
 
 class TradingAgent:
@@ -92,6 +98,10 @@ class TradingAgent:
         self.max_kelly_fraction = float(self.config['max_kelly_fraction'])
         self.max_positions = int(self.config['max_positions'])
         self.stop_loss_bankroll = float(self.config.get('stop_loss_bankroll', 0.0))
+        self.max_drawdown_pct = float(self.config.get("execution", {}).get("max_drawdown_pct", self.config.get("max_drawdown_pct", 15.0)))
+        self.max_position_age_hours = float(self.config.get("execution", {}).get("max_position_age_hours", 72.0))
+        self.min_serenbucks_balance = float(self.config.get("execution", {}).get("min_serenbucks_balance", 1.0))
+        self.cron_job_id = self.config.get("cron", {}).get("job_id", os.environ.get("SEREN_CRON_JOB_ID", ""))
 
         # Safety guards (configurable, with backward-compatible defaults)
         self.min_annualized_return = float(self.config.get('min_annualized_return', 0.25))
@@ -777,6 +787,49 @@ class TradingAgent:
             print(f"  ⚠️  Sync failed: {e}")
         print()
 
+        # ── risk guards ──────────────────────────────────────────
+        current_bankroll = self.positions.get_current_bankroll(self.bankroll)
+        peak = getattr(self, "_peak_equity", self.bankroll)
+        if current_bankroll > peak:
+            peak = current_bankroll
+        self._peak_equity = peak
+        dd_pct = ((peak - current_bankroll) / peak * 100.0) if peak > 0 else 0.0
+
+        live_risk = {"drawdown_pct": dd_pct, "current_equity_usd": current_bankroll, "peak_equity_usd": peak}
+        unwind_result = check_drawdown_stop_loss(
+            live_risk=live_risk,
+            max_drawdown_pct=self.max_drawdown_pct,
+            unwind_fn=lambda: {"action": "unwind_triggered", "positions_closed": len(self.positions.get_all_positions())},
+        )
+        if unwind_result:
+            if self.cron_job_id:
+                try:
+                    from setup_cron import pause_job
+                    auto_pause_cron(
+                        serenbucks_balance=0.0,
+                        trading_balance=0.0,
+                        min_serenbucks=1.0,
+                        job_id=self.cron_job_id,
+                        pause_fn=pause_job,
+                    )
+                except Exception:
+                    pass
+            return 0
+
+        # check position age
+        all_positions = self.positions.get_all_positions()
+        for pos in all_positions:
+            if not hasattr(pos, "opened_at") or not pos.opened_at:
+                continue
+            try:
+                from datetime import datetime, timezone
+                opened = datetime.fromisoformat(pos.opened_at.replace("Z", "+00:00"))
+                age_hours = (datetime.now(timezone.utc) - opened).total_seconds() / 3600.0
+                if age_hours >= self.max_position_age_hours and self.max_position_age_hours > 0:
+                    print(f"    POSITION AGE LIMIT: {pos.market} open {age_hours:.1f}h >= {self.max_position_age_hours}h limit. Flagged for close.")
+            except (ValueError, TypeError):
+                continue
+
         # Check for low balances
         if balances['serenbucks'] < 5.0:
             self.logger.notify_low_balance('serenbucks', balances['serenbucks'], 20.0)
@@ -1061,6 +1114,20 @@ def main():
         print(f"  scan_limit:               {original_scan_limit} → {agent.scan_limit}")
         print(f"  min_annualized_return:    {original_min_annualized_return:.4f} → {agent.min_annualized_return:.4f}")
         print("=" * 60)
+
+        # auto-pause cron if funds exhausted
+        if hasattr(agent, "cron_job_id") and agent.cron_job_id:
+            try:
+                from setup_cron import pause_job
+                auto_pause_cron(
+                    serenbucks_balance=getattr(agent, "_last_serenbucks_balance", None),
+                    trading_balance=agent.positions.get_current_bankroll(agent.bankroll) if hasattr(agent, "positions") else None,
+                    min_serenbucks=agent.min_serenbucks_balance,
+                    job_id=agent.cron_job_id,
+                    pause_fn=pause_job,
+                )
+            except Exception:
+                pass
 
     except KeyboardInterrupt:
         print("\n\nScan interrupted by user")
