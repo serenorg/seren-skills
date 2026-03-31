@@ -69,6 +69,11 @@ class TradingAgent:
         self.logs_dir = self.config_path.parent / "logs"
         self.state_file = self.logs_dir / "runtime_state.json"
         self.runtime_state = self._load_runtime_state()
+        self._open_order_exposure = {
+            "market_ids": set(),
+            "token_ids": set(),
+            "event_counts": {},
+        }
 
         self.dry_run = dry_run
 
@@ -259,6 +264,62 @@ class TradingAgent:
             extracted[order_id] = prior_order_timestamps.get(order_id) or timestamp or now_iso
         return extracted
 
+    def _extract_open_order_exposure(self, raw_orders: Any) -> Dict[str, Any]:
+        """Build a best-effort snapshot of live resting-order exposure."""
+        market_ids: set[str] = set()
+        token_ids: set[str] = set()
+        event_counts: Dict[str, int] = {}
+
+        for row in self._rows_from_payload(raw_orders):
+            market_id = PositionTracker._first_text(
+                row.get("market_id"),
+                row.get("conditionId"),
+                row.get("market"),
+                row.get("market_slug"),
+            )
+            token_id = PositionTracker._first_text(
+                row.get("token_id"),
+                row.get("tokenId"),
+                row.get("asset_id"),
+                row.get("assetId"),
+                row.get("clobTokenId"),
+            )
+            event_id = PositionTracker._first_text(
+                row.get("event_id"),
+                row.get("seriesSlug"),
+                row.get("category"),
+            )
+            if market_id:
+                market_ids.add(market_id)
+            if token_id:
+                token_ids.add(token_id)
+            if event_id:
+                event_counts[event_id] = event_counts.get(event_id, 0) + 1
+
+        return {
+            "market_ids": market_ids,
+            "token_ids": token_ids,
+            "event_counts": event_counts,
+        }
+
+    def _has_open_order_exposure(self, market: Dict[str, Any]) -> bool:
+        exposure = getattr(self, "_open_order_exposure", None) or {}
+        market_ids = exposure.get("market_ids", set())
+        token_ids = exposure.get("token_ids", set())
+        if market.get("market_id") in market_ids:
+            return True
+        for key in ("token_id", "no_token_id"):
+            token = str(market.get(key, "")).strip()
+            if token and token in token_ids:
+                return True
+        return False
+
+    def _pending_exit_is_fresh(self, raw_value: str) -> bool:
+        pending_at = self._iso_to_datetime(raw_value)
+        if pending_at is None:
+            return False
+        return (datetime.now(timezone.utc) - pending_at).total_seconds() < self.stale_order_max_age_seconds
+
     def _resolve_position_roi(self, position) -> float:
         if position.size <= 0:
             return 0.0
@@ -269,13 +330,20 @@ class TradingAgent:
         raw = str(pending.get(market_id, "")).strip()
         if not raw:
             return False
-        pending_at = self._iso_to_datetime(raw)
-        if pending_at is None:
-            return False
-        return (datetime.now(timezone.utc) - pending_at).total_seconds() < self.stale_order_max_age_seconds
+        return self._pending_exit_is_fresh(raw)
 
     def _clear_pending_exit(self, market_id: str) -> None:
         self.runtime_state.get("pending_exit_markets", {}).pop(market_id, None)
+
+    def _prune_pending_exit_markets(self, open_market_ids: set[str]) -> None:
+        pending = self.runtime_state.setdefault("pending_exit_markets", {})
+        stale_market_ids = [
+            market_id
+            for market_id, pending_at in pending.items()
+            if market_id not in open_market_ids or not self._pending_exit_is_fresh(str(pending_at))
+        ]
+        for market_id in stale_market_ids:
+            pending.pop(market_id, None)
 
     def _record_position_alert(self, market_id: str, key: str) -> bool:
         """Return True if this alert should be emitted once."""
@@ -312,11 +380,48 @@ class TradingAgent:
             'polymarket': polymarket
         }
 
-    def _close_position_via_guard(self, position, reason: str, roi_pct: float) -> Dict[str, Any]:
+    def _close_position_via_guard(
+        self,
+        position,
+        reason: str,
+        roi_pct: float,
+        *,
+        open_orders: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         """Submit a marketable SELL to close a held YES/NO token position."""
         from polymarket_live import build_marketable_sell_order
 
         trader = self.polymarket._require_trader()
+        cancelled_order_ids: List[str] = []
+        raw_orders = open_orders if open_orders is not None else self.polymarket.get_open_orders()
+        for row in self._rows_from_payload(raw_orders):
+            order_id = PositionTracker._first_text(
+                row.get("id"),
+                row.get("orderID"),
+                row.get("order_id"),
+            )
+            order_market_id = PositionTracker._first_text(
+                row.get("market_id"),
+                row.get("conditionId"),
+                row.get("market"),
+                row.get("market_slug"),
+            )
+            order_token_id = PositionTracker._first_text(
+                row.get("token_id"),
+                row.get("tokenId"),
+                row.get("asset_id"),
+                row.get("assetId"),
+                row.get("clobTokenId"),
+            )
+            if not order_id:
+                continue
+            if order_token_id == position.token_id or order_market_id == position.market_id:
+                try:
+                    self.polymarket.cancel_order(order_id)
+                    cancelled_order_ids.append(order_id)
+                except Exception:
+                    continue
+
         sell_plan = build_marketable_sell_order(position.token_id, position.quantity)
         response = trader.create_order(
             token_id=position.token_id,
@@ -348,6 +453,7 @@ class TradingAgent:
                 f"  • Held side: {position.side}\n"
                 f"  • ROI: {roi_pct * 100:+.1f}%\n"
                 f"  • Quantity: {position.quantity:.6f}\n"
+                f"  • Cancelled resting orders: {len(cancelled_order_ids)}\n"
                 f"  • Estimated unfilled size: {sell_plan['estimated_unfilled_size']:.6f}"
             ),
             data={
@@ -355,6 +461,7 @@ class TradingAgent:
                 "token_id": position.token_id,
                 "reason": reason,
                 "roi_pct": roi_pct,
+                "cancelled_order_ids": cancelled_order_ids,
                 "estimated_unfilled_size": sell_plan["estimated_unfilled_size"],
                 "response": response,
             },
@@ -363,6 +470,7 @@ class TradingAgent:
             "market_id": position.market_id,
             "reason": reason,
             "roi_pct": roi_pct,
+            "cancelled_order_ids": cancelled_order_ids,
             "response": response,
             "sell_plan": sell_plan,
         }
@@ -386,10 +494,13 @@ class TradingAgent:
         except Exception as exc:
             self.logger.notify_api_error(f"Failed to load open orders for monitoring: {exc}")
 
-        if prior_order_timestamps:
+        current_order_timestamps = self._extract_order_timestamps(open_orders, prior_order_timestamps)
+        self._open_order_exposure = self._extract_open_order_exposure(open_orders)
+
+        if current_order_timestamps:
             stale_cleanup = cancel_stale_orders(
                 trader=self.polymarket._require_trader(),
-                prior_order_timestamps=prior_order_timestamps,
+                prior_order_timestamps=current_order_timestamps,
                 stale_order_max_age_seconds=self.stale_order_max_age_seconds,
             )
             summary["stale_orders_cancelled"] = int(stale_cleanup.get("stale_count", 0) or 0)
@@ -406,7 +517,8 @@ class TradingAgent:
                 except Exception:
                     open_orders = []
 
-        self.runtime_state["order_timestamps"] = self._extract_order_timestamps(open_orders, prior_order_timestamps)
+        self.runtime_state["order_timestamps"] = self._extract_order_timestamps(open_orders, current_order_timestamps)
+        self._open_order_exposure = self._extract_open_order_exposure(open_orders)
 
         try:
             self.positions.sync_with_polymarket(self.polymarket)
@@ -414,12 +526,14 @@ class TradingAgent:
             self.logger.notify_api_error(f"Position monitoring sync failed: {exc}")
             return summary
 
+        open_market_ids = {position.market_id for position in self.positions.get_all_positions()}
+        self._prune_pending_exit_markets(open_market_ids)
+
         now = datetime.now(timezone.utc)
         for position in self.positions.get_all_positions():
             if position.quantity <= 0:
                 continue
 
-            self._clear_pending_exit(position.market_id)
             roi_pct = self._resolve_position_roi(position)
 
             if abs(roi_pct) >= self.alert_move_pct:
@@ -463,7 +577,12 @@ class TradingAgent:
             if exit_reason and not self._pending_exit_for_market(position.market_id):
                 try:
                     summary["guard_exits"].append(
-                        self._close_position_via_guard(position, exit_reason, roi_pct)
+                        self._close_position_via_guard(
+                            position,
+                            exit_reason,
+                            roi_pct,
+                            open_orders=open_orders,
+                        )
                     )
                 except Exception as exc:
                     self.logger.notify_api_error(
@@ -909,15 +1028,24 @@ class TradingAgent:
             print(f"    ✗ Already have position in this market")
             return None
 
+        if self._has_open_order_exposure(market):
+            print(f"    ✗ Already have live resting-order exposure in this market")
+            return None
+
         if self.max_positions_per_event > 0 and market.get('event_id'):
             existing_in_event = [
                 pos for pos in self.positions.get_all_positions()
                 if getattr(pos, 'event_id', '') == market['event_id']
             ]
-            if len(existing_in_event) >= self.max_positions_per_event:
+            open_order_event_count = int(
+                (getattr(self, "_open_order_exposure", {}) or {})
+                .get("event_counts", {})
+                .get(market['event_id'], 0)
+            )
+            if len(existing_in_event) + open_order_event_count >= self.max_positions_per_event:
                 print(
                     f"    ✗ Event exposure cap reached "
-                    f"({len(existing_in_event)}/{self.max_positions_per_event})"
+                    f"({len(existing_in_event) + open_order_event_count}/{self.max_positions_per_event})"
                 )
                 return None
 

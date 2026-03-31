@@ -125,7 +125,8 @@ tail -50 ~/.config/seren/skills/polymarket-bot/logs/trading_*.log
 - Real Polymarket API credentials
 
 ```bash
-cd ~/.config/seren/skills/polymarket-bot && python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --live
+cd ~/.config/seren/skills/polymarket-bot && python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --live --run-type scan
+cd ~/.config/seren/skills/polymarket-bot && python3 scripts/setup_cron.py create --config config.json --schedule "15 * * * *" --live --run-type monitor
 ```
 
 Then start the local-pull runner on the machine that should execute jobs:
@@ -669,11 +670,12 @@ python3 scripts/agent.py --config config.json
 **Setting up seren-cron** (for autonomous scheduling):
 
 ```bash
-python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --live
+python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --live --run-type scan
+python3 scripts/setup_cron.py create --config config.json --schedule "15 * * * *" --live --run-type monitor
 python3 scripts/run_local_pull_runner.py --config config.json
 ```
 
-The schedule lives in Seren, but the local polling process must stay online on the machine that should execute trades.
+The schedule lives in Seren, but the local polling process must stay online on the machine that should execute trades. Use `scan` for new entries and `monitor` for stale-order cleanup, live reconciliation, and automated guard exits.
 
 ---
 
@@ -880,6 +882,7 @@ def calculate_position_size(fair_value, market_price, bankroll, max_kelly=0.06):
 - ✅ Legacy environment-variable credential fallback
 - ✅ Dry-run mode (simulation without placing trades)
 - ✅ Configuration system (JSON-based risk parameters)
+- ✅ Cron-backed monitor mode for stale-order cleanup and guard exits
 
 **Seren Publishers Used:**
 - `polymarket-data` - Real-time market data (prices, liquidity, volumes)
@@ -891,7 +894,6 @@ def calculate_position_size(fair_value, market_price, bankroll, max_kelly=0.06):
 ### ⚠️ Limitations
 
 **Not Automated (Manual Only):**
-- Position closing/exit strategy (must close manually on Polymarket)
 - Bankroll rebalancing after profits/losses
 
 **Not Implemented:**
@@ -991,7 +993,8 @@ method:    GET
 Create or upsert the runner plus the local-pull job:
 
 ```bash
-python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *"
+python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --run-type scan
+python3 scripts/setup_cron.py create --config config.json --schedule "15 * * * *" --run-type monitor
 ```
 
 For live mode, include `--live` after you have confirmed credentials, budget, and risk parameters.

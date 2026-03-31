@@ -102,6 +102,58 @@ def test_evaluate_opportunity_blocks_event_clustering():
     assert result is None
 
 
+def test_evaluate_opportunity_blocks_resting_order_exposure():
+    agent = TradingAgent.__new__(TradingAgent)
+    agent.min_buy_price = 0.02
+    agent.max_divergence = 0.50
+    agent.effective_mispricing_threshold = 0.08
+    agent.min_annualized_return = 0.25
+    agent.min_edge_to_spread_ratio = 3.0
+    agent.max_positions_per_event = 1
+    agent.max_positions = 10
+    agent.stop_loss_bankroll = 0.0
+    agent.bankroll = 100.0
+    agent.max_kelly_fraction = 0.06
+    agent.max_depth_fraction = 0.25
+    agent._open_order_exposure = {
+        "market_ids": {"market-2"},
+        "token_ids": {"token-yes-2"},
+        "event_counts": {"event-2": 1},
+    }
+    agent.positions = MagicMock()
+    agent.positions.has_exposure.return_value = False
+    agent.positions.get_all_positions.return_value = []
+    agent.positions.get_current_bankroll.return_value = 100.0
+    agent.positions.get_available_capital.return_value = 100.0
+    agent.polymarket = MagicMock()
+    agent.polymarket.get_book_metrics.return_value = {
+        "best_bid": 0.48,
+        "best_ask": 0.50,
+        "spread": 0.02,
+        "bid_depth_usd": 1000.0,
+        "ask_depth_usd": 1000.0,
+    }
+
+    market = {
+        "market_id": "market-2",
+        "token_id": "token-yes-2",
+        "no_token_id": "token-no-2",
+        "event_id": "event-2",
+        "price": 0.50,
+        "question": "Existing resting order market",
+        "days_to_resolution": 30,
+    }
+
+    result = agent.evaluate_opportunity(
+        market,
+        "research",
+        fair_value=0.65,
+        confidence="high",
+    )
+
+    assert result is None
+
+
 def test_monitor_existing_risk_cancels_stale_orders_and_triggers_take_profit(monkeypatch, tmp_path):
     import polymarket_live
 
@@ -124,7 +176,12 @@ def test_monitor_existing_risk_cancels_stale_orders_and_triggers_take_profit(mon
     agent.near_resolution_hours = 24.0
     agent.logger = MagicMock()
     agent.polymarket = MagicMock()
-    agent.polymarket.get_open_orders.return_value = []
+    agent.polymarket.get_open_orders.side_effect = [[{
+        "id": "old-order",
+        "token_id": "token-3",
+        "market_id": "market-3",
+        "createdAt": (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+    }], []]
     agent.polymarket._require_trader.return_value = MagicMock()
     agent.positions = MagicMock()
     live_position = SimpleNamespace(
@@ -159,3 +216,94 @@ def test_monitor_existing_risk_cancels_stale_orders_and_triggers_take_profit(mon
     assert len(summary["guard_exits"]) == 1
     agent._close_position_via_guard.assert_called_once()
     assert agent.logger.log_notification.call_count >= 2
+
+
+def test_monitor_existing_risk_uses_first_seen_open_orders_for_stale_cleanup(monkeypatch, tmp_path):
+    import polymarket_live
+
+    captured_timestamps = {}
+
+    agent = TradingAgent.__new__(TradingAgent)
+    agent.dry_run = False
+    agent.logs_dir = tmp_path / "logs"
+    agent.state_file = agent.logs_dir / "runtime_state.json"
+    agent.runtime_state = {
+        "order_timestamps": {},
+        "position_alerts": {},
+        "pending_exit_markets": {},
+    }
+    agent.stale_order_max_age_seconds = 1800
+    agent.take_profit_pct = 0.10
+    agent.position_stop_loss_pct = 0.10
+    agent.alert_move_pct = 0.08
+    agent.max_position_age_hours = 72.0
+    agent.near_resolution_hours = 24.0
+    agent.logger = MagicMock()
+    agent.polymarket = MagicMock()
+    agent.polymarket.get_open_orders.side_effect = [[{
+        "id": "external-order",
+        "token_id": "token-4",
+        "market_id": "market-4",
+        "createdAt": (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+    }], []]
+    agent.polymarket._require_trader.return_value = MagicMock()
+    agent.positions = MagicMock()
+    agent.positions.sync_with_polymarket.return_value = {"added": 0, "removed": 0, "updated": 0}
+    agent.positions.get_all_positions.return_value = []
+
+    def _fake_cancel_stale_orders(**kwargs):
+        captured_timestamps.update(kwargs["prior_order_timestamps"])
+        return {"stale_count": 1, "cancelled": [{"order_id": "external-order", "status": "cancelled"}]}
+
+    monkeypatch.setattr(polymarket_live, "cancel_stale_orders", _fake_cancel_stale_orders)
+
+    summary = agent.monitor_existing_risk()
+
+    assert summary["stale_orders_cancelled"] == 1
+    assert captured_timestamps["external-order"]
+
+
+def test_monitor_existing_risk_does_not_repeat_guard_exit_while_pending(tmp_path):
+    agent = TradingAgent.__new__(TradingAgent)
+    agent.dry_run = False
+    agent.logs_dir = tmp_path / "logs"
+    agent.state_file = agent.logs_dir / "runtime_state.json"
+    agent.runtime_state = {
+        "order_timestamps": {},
+        "position_alerts": {},
+        "pending_exit_markets": {
+            "market-5": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    agent.stale_order_max_age_seconds = 1800
+    agent.take_profit_pct = 0.10
+    agent.position_stop_loss_pct = 0.10
+    agent.alert_move_pct = 0.08
+    agent.max_position_age_hours = 72.0
+    agent.near_resolution_hours = 24.0
+    agent.logger = MagicMock()
+    agent.polymarket = MagicMock()
+    agent.polymarket.get_open_orders.return_value = []
+    agent.polymarket._require_trader.return_value = MagicMock()
+    agent.positions = MagicMock()
+    live_position = SimpleNamespace(
+        market="Pending close market",
+        market_id="market-5",
+        token_id="token-5",
+        quantity=100.0,
+        size=10.0,
+        unrealized_pnl=2.0,
+        side="YES",
+        entry_price=0.10,
+        current_price=0.12,
+        opened_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        end_date="",
+    )
+    agent.positions.sync_with_polymarket.return_value = {"added": 0, "removed": 0, "updated": 1}
+    agent.positions.get_all_positions.return_value = [live_position]
+    agent._close_position_via_guard = MagicMock()
+
+    summary = agent.monitor_existing_risk()
+
+    assert summary["guard_exits"] == []
+    agent._close_position_via_guard.assert_not_called()

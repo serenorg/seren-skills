@@ -9,7 +9,8 @@ Autonomous trading agent for Polymarket prediction markets using the Seren ecosy
 - 💡 Estimates fair value using Claude (Anthropic)
 - 📊 Executes trades using Kelly Criterion position sizing
 - 🔄 Runs autonomously via seren-cron scheduling
-- 📈 Tracks positions and P&L
+- 📈 Tracks positions and live P&L
+- 🛡️ Cancels stale orders and auto-closes positions on guardrails
 
 ## Quick Start
 
@@ -76,11 +77,12 @@ This will:
 Once you've tested and are ready to trade with real money:
 
 ```bash
-python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --live
+python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --live --run-type scan
+python3 scripts/setup_cron.py create --config config.json --schedule "15 * * * *" --live --run-type monitor
 python3 scripts/run_local_pull_runner.py --config config.json
 ```
 
-This uses a seren-cron local-pull runner. The schedule lives in Seren, but the polling process must stay online on the machine that will execute trades.
+This uses a seren-cron local-pull runner. The schedule lives in Seren, but the polling process must stay online on the machine that will execute trades. The `scan` job looks for new trades; the `monitor` job reconciles live orders and positions, cancels stale orders, and executes guard exits.
 
 **IMPORTANT**: Only risk what you can afford to lose!
 
@@ -138,9 +140,10 @@ polymarket-bot/
 - Logs all activity to JSONL files
 
 ### 7. Monitoring
-- Updates positions with current prices
-- Calculates unrealized P&L
-- Checks stop loss conditions
+- Reconciles live positions from Polymarket before each cycle
+- Refreshes current price and unrealized P&L
+- Cancels stale resting orders
+- Auto-closes positions on take-profit, stop-loss, max-age, and near-resolution guardrails
 - Logs notifications for critical events
 
 ## Cost Estimation
@@ -185,7 +188,6 @@ polymarket-bot/
 
 ## Known Limitations
 
-- **Position closing**: Detects API-closed positions but does not actively execute stop-loss or take-profit exits
 - **Notifications**: Events are logged to `notifications.jsonl` but no email or webhook delivery is implemented
 - **Backtesting**: No historical replay engine; `scripts/performance.py` analyses past live results only
 - **Web dashboard**: No monitoring UI; all data lives in JSONL files and SerenDB tables

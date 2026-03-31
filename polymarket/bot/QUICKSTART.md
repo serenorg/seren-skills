@@ -95,7 +95,8 @@ The bot will:
 1. Create or update the local-pull seren-cron schedule:
 
 ```bash
-python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --live
+python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * *" --live --run-type scan
+python3 scripts/setup_cron.py create --config config.json --schedule "15 * * * *" --live --run-type monitor
 ```
 
 2. Start the local-pull runner on the machine that should execute jobs:
@@ -104,7 +105,7 @@ python3 scripts/setup_cron.py create --config config.json --schedule "0 */2 * * 
 python3 scripts/run_local_pull_runner.py --config config.json
 ```
 
-This creates a seren-cron job that runs the bot every 2 hours and uses the local runner process to poll for due executions.
+This creates a scan job for new entries plus a monitor job for stale-order cleanup, live PnL refresh, and automated guard exits.
 
 ## Monitoring
 
