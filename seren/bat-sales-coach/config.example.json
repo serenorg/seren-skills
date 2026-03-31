@@ -1,0 +1,35 @@
+{
+  "connectors": [
+    "research",
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "attitude_journal": "",
+    "attitude_score": 5,
+    "behavior_description": "",
+    "behavior_status": "planned",
+    "behavior_title": "",
+    "behavior_type": "outreach",
+    "body_signal": "",
+    "command": "start_loop",
+    "completed_at": "",
+    "curiosity_state": "unsure",
+    "deal_stage": "new_lead",
+    "due_date": "",
+    "expected_close_date": "",
+    "future_statement": "",
+    "next_behavior": "",
+    "next_behavior_quota": 0,
+    "opportunity_value_usd": 0,
+    "organization_name": "",
+    "prospect_name": "",
+    "prospect_response": "",
+    "research_enabled": true,
+    "sales_executive_name": "",
+    "started_at": "",
+    "technique_focus": "",
+    "training_request": ""
+  },
+  "skill": "bat-sales-coach"
+}
