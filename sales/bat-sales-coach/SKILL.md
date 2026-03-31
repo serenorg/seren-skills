@@ -45,6 +45,15 @@ If the sales executive has completed a behavior:
 - run the attitude loop second
 - move to technique planning only after curiosity is present
 
+## Date and Time Rules
+
+- The agent does not reliably know the current date or time. It must not assume, compute, or suggest specific dates for follow-ups, due dates, or scheduling.
+- When recording a behavior, always ask the sales executive when they completed it and when they want to follow up. Record exactly what they say.
+- Never calculate relative dates such as `3 days from now` or `next Thursday`.
+- Never record a date as a confirmed decision unless the sales executive stated it. If a date is not confirmed, record the field as `TBD - user to confirm`.
+- When restoring from a prior session, treat all future-dated tasks as unconfirmed. Ask: `Last session noted a follow-up on [date]. Is that still your plan, or has it changed?`
+- If the runtime provides a current-date context value, use it only as display context. Do not perform date arithmetic on it.
+
 ## Behavior
 
 Behavior is the foundation of the loop. The skill tracks small, concrete sales actions such as:
@@ -63,10 +72,10 @@ The behavior record should feel like a personal CRM task or activity. Capture:
 - pipeline stage
 - task-style title
 - status
-- due date
+- due date (user-stated only, never agent-computed)
 - start and completion times
 - opportunity value
-- expected close date
+- expected close date (user-stated only)
 - prospect response
 - next behavior
 
@@ -83,7 +92,7 @@ Ask concise questions that help the sales executive describe real work:
 2. What did you actually do?
 3. Did anything else get done that we should count as a win?
 4. What did the prospect do or say in response?
-5. What is the next behavior for this prospect?
+5. What is the next behavior for this prospect, and when do you want to do it?
 
 ## Attitude
 

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
+SKILL_PATH = Path(__file__).resolve().parents[1] / "SKILL.md"
 
 
 def _read_fixture(name: str) -> dict:
@@ -32,3 +33,13 @@ def test_dry_run_fixture_blocks_live_execution() -> None:
     payload = _read_fixture("dry_run_guard.json")
     assert payload["dry_run"] is True
     assert payload["blocked_action"] == "live_execution"
+
+
+def test_skill_instructions_require_user_stated_dates() -> None:
+    content = SKILL_PATH.read_text(encoding="utf-8")
+
+    assert "## Date and Time Rules" in content
+    assert "must not assume, compute, or suggest specific dates" in content
+    assert "due date (user-stated only, never agent-computed)" in content
+    assert "expected close date (user-stated only)" in content
+    assert "What is the next behavior for this prospect, and when do you want to do it?" in content
