@@ -17,6 +17,24 @@ if str(_SCRIPT_DIR) not in sys.path:
 from seren_client import SerenClient
 
 
+def _extract_event_id(raw_market: Dict[str, Any]) -> str:
+    events = raw_market.get("events")
+    if isinstance(events, str):
+        try:
+            events = json.loads(events)
+        except Exception:
+            events = []
+    if isinstance(events, list) and events and isinstance(events[0], dict):
+        event_id = str(events[0].get("id", "")).strip()
+        if event_id:
+            return event_id
+    for key in ("event_id", "seriesSlug", "category"):
+        value = str(raw_market.get(key, "")).strip()
+        if value:
+            return value
+    return ""
+
+
 class PolymarketClient:
     """Client for Polymarket CLOB API.
 
@@ -189,6 +207,7 @@ class PolymarketClient:
                 'question': question,
                 'token_id': yes_token_id,
                 'no_token_id': no_token_id,
+                'event_id': _extract_event_id(market_data),
                 'outcomePrices': outcome_prices_csv,
                 'price': price,
                 'price_source': price_source,
@@ -238,9 +257,11 @@ class PolymarketClient:
         )
 
     def cancel_order(self, order_id: str) -> Dict:
-        """Cancel all open orders."""
+        """Cancel a single open order."""
         trader = self._require_trader()
-        return trader.cancel_all()
+        if hasattr(trader, "cancel_order"):
+            return trader.cancel_order(order_id)
+        raise RuntimeError("Underlying trader does not expose cancel_order")
 
     def get_positions(self) -> List[Dict]:
         """Get current positions."""

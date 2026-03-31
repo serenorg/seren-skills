@@ -1,5 +1,5 @@
 """
-Position Tracker - Manages open positions and P&L calculation
+Position Tracker - Manages open positions and P&L calculation.
 
 Tracks:
 - Open positions with entry prices
@@ -9,8 +9,9 @@ Tracks:
 """
 
 import json
+import math
 import os
-from typing import List, Dict, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
 
@@ -32,31 +33,102 @@ class Position:
         side: str,
         entry_price: float,
         size: float,
-        opened_at: str
+        opened_at: str,
+        quantity: Optional[float] = None,
+        thesis_side: Optional[str] = None,
+        event_id: str = "",
+        end_date: str = "",
     ):
         self.market = market
         self.market_id = market_id
         self.token_id = token_id
-        self.side = side  # 'BUY' or 'SELL'
+        self.side = self._normalize_token_side(side)  # 'YES' or 'NO'
+        self.thesis_side = self._normalize_thesis_side(thesis_side or side, self.side)
         self.entry_price = entry_price
         self.size = size
         self.opened_at = opened_at
+        self.quantity = self._normalize_quantity(quantity)
+        if self.quantity <= 0 and self.entry_price > 0 and self.size > 0:
+            self.quantity = self.size / self.entry_price
         self.current_price = entry_price  # Will be updated
         self.unrealized_pnl = 0.0
+        self.event_id = event_id
+        self.end_date = end_date
 
     def update_price(self, current_price: float):
         """Update current price and calculate unrealized P&L"""
         self.current_price = current_price
+        if self.quantity > 0:
+            self.unrealized_pnl = (current_price - self.entry_price) * self.quantity
+        else:
+            self.unrealized_pnl = 0.0
 
-        if self.side == 'BUY':
-            # P&L = (current - entry) * shares
-            # shares = size / entry_price
-            shares = self.size / self.entry_price
-            self.unrealized_pnl = (current_price - self.entry_price) * shares
-        elif self.side == 'SELL':
-            # For SELL positions, we profit when price goes down
-            shares = self.size / (1 - self.entry_price)
-            self.unrealized_pnl = (self.entry_price - current_price) * shares
+    def update_snapshot(
+        self,
+        *,
+        market: Optional[str] = None,
+        token_id: Optional[str] = None,
+        entry_price: Optional[float] = None,
+        current_price: Optional[float] = None,
+        quantity: Optional[float] = None,
+        size: Optional[float] = None,
+        side: Optional[str] = None,
+        thesis_side: Optional[str] = None,
+        event_id: Optional[str] = None,
+        end_date: Optional[str] = None,
+        opened_at: Optional[str] = None,
+    ) -> None:
+        """Refresh a position snapshot from live data."""
+        if market:
+            self.market = market
+        if token_id:
+            self.token_id = token_id
+        if side:
+            self.side = self._normalize_token_side(side)
+        if thesis_side:
+            self.thesis_side = self._normalize_thesis_side(thesis_side, self.side)
+        if event_id is not None:
+            self.event_id = event_id
+        if end_date is not None:
+            self.end_date = end_date
+        if opened_at:
+            self.opened_at = opened_at
+        if quantity is not None:
+            self.quantity = self._normalize_quantity(quantity)
+        if entry_price is not None and entry_price > 0:
+            self.entry_price = entry_price
+        if size is not None and size > 0:
+            self.size = size
+        if self.quantity <= 0 and self.entry_price > 0 and self.size > 0:
+            self.quantity = self.size / self.entry_price
+        if current_price is not None and current_price > 0:
+            self.update_price(current_price)
+
+    @staticmethod
+    def _normalize_token_side(raw_side: str) -> str:
+        value = str(raw_side or "").strip().upper()
+        if value in {"NO", "SELL", "SHORT"}:
+            return "NO"
+        return "YES"
+
+    @staticmethod
+    def _normalize_thesis_side(raw_side: str, token_side: str) -> str:
+        value = str(raw_side or "").strip().upper()
+        if value in {"BUY", "SELL"}:
+            return value
+        return "BUY" if token_side == "YES" else "SELL"
+
+    @staticmethod
+    def _normalize_quantity(raw_quantity: Optional[float]) -> float:
+        if raw_quantity is None:
+            return 0.0
+        try:
+            quantity = float(raw_quantity)
+        except (TypeError, ValueError):
+            return 0.0
+        if math.isnan(quantity) or quantity < 0:
+            return 0.0
+        return quantity
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON serialization"""
@@ -65,11 +137,15 @@ class Position:
             'market_id': self.market_id,
             'token_id': self.token_id,
             'side': self.side,
+            'thesis_side': self.thesis_side,
             'entry_price': self.entry_price,
             'current_price': self.current_price,
             'size': self.size,
+            'quantity': self.quantity,
             'unrealized_pnl': round(self.unrealized_pnl, 2),
-            'opened_at': self.opened_at
+            'opened_at': self.opened_at,
+            'event_id': self.event_id,
+            'end_date': self.end_date,
         }
 
     @classmethod
@@ -82,7 +158,11 @@ class Position:
             side=data['side'],
             entry_price=data['entry_price'],
             size=data['size'],
-            opened_at=data['opened_at']
+            opened_at=data['opened_at'],
+            quantity=data.get('quantity'),
+            thesis_side=data.get('thesis_side'),
+            event_id=data.get('event_id', ''),
+            end_date=data.get('end_date', ''),
         )
         pos.current_price = data.get('current_price', data['entry_price'])
         pos.unrealized_pnl = data.get('unrealized_pnl', 0.0)
@@ -173,7 +253,12 @@ class PositionTracker:
         token_id: str,
         side: str,
         entry_price: float,
-        size: float
+        size: float,
+        *,
+        quantity: Optional[float] = None,
+        thesis_side: Optional[str] = None,
+        event_id: str = "",
+        end_date: str = "",
     ) -> Position:
         """
         Add a new position
@@ -182,7 +267,7 @@ class PositionTracker:
             market: Market question/name
             market_id: Market ID
             token_id: Token ID
-            side: 'BUY' or 'SELL'
+            side: 'YES' or 'NO' token being held
             entry_price: Entry price (0.0-1.0)
             size: Position size in USDC
 
@@ -196,7 +281,11 @@ class PositionTracker:
             side=side,
             entry_price=entry_price,
             size=size,
-            opened_at=datetime.now(timezone.utc).isoformat()
+            opened_at=datetime.now(timezone.utc).isoformat(),
+            quantity=quantity,
+            thesis_side=thesis_side,
+            event_id=event_id,
+            end_date=end_date,
         )
 
         self.positions[market_id] = pos
@@ -269,6 +358,153 @@ class PositionTracker:
         """Check if we have a position in this market"""
         return market_id in self.positions
 
+    def has_exposure(
+        self,
+        market_id: str,
+        *,
+        token_id: str = "",
+        no_token_id: str = "",
+    ) -> bool:
+        """Check for exposure by market id or token ids."""
+        if market_id in self.positions:
+            return True
+        candidate_tokens = {token_id, no_token_id}
+        candidate_tokens.discard("")
+        if not candidate_tokens:
+            return False
+        return any(position.token_id in candidate_tokens for position in self.positions.values())
+
+    @staticmethod
+    def _safe_float(value: Any) -> Optional[float]:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(parsed):
+            return None
+        return parsed
+
+    @classmethod
+    def _first_numeric(cls, *values: Any) -> Optional[float]:
+        for value in values:
+            parsed = cls._safe_float(value)
+            if parsed is not None:
+                return parsed
+        return None
+
+    @staticmethod
+    def _first_text(*values: Any) -> str:
+        for value in values:
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ""
+
+    @classmethod
+    def _infer_quantity(cls, api_pos: Dict[str, Any]) -> float:
+        for key in (
+            'size',
+            'amount',
+            'quantity',
+            'position',
+            'balance',
+            'shares',
+            'outcomeTokens',
+            'token_balance',
+        ):
+            parsed = cls._safe_float(api_pos.get(key))
+            if parsed is not None and parsed > 0:
+                return parsed
+        nested = api_pos.get('available')
+        if isinstance(nested, dict):
+            for key in ('amount', 'balance', 'position', 'shares'):
+                parsed = cls._safe_float(nested.get(key))
+                if parsed is not None and parsed > 0:
+                    return parsed
+        return 0.0
+
+    @classmethod
+    def _infer_entry_price(cls, api_pos: Dict[str, Any], quantity: float) -> Optional[float]:
+        direct = cls._first_numeric(
+            api_pos.get('entry_price'),
+            api_pos.get('avgPrice'),
+            api_pos.get('avg_price'),
+            api_pos.get('average_price'),
+            api_pos.get('price_paid'),
+        )
+        if direct is not None and direct > 0:
+            return direct
+
+        if quantity > 0:
+            initial_value = cls._first_numeric(
+                api_pos.get('initialValue'),
+                api_pos.get('initial_value'),
+                api_pos.get('cost_basis'),
+                api_pos.get('notional'),
+                api_pos.get('size_usd'),
+            )
+            if initial_value is not None and initial_value > 0:
+                return initial_value / quantity
+        return None
+
+    @classmethod
+    def _infer_current_price(
+        cls,
+        api_pos: Dict[str, Any],
+        quantity: float,
+        polymarket_client: Any,
+        token_id: str,
+    ) -> Optional[float]:
+        direct = cls._first_numeric(
+            api_pos.get('current_price'),
+            api_pos.get('currentPrice'),
+            api_pos.get('curPrice'),
+            api_pos.get('mark_price'),
+            api_pos.get('price'),
+        )
+        if direct is not None and direct > 0:
+            return direct
+
+        if quantity > 0:
+            current_value = cls._first_numeric(
+                api_pos.get('currentValue'),
+                api_pos.get('current_value'),
+                api_pos.get('value'),
+                api_pos.get('cashValue'),
+            )
+            if current_value is not None and current_value > 0:
+                return current_value / quantity
+
+        if token_id:
+            try:
+                live_mid = polymarket_client.get_midpoint(token_id)
+            except Exception:
+                live_mid = None
+            if live_mid and live_mid > 0:
+                return live_mid
+        return None
+
+    @classmethod
+    def _infer_position_side(cls, api_pos: Dict[str, Any], token_id: str = "") -> str:
+        outcome_text = cls._first_text(
+            api_pos.get('outcome'),
+            api_pos.get('position_side'),
+            api_pos.get('token_side'),
+            api_pos.get('title'),
+            api_pos.get('side'),
+        ).lower()
+        if ' no' in f" {outcome_text}" or outcome_text == 'no':
+            return 'NO'
+        if ' yes' in f" {outcome_text}" or outcome_text == 'yes':
+            return 'YES'
+        if str(api_pos.get('side', '')).upper() == 'SELL':
+            return 'NO'
+        if token_id and token_id == str(api_pos.get('no_asset_id', '')).strip():
+            return 'NO'
+        return 'YES'
+
     def sync_with_polymarket(self, polymarket_client) -> Dict[str, int]:
         """
         Sync positions with Polymarket API
@@ -282,6 +518,10 @@ class PositionTracker:
         try:
             # Get current positions from Polymarket API
             api_positions = polymarket_client.get_positions()
+            if isinstance(api_positions, dict):
+                api_positions = api_positions.get('data', [])
+            if not isinstance(api_positions, list):
+                api_positions = []
 
             # Track changes
             added = 0
@@ -294,35 +534,97 @@ class PositionTracker:
             # Process each API position
             for api_pos in api_positions:
                 # Extract market info (handle different possible formats)
-                market_id = api_pos.get('market_id') or api_pos.get('conditionId') or api_pos.get('market')
+                market_id = self._first_text(
+                    api_pos.get('market_id'),
+                    api_pos.get('conditionId'),
+                    api_pos.get('market'),
+                    api_pos.get('condition_id'),
+                    api_pos.get('market_slug'),
+                    api_pos.get('asset_id'),
+                    api_pos.get('token_id'),
+                )
                 if not market_id:
                     continue
 
                 api_market_ids.add(market_id)
+                token_id = self._first_text(
+                    api_pos.get('token_id'),
+                    api_pos.get('asset_id'),
+                    api_pos.get('assetId'),
+                    api_pos.get('market'),
+                    market_id,
+                )
+                quantity = self._infer_quantity(api_pos)
+                current_price = self._infer_current_price(api_pos, quantity, polymarket_client, token_id)
+                entry_price = self._infer_entry_price(api_pos, quantity)
+                position_side = self._infer_position_side(api_pos, token_id=token_id)
+                thesis_side = self._first_text(api_pos.get('thesis_side'), api_pos.get('side'))
+                market_name = self._first_text(
+                    api_pos.get('question'),
+                    api_pos.get('market_name'),
+                    api_pos.get('title'),
+                    api_pos.get('market'),
+                    market_id,
+                )
+                event_id = self._first_text(
+                    api_pos.get('event_id'),
+                    api_pos.get('seriesSlug'),
+                    api_pos.get('category'),
+                )
+                end_date = self._first_text(
+                    api_pos.get('end_date'),
+                    api_pos.get('endDate'),
+                    api_pos.get('endDateIso'),
+                    api_pos.get('end_date_iso'),
+                )
+                notional_size = self._first_numeric(
+                    api_pos.get('size_usd'),
+                    api_pos.get('notional'),
+                    api_pos.get('initialValue'),
+                    api_pos.get('initial_value'),
+                )
+                if notional_size is None and entry_price is not None and quantity > 0:
+                    notional_size = entry_price * quantity
+                if notional_size is None and current_price is not None and quantity > 0:
+                    notional_size = current_price * quantity
+                if notional_size is None:
+                    notional_size = 0.0
 
                 # Check if we already track this position
                 if market_id in self.positions:
-                    # Update existing position with latest price
-                    current_price = float(api_pos.get('current_price', 0) or api_pos.get('price', 0))
-                    if current_price > 0:
-                        self.positions[market_id].update_price(current_price)
-                        updated += 1
+                    self.positions[market_id].update_snapshot(
+                        market=market_name,
+                        token_id=token_id,
+                        entry_price=entry_price,
+                        current_price=current_price,
+                        quantity=quantity,
+                        size=notional_size,
+                        side=position_side,
+                        thesis_side=thesis_side,
+                        event_id=event_id,
+                        end_date=end_date,
+                        opened_at=self._first_text(api_pos.get('created_at'), api_pos.get('opened_at')),
+                    )
+                    updated += 1
                 else:
                     # Add new position from API
                     try:
                         pos = Position(
-                            market=api_pos.get('question', '') or api_pos.get('market_name', ''),
+                            market=market_name,
                             market_id=market_id,
-                            token_id=api_pos.get('token_id', ''),
-                            side=api_pos.get('side', 'BUY').upper(),
-                            entry_price=float(api_pos.get('entry_price', 0) or api_pos.get('price', 0)),
-                            size=float(api_pos.get('size', 0) or api_pos.get('amount', 0)),
-                            opened_at=api_pos.get('created_at', datetime.now(timezone.utc).isoformat())
+                            token_id=token_id,
+                            side=position_side,
+                            entry_price=entry_price or current_price or 0.0,
+                            size=notional_size,
+                            opened_at=self._first_text(api_pos.get('created_at'), api_pos.get('opened_at'))
+                            or datetime.now(timezone.utc).isoformat(),
+                            quantity=quantity,
+                            thesis_side=thesis_side,
+                            event_id=event_id,
+                            end_date=end_date,
                         )
 
-                        # Update with current price if available
-                        current_price = float(api_pos.get('current_price', 0) or api_pos.get('price', 0))
-                        if current_price > 0:
+                        if current_price is not None and current_price > 0:
                             pos.update_price(current_price)
 
                         self.positions[market_id] = pos

@@ -25,6 +25,12 @@
   "execution": {
     "max_drawdown_pct": 15.0,
     "max_position_age_hours": 72,
+    "take_profit_pct": 0.1,
+    "position_stop_loss_pct": 0.1,
+    "alert_move_pct": 0.08,
+    "near_resolution_hours": 24,
+    "max_positions_per_event": 1,
+    "stale_order_max_age_seconds": 1800,
     "min_serenbucks_balance": 1.0,
     "auto_pause_on_exhaustion": true
   },

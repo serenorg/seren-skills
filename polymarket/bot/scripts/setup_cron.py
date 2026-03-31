@@ -73,6 +73,12 @@ def parse_args() -> argparse.Namespace:
     create.add_argument("--timezone", default="UTC", help="IANA timezone name.")
     create.add_argument("--config", default="config.json", help="Config path passed to scripts/agent.py.")
     create.add_argument(
+        "--run-type",
+        choices=("scan", "monitor"),
+        default=DEFAULT_RUN_TYPE,
+        help="Schedule a full scan or a monitor-only pass.",
+    )
+    create.add_argument(
         "--runner-name",
         default="",
         help="Optional runner name. Defaults to skill slug + hostname.",
@@ -138,8 +144,8 @@ def main() -> int:
                 cron_expression=args.schedule,
                 timezone_name=args.timezone,
                 config_path=args.config,
-                run_type=DEFAULT_RUN_TYPE,
-                local_payload={"dry_run": bool(args.dry_run)},
+                run_type=args.run_type,
+                local_payload={"dry_run": bool(args.dry_run), "run_type": args.run_type},
                 timeout_seconds=30.0,
             )
         elif args.command == "list":

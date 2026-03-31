@@ -71,6 +71,8 @@ def _build_command(local_payload: dict[str, Any], default_config: str) -> list[s
         "--config",
         safe_str(local_payload.get("config_path"), default_config) or default_config,
     ]
+    run_type = safe_str(local_payload.get("run_type"), "scan") or "scan"
+    command.extend(["--run-type", run_type])
     if local_payload.get("dry_run", False):
         command.append("--dry-run")
     return command
