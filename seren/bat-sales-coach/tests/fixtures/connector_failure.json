@@ -1,0 +1,29 @@
+{
+  "status": "error",
+  "skill": "bat-sales-coach",
+  "error_code": "connector_failure",
+  "connector": "research",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "research": {
+      "post": {
+        "status": "error",
+        "connector": "research",
+        "action": "post",
+        "error_code": "connector_failure"
+      }
+    },
+    "storage": {
+      "query": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "query"
+      },
+      "upsert": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "upsert"
+      }
+    }
+  }
+}
