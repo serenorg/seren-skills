@@ -86,14 +86,25 @@ class SerenDBStorage:
                     market TEXT NOT NULL,
                     token_id TEXT,
                     side TEXT NOT NULL,
+                    thesis_side TEXT,
                     entry_price REAL NOT NULL,
                     current_price REAL NOT NULL,
                     size REAL NOT NULL,
+                    quantity REAL DEFAULT 0.0,
                     unrealized_pnl REAL DEFAULT 0.0,
+                    event_id TEXT,
+                    end_date TEXT,
                     opened_at TIMESTAMP NOT NULL,
                     updated_at TIMESTAMP NOT NULL
                 )
             """)
+            for ddl in (
+                "ALTER TABLE positions ADD COLUMN IF NOT EXISTS thesis_side TEXT",
+                "ALTER TABLE positions ADD COLUMN IF NOT EXISTS quantity REAL DEFAULT 0.0",
+                "ALTER TABLE positions ADD COLUMN IF NOT EXISTS event_id TEXT",
+                "ALTER TABLE positions ADD COLUMN IF NOT EXISTS end_date TEXT",
+            ):
+                self._execute_sql(ddl)
 
             # Create trades table
             self._execute_sql("""
@@ -378,6 +389,11 @@ class SerenDBStorage:
             metadata_json = json.dumps({
                 'market': position.get('market', ''),
                 'opened_at': position.get('opened_at'),
+                'position_side': position.get('side'),
+                'thesis_side': position.get('thesis_side'),
+                'quantity': position.get('quantity'),
+                'event_id': position.get('event_id', ''),
+                'end_date': position.get('end_date', ''),
             })
 
             # Try to update existing position first
@@ -385,11 +401,19 @@ class SerenDBStorage:
                 UPDATE positions
                 SET current_price = ?,
                     unrealized_pnl = ?,
+                    quantity = ?,
+                    thesis_side = ?,
+                    event_id = ?,
+                    end_date = ?,
                     updated_at = ?
                 WHERE market_id = ?
             """, (
                 position['current_price'],
                 position['unrealized_pnl'],
+                position.get('quantity', 0.0),
+                position.get('thesis_side'),
+                position.get('event_id', ''),
+                position.get('end_date', ''),
                 now,
                 position['market_id']
             ))
@@ -398,19 +422,23 @@ class SerenDBStorage:
             if result.get('changes', 0) == 0:
                 self._execute_sql("""
                     INSERT INTO positions (
-                        market_id, market, token_id, side,
-                        entry_price, current_price, size,
-                        unrealized_pnl, opened_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        market_id, market, token_id, side, thesis_side,
+                        entry_price, current_price, size, quantity,
+                        unrealized_pnl, event_id, end_date, opened_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     position['market_id'],
                     position['market'],
                     position.get('token_id', ''),
                     position['side'],
+                    position.get('thesis_side'),
                     position['entry_price'],
                     position['current_price'],
                     position['size'],
+                    position.get('quantity', 0.0),
                     position['unrealized_pnl'],
+                    position.get('event_id', ''),
+                    position.get('end_date', ''),
                     position['opened_at'],
                     now
                 ))
@@ -440,8 +468,8 @@ class SerenDBStorage:
                 position['market_id'],
                 instrument_id,
                 position['market_id'],
-                position['side'],
-                position['size'],
+                position.get('thesis_side', position['side']),
+                position.get('quantity', position['size']),
                 position['entry_price'],
                 position['size'],
                 position['current_price'],

@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+from copy import deepcopy
 
 # --- Force unbuffered stdout so piped/background output is visible immediately ---
 if not sys.stdout.isatty():
@@ -28,7 +29,7 @@ if not sys.stdout.isatty():
 # --- End unbuffered stdout fix ---
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
@@ -64,6 +65,10 @@ class TradingAgent:
         # Load config
         with open(config_path, 'r') as f:
             self.config = json.load(f)
+        self.config_path = Path(config_path).resolve()
+        self.logs_dir = self.config_path.parent / "logs"
+        self.state_file = self.logs_dir / "runtime_state.json"
+        self.runtime_state = self._load_runtime_state()
 
         self.dry_run = dry_run
 
@@ -101,6 +106,17 @@ class TradingAgent:
         self.max_drawdown_pct = float(self.config.get("execution", {}).get("max_drawdown_pct", self.config.get("max_drawdown_pct", 15.0)))
         self.max_position_age_hours = float(self.config.get("execution", {}).get("max_position_age_hours", 72.0))
         self.min_serenbucks_balance = float(self.config.get("execution", {}).get("min_serenbucks_balance", 1.0))
+        self.stale_order_max_age_seconds = int(self.config.get("execution", {}).get("stale_order_max_age_seconds", 1800))
+        self.take_profit_pct = float(self.config.get("execution", {}).get("take_profit_pct", 0.10))
+        self.position_stop_loss_pct = float(self.config.get("execution", {}).get("position_stop_loss_pct", 0.10))
+        self.alert_move_pct = float(self.config.get("execution", {}).get("alert_move_pct", 0.08))
+        self.near_resolution_hours = float(self.config.get("execution", {}).get("near_resolution_hours", 24.0))
+        self.max_positions_per_event = int(
+            self.config.get("execution", {}).get(
+                "max_positions_per_event",
+                self.config.get("max_per_category", 1),
+            )
+        )
         self.cron_job_id = self.config.get("cron", {}).get("job_id", os.environ.get("SEREN_CRON_JOB_ID", ""))
 
         # Safety guards (configurable, with backward-compatible defaults)
@@ -151,6 +167,125 @@ class TradingAgent:
             print(f"⚠️  Position sync failed: {e}")
         print()
 
+    def _load_runtime_state(self) -> Dict[str, Any]:
+        """Load cron-maintained local runtime state."""
+        if not self.state_file.exists():
+            return {
+                "order_timestamps": {},
+                "position_alerts": {},
+                "pending_exit_markets": {},
+            }
+        try:
+            with open(self.state_file, "r") as handle:
+                payload = json.load(handle)
+        except Exception:
+            return {
+                "order_timestamps": {},
+                "position_alerts": {},
+                "pending_exit_markets": {},
+            }
+        if not isinstance(payload, dict):
+            return {
+                "order_timestamps": {},
+                "position_alerts": {},
+                "pending_exit_markets": {},
+            }
+        payload.setdefault("order_timestamps", {})
+        payload.setdefault("position_alerts", {})
+        payload.setdefault("pending_exit_markets", {})
+        return payload
+
+    def _save_runtime_state(self) -> None:
+        """Persist cron-maintained local runtime state."""
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        with open(self.state_file, "w") as handle:
+            json.dump(self.runtime_state, handle, indent=2, sort_keys=True)
+
+    @staticmethod
+    def _iso_to_datetime(raw_value: str) -> Optional[datetime]:
+        if not raw_value:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if parsed != parsed:
+            return default
+        return parsed
+
+    @staticmethod
+    def _rows_from_payload(payload: Any) -> List[Dict[str, Any]]:
+        if isinstance(payload, list):
+            return [row for row in payload if isinstance(row, dict)]
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, list):
+                return [row for row in data if isinstance(row, dict)]
+        return []
+
+    def _extract_order_timestamps(
+        self,
+        raw_orders: Any,
+        prior_order_timestamps: Dict[str, str],
+    ) -> Dict[str, str]:
+        """Build a best-effort order id -> first seen timestamp map."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        extracted: Dict[str, str] = {}
+        for row in self._rows_from_payload(raw_orders):
+            order_id = ""
+            for key in ("id", "orderID", "order_id"):
+                value = str(row.get(key, "")).strip()
+                if value:
+                    order_id = value
+                    break
+            if not order_id:
+                continue
+            timestamp = ""
+            for key in ("createdAt", "created_at", "placed_at", "updatedAt", "updated_at", "timestamp"):
+                value = str(row.get(key, "")).strip()
+                if value:
+                    timestamp = value
+                    break
+            extracted[order_id] = prior_order_timestamps.get(order_id) or timestamp or now_iso
+        return extracted
+
+    def _resolve_position_roi(self, position) -> float:
+        if position.size <= 0:
+            return 0.0
+        return position.unrealized_pnl / position.size
+
+    def _pending_exit_for_market(self, market_id: str) -> bool:
+        pending = self.runtime_state.get("pending_exit_markets", {})
+        raw = str(pending.get(market_id, "")).strip()
+        if not raw:
+            return False
+        pending_at = self._iso_to_datetime(raw)
+        if pending_at is None:
+            return False
+        return (datetime.now(timezone.utc) - pending_at).total_seconds() < self.stale_order_max_age_seconds
+
+    def _clear_pending_exit(self, market_id: str) -> None:
+        self.runtime_state.get("pending_exit_markets", {}).pop(market_id, None)
+
+    def _record_position_alert(self, market_id: str, key: str) -> bool:
+        """Return True if this alert should be emitted once."""
+        alerts = self.runtime_state.setdefault("position_alerts", {})
+        market_alerts = alerts.setdefault(market_id, {})
+        if market_alerts.get(key):
+            return False
+        market_alerts[key] = datetime.now(timezone.utc).isoformat()
+        return True
+
     def check_balances(self) -> Dict[str, float]:
         """
         Check SerenBucks and Polymarket balances
@@ -176,6 +311,168 @@ class TradingAgent:
             'serenbucks': serenbucks,
             'polymarket': polymarket
         }
+
+    def _close_position_via_guard(self, position, reason: str, roi_pct: float) -> Dict[str, Any]:
+        """Submit a marketable SELL to close a held YES/NO token position."""
+        from polymarket_live import build_marketable_sell_order
+
+        trader = self.polymarket._require_trader()
+        sell_plan = build_marketable_sell_order(position.token_id, position.quantity)
+        response = trader.create_order(
+            token_id=position.token_id,
+            side="SELL",
+            price=sell_plan["price"],
+            size=position.quantity,
+            tick_size=sell_plan["tick_size"],
+            neg_risk=sell_plan["neg_risk"],
+            fee_rate_bps=sell_plan["fee_rate_bps"],
+        )
+
+        self.runtime_state.setdefault("pending_exit_markets", {})[position.market_id] = datetime.now(timezone.utc).isoformat()
+        self.logger.log_trade(
+            market=position.market,
+            market_id=position.market_id,
+            side=position.thesis_side,
+            size=position.size,
+            price=position.current_price,
+            fair_value=position.current_price,
+            edge=0.0,
+            status="closing",
+            pnl=round(position.unrealized_pnl, 2),
+        )
+        self.logger.log_notification(
+            level="warning" if roi_pct < 0 else "info",
+            title=f"Guard Exit: {reason}",
+            message=(
+                f"Submitted marketable close for \"{position.market}\".\n"
+                f"  • Held side: {position.side}\n"
+                f"  • ROI: {roi_pct * 100:+.1f}%\n"
+                f"  • Quantity: {position.quantity:.6f}\n"
+                f"  • Estimated unfilled size: {sell_plan['estimated_unfilled_size']:.6f}"
+            ),
+            data={
+                "market_id": position.market_id,
+                "token_id": position.token_id,
+                "reason": reason,
+                "roi_pct": roi_pct,
+                "estimated_unfilled_size": sell_plan["estimated_unfilled_size"],
+                "response": response,
+            },
+        )
+        return {
+            "market_id": position.market_id,
+            "reason": reason,
+            "roi_pct": roi_pct,
+            "response": response,
+            "sell_plan": sell_plan,
+        }
+
+    def monitor_existing_risk(self) -> Dict[str, Any]:
+        """Use seren-cron runs to reconcile live orders/positions and act on guardrails."""
+        summary: Dict[str, Any] = {
+            "stale_orders_cancelled": 0,
+            "guard_exits": [],
+            "alerts": 0,
+        }
+        if self.dry_run:
+            return summary
+
+        from polymarket_live import cancel_stale_orders
+
+        prior_order_timestamps = deepcopy(self.runtime_state.get("order_timestamps", {}))
+        open_orders = []
+        try:
+            open_orders = self.polymarket.get_open_orders()
+        except Exception as exc:
+            self.logger.notify_api_error(f"Failed to load open orders for monitoring: {exc}")
+
+        if prior_order_timestamps:
+            stale_cleanup = cancel_stale_orders(
+                trader=self.polymarket._require_trader(),
+                prior_order_timestamps=prior_order_timestamps,
+                stale_order_max_age_seconds=self.stale_order_max_age_seconds,
+            )
+            summary["stale_orders_cancelled"] = int(stale_cleanup.get("stale_count", 0) or 0)
+            if summary["stale_orders_cancelled"] > 0:
+                self.logger.log_notification(
+                    level="warning",
+                    title="Stale Orders Cancelled",
+                    message=f"Cancelled {summary['stale_orders_cancelled']} stale open order(s) during cron monitoring.",
+                    data=stale_cleanup,
+                )
+                summary["alerts"] += 1
+                try:
+                    open_orders = self.polymarket.get_open_orders()
+                except Exception:
+                    open_orders = []
+
+        self.runtime_state["order_timestamps"] = self._extract_order_timestamps(open_orders, prior_order_timestamps)
+
+        try:
+            self.positions.sync_with_polymarket(self.polymarket)
+        except Exception as exc:
+            self.logger.notify_api_error(f"Position monitoring sync failed: {exc}")
+            return summary
+
+        now = datetime.now(timezone.utc)
+        for position in self.positions.get_all_positions():
+            if position.quantity <= 0:
+                continue
+
+            self._clear_pending_exit(position.market_id)
+            roi_pct = self._resolve_position_roi(position)
+
+            if abs(roi_pct) >= self.alert_move_pct:
+                direction = "gain" if roi_pct >= 0 else "loss"
+                alert_key = f"{direction}:{round(abs(roi_pct), 2)}"
+                if self._record_position_alert(position.market_id, alert_key):
+                    self.logger.log_notification(
+                        level="info" if roi_pct >= 0 else "warning",
+                        title=f"Position {direction.title()} Alert",
+                        message=(
+                            f"\"{position.market}\" moved {roi_pct * 100:+.1f}% since entry.\n"
+                            f"  • Held side: {position.side}\n"
+                            f"  • Entry: {position.entry_price:.4f}\n"
+                            f"  • Current: {position.current_price:.4f}"
+                        ),
+                        data={
+                            "market_id": position.market_id,
+                            "token_id": position.token_id,
+                            "roi_pct": roi_pct,
+                            "position_side": position.side,
+                        },
+                    )
+                    summary["alerts"] += 1
+
+            exit_reason = ""
+            if self.take_profit_pct > 0 and roi_pct >= self.take_profit_pct:
+                exit_reason = "take-profit"
+            elif self.position_stop_loss_pct > 0 and roi_pct <= -self.position_stop_loss_pct:
+                exit_reason = "stop-loss"
+            elif self.max_position_age_hours > 0:
+                opened = self._iso_to_datetime(position.opened_at)
+                if opened and ((now - opened).total_seconds() / 3600.0) >= self.max_position_age_hours:
+                    exit_reason = "max-age"
+            if not exit_reason and self.near_resolution_hours > 0 and position.end_date:
+                end_dt = self._iso_to_datetime(position.end_date)
+                if end_dt is not None:
+                    hours_to_resolution = (end_dt - now).total_seconds() / 3600.0
+                    if 0 <= hours_to_resolution <= self.near_resolution_hours:
+                        exit_reason = "near-resolution"
+
+            if exit_reason and not self._pending_exit_for_market(position.market_id):
+                try:
+                    summary["guard_exits"].append(
+                        self._close_position_via_guard(position, exit_reason, roi_pct)
+                    )
+                except Exception as exc:
+                    self.logger.notify_api_error(
+                        f"Failed to close \"{position.market}\" via {exit_reason}: {exc}",
+                        will_retry=False,
+                    )
+
+        self._save_runtime_state()
+        return summary
 
     def scan_markets(self, limit: int = 100) -> List[Dict]:
         """
@@ -604,9 +901,25 @@ class TradingAgent:
             return None
 
         # Check if we already have a position
-        if self.positions.has_position(market['market_id']):
+        if self.positions.has_exposure(
+            market['market_id'],
+            token_id=market.get('token_id', ''),
+            no_token_id=market.get('no_token_id', ''),
+        ):
             print(f"    ✗ Already have position in this market")
             return None
+
+        if self.max_positions_per_event > 0 and market.get('event_id'):
+            existing_in_event = [
+                pos for pos in self.positions.get_all_positions()
+                if getattr(pos, 'event_id', '') == market['event_id']
+            ]
+            if len(existing_in_event) >= self.max_positions_per_event:
+                print(
+                    f"    ✗ Event exposure cap reached "
+                    f"({len(existing_in_event)}/{self.max_positions_per_event})"
+                )
+                return None
 
         # Check if we're at max positions
         if len(self.positions.get_all_positions()) >= self.max_positions:
@@ -614,7 +927,10 @@ class TradingAgent:
             return None
 
         # Calculate current bankroll
-        current_bankroll = self.positions.get_current_bankroll(self.bankroll)
+        current_bankroll = self._safe_float(
+            self.positions.get_current_bankroll(self.bankroll),
+            self.bankroll,
+        )
 
         # Check stop loss
         if current_bankroll <= self.stop_loss_bankroll:
@@ -709,6 +1025,7 @@ class TradingAgent:
         if side == 'SELL' and market.get('no_token_id'):
             exec_token_id = market['no_token_id']
             exec_side = 'BUY'
+            position_side = 'NO'
             try:
                 no_ask_price = self.polymarket.get_price(exec_token_id, 'BUY')
                 exec_price = no_ask_price if no_ask_price and no_ask_price > 0 else 1.0 - price
@@ -719,6 +1036,7 @@ class TradingAgent:
             exec_token_id = market['token_id']
             exec_side = side
             exec_price = price
+            position_side = 'YES'
             print(f"    📊 Placing {side} order @ {exec_price:.4f}...")
 
         try:
@@ -729,16 +1047,24 @@ class TradingAgent:
                 price=exec_price
             )
 
-            print(f"    ✓ Order placed: {order.get('orderID', 'unknown')}")
+            order_id = str(order.get('orderID') or order.get('id') or order.get('order_id') or 'unknown')
+            print(f"    ✓ Order placed: {order_id}")
+            if order_id != 'unknown':
+                self.runtime_state.setdefault("order_timestamps", {})[order_id] = datetime.now(timezone.utc).isoformat()
+                self._save_runtime_state()
 
             # Add position to tracker
             self.positions.add_position(
                 market=market['question'],
                 market_id=market['market_id'],
                 token_id=exec_token_id,
-                side=side,
-                entry_price=price,
-                size=size
+                side=position_side,
+                thesis_side=side,
+                entry_price=exec_price,
+                size=size,
+                quantity=(size / exec_price) if exec_price > 0 else None,
+                event_id=market.get('event_id', ''),
+                end_date=market.get('end_date', ''),
             )
 
             # Log the trade
@@ -775,6 +1101,22 @@ class TradingAgent:
         print(f"  Polymarket: ${balances['polymarket']:.2f}")
         print()
 
+        print("Monitoring live positions and orders...")
+        monitor_summary = self.monitor_existing_risk()
+        if (
+            monitor_summary.get("stale_orders_cancelled")
+            or monitor_summary.get("guard_exits")
+            or monitor_summary.get("alerts")
+        ):
+            print(
+                f"  Cancelled stale orders: {monitor_summary.get('stale_orders_cancelled', 0)} | "
+                f"Guard exits: {len(monitor_summary.get('guard_exits', []))} | "
+                f"Alerts: {monitor_summary.get('alerts', 0)}"
+            )
+        else:
+            print("  No stale orders, guard exits, or alerts")
+        print()
+
         # Sync positions with Polymarket API
         print("Syncing positions...")
         try:
@@ -788,7 +1130,10 @@ class TradingAgent:
         print()
 
         # ── risk guards ──────────────────────────────────────────
-        current_bankroll = self.positions.get_current_bankroll(self.bankroll)
+        current_bankroll = self._safe_float(
+            self.positions.get_current_bankroll(self.bankroll),
+            self.bankroll,
+        )
         peak = getattr(self, "_peak_equity", self.bankroll)
         if current_bankroll > peak:
             peak = current_bankroll
@@ -798,18 +1143,18 @@ class TradingAgent:
         live_risk = {"drawdown_pct": dd_pct, "current_equity_usd": current_bankroll, "peak_equity_usd": peak}
         unwind_result = check_drawdown_stop_loss(
             live_risk=live_risk,
-            max_drawdown_pct=self.max_drawdown_pct,
+            max_drawdown_pct=getattr(self, "max_drawdown_pct", 0.0),
             unwind_fn=lambda: {"action": "unwind_triggered", "positions_closed": len(self.positions.get_all_positions())},
         )
         if unwind_result:
-            if self.cron_job_id:
+            if getattr(self, "cron_job_id", ""):
                 try:
                     from setup_cron import pause_job
                     auto_pause_cron(
                         serenbucks_balance=0.0,
                         trading_balance=0.0,
                         min_serenbucks=1.0,
-                        job_id=self.cron_job_id,
+                        job_id=getattr(self, "cron_job_id", ""),
                         pause_fn=pause_job,
                     )
                 except Exception:
@@ -822,11 +1167,11 @@ class TradingAgent:
             if not hasattr(pos, "opened_at") or not pos.opened_at:
                 continue
             try:
-                from datetime import datetime, timezone
                 opened = datetime.fromisoformat(pos.opened_at.replace("Z", "+00:00"))
                 age_hours = (datetime.now(timezone.utc) - opened).total_seconds() / 3600.0
-                if age_hours >= self.max_position_age_hours and self.max_position_age_hours > 0:
-                    print(f"    POSITION AGE LIMIT: {pos.market} open {age_hours:.1f}h >= {self.max_position_age_hours}h limit. Flagged for close.")
+                max_age_hours = getattr(self, "max_position_age_hours", 0.0)
+                if age_hours >= max_age_hours and max_age_hours > 0:
+                    print(f"    POSITION AGE LIMIT: {pos.market} open {age_hours:.1f}h >= {max_age_hours}h limit. Flagged for close.")
             except (ValueError, TypeError):
                 continue
 
@@ -958,6 +1303,29 @@ class TradingAgent:
 
         return len(opportunities)
 
+    def run_monitor_cycle(self) -> Dict[str, Any]:
+        """Run only the cron-backed monitoring pass."""
+        print("=" * 60)
+        print(f"👁️  Polymarket Monitor Starting - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        print("=" * 60)
+        print()
+
+        balances = self.check_balances()
+        self._last_serenbucks_balance = balances['serenbucks']
+        print("Balances:")
+        print(f"  SerenBucks: ${balances['serenbucks']:.2f}")
+        print(f"  Polymarket: ${balances['polymarket']:.2f}")
+        print()
+
+        summary = self.monitor_existing_risk()
+        print(
+            "Monitor complete:"
+            f" stale_orders_cancelled={summary.get('stale_orders_cancelled', 0)}"
+            f" guard_exits={len(summary.get('guard_exits', []))}"
+            f" alerts={summary.get('alerts', 0)}"
+        )
+        return summary
+
 
 def print_trade_summary(opportunities, *, capital_deployed=0.0, file=None):
     """Print a structured, grep-able trade summary block.
@@ -1011,6 +1379,15 @@ def _bootstrap_config_path(config_path: str) -> Path:
 
 def main():
     """Main entry point"""
+    def _coerce_float(value: Any, default: float = 0.0) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if parsed != parsed:
+            return default
+        return parsed
+
     parser = argparse.ArgumentParser(description='Polymarket Trading Agent')
     parser.add_argument(
         '--config',
@@ -1026,6 +1403,12 @@ def main():
         '--yes-live',
         action='store_true',
         help='Explicit startup-only opt-in for live trading.'
+    )
+    parser.add_argument(
+        '--run-type',
+        choices=('scan', 'monitor'),
+        default='scan',
+        help='Cron execution mode: full scan or monitor-only pass.',
     )
 
     args = parser.parse_args()
@@ -1054,7 +1437,7 @@ def main():
     # Run iterative scan cycle
     try:
         iter_cfg = agent.config.get("iteration", {})
-        max_iterations = min(int(iter_cfg.get("max_iterations", 15)), 2)
+        max_iterations = int(iter_cfg.get("max_iterations", 15))
         threshold_step = float(iter_cfg.get("threshold_step", 0.01))
         min_threshold_floor = float(iter_cfg.get("min_threshold_floor", 0.02))
         annualized_return_step = float(iter_cfg.get("annualized_return_step", 0.05))
@@ -1067,21 +1450,35 @@ def main():
         original_min_annualized_return = agent.min_annualized_return
 
         total_opportunities = 0
+        effective_threshold = _coerce_float(
+            getattr(
+                agent,
+                "effective_mispricing_threshold",
+                getattr(agent, "mispricing_threshold", 0.0),
+            ),
+            _coerce_float(getattr(agent, "mispricing_threshold", 0.0), 0.0),
+        )
 
         for iteration in range(1, max_iterations + 1):
             print(f"\n>>> Iteration {iteration}/{max_iterations}  "
-                  f"effective_threshold={agent.effective_mispricing_threshold:.4f}  "
+                  f"effective_threshold={effective_threshold:.4f}  "
                   f"scan_limit={agent.scan_limit}  "
                   f"min_annualized_return={agent.min_annualized_return:.4f}")
 
-            opportunities_found = agent.run_scan_cycle()
+            if args.run_type == 'monitor':
+                monitor_result = agent.run_monitor_cycle()
+                opportunities_found = len(monitor_result.get("guard_exits", []))
+            else:
+                opportunities_found = agent.run_scan_cycle()
             total_opportunities += (opportunities_found or 0)
 
             print(f"<<< Iteration {iteration} result: {opportunities_found or 0} opportunities found")
 
             # Early-exit: stop iterating once we find opportunities
-            if (opportunities_found or 0) > 0:
+            if args.run_type == 'scan' and (opportunities_found or 0) > 0:
                 print(f"    Found {opportunities_found} opportunities — stopping iteration loop.")
+                break
+            if args.run_type == 'monitor':
                 break
 
             # Check SerenBucks balance from the last scan cycle
