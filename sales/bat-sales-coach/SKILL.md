@@ -41,12 +41,13 @@ Violations of this rule — asserting capability status without verification —
 
 ## Email/Calendar Integration (Optional)
 
-On each invoke, the agent checks for email/calendar integration availability:
+On each invoke, the agent checks for email/calendar integration by **trying to use it**, not by searching for tool names:
 
-1. Attempt to list available MCP tools or Playwright-accessible services that could provide Gmail or Outlook access.
-2. If an email integration is detected and accessible: use it to enrich coaching context (e.g., pull recent emails from prospects, check calendar for scheduled meetings).
-3. If no email integration is detected after checking: tell the user "I checked for email integration and it is not connected in this session. You can enable Gmail or Outlook in SerenDesktop Settings for richer coaching context."
-4. Do not block the coaching flow — email integration is optional. Proceed with manual context if not available.
+1. **Try direct access first.** If Playwright is available, navigate to Gmail or Outlook and check whether the user is logged in. If a dedicated email MCP tool is available, call it. Use whatever tools exist — do not search for tools you expect to find.
+2. If direct access works: use it to enrich coaching context (e.g., pull recent emails from prospects, check calendar for scheduled meetings).
+3. If direct access fails or no relevant tools exist after a concrete check: tell the user "I checked for email access and it is not available in this session. You can enable Gmail or Outlook in SerenDesktop Settings for richer coaching context."
+4. **Never search for imagined tool names** (e.g., `gmail_read`, `connector.gmail`). List what tools are actually available and try them. Do not report on tools you searched for — report on tools you tried.
+5. Do not block the coaching flow — email integration is optional. Proceed with manual context if not available.
 
 ## Overview
 

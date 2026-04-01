@@ -34,11 +34,13 @@ Violations of this rule — asserting capability status without verification —
 
 ## Integration Checks (Optional)
 
-On each invoke, the agent checks for external integration availability:
+On each invoke, the agent checks for external integrations by **trying to use them**, not by searching for tool names:
 
-1. **SharePoint**: Attempt to call `connector.sharepoint.get` or list relevant MCP tools. If available, sync context. If not, say "I checked and SharePoint integration is not connected in this session. You can enable it in SerenDesktop Settings."
-2. **Asana**: Attempt to call `connector.asana.get` or list relevant MCP tools. If available, sync context. If not, say "I checked and Asana integration is not connected in this session."
-3. **Email/Calendar**: Attempt to list available Gmail or Outlook MCP tools. If available, use them to enrich knowledge context. If not, say "I checked and email integration is not connected in this session. You can enable Gmail or Outlook in SerenDesktop Settings."
+1. **SharePoint**: Try calling `connector.sharepoint.get` or any available MCP tool that provides SharePoint access. If it works, sync context. If it fails or no tool exists after a concrete check, say "I checked and SharePoint integration is not available in this session. You can enable it in SerenDesktop Settings."
+2. **Asana**: Try calling `connector.asana.get` or any available MCP tool that provides Asana access. If it works, sync context. If it fails or no tool exists, say "I checked and Asana integration is not available in this session."
+3. **Email/Calendar**: Try direct access first — if Playwright is available, navigate to Gmail or Outlook. If a dedicated email MCP tool exists, call it. Use whatever tools are available. If direct access fails or no relevant tools exist, say "I checked for email access and it is not available in this session. You can enable Gmail or Outlook in SerenDesktop Settings."
+
+**Never search for imagined tool names** (e.g., `gmail_read`, `connector.gmail`). List what tools are actually available and try them. Report on tools you tried, not tools you searched for.
 
 All integrations are optional. The skill works without any of them — it gracefully degrades to guided interview and manual document input.
 
