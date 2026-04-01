@@ -1,0 +1,55 @@
+name: Build Skills Index
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build index.json
+        run: |
+          node scripts/build-index.mjs > index.json
+          echo "Skills in index:"
+          node -e "const idx = JSON.parse(require('fs').readFileSync('index.json','utf8')); console.log(idx.skills.length, 'skills,', idx.tree.length, 'tree entries')"
+
+      - name: Upload to R2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          npm install @aws-sdk/client-s3
+          node -e "
+          const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+          const fs = require('fs');
+          const client = new S3Client({
+            region: 'auto',
+            endpoint: process.env.R2_ENDPOINT,
+            credentials: {
+              accessKeyId: process.env.R2_ACCESS_KEY_ID,
+              secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+            },
+          });
+          async function upload() {
+            const body = fs.readFileSync('index.json');
+            await client.send(new PutObjectCommand({
+              Bucket: process.env.R2_BUCKET_NAME,
+              Key: 'skills/index.json',
+              Body: body,
+              ContentType: 'application/json',
+              CacheControl: 'public, max-age=300',
+            }));
+            console.log('Uploaded skills/index.json to R2 (' + body.length + ' bytes)');
+          }
+          upload().catch(e => { console.error(e); process.exit(1); });
+          "
