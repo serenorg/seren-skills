@@ -144,3 +144,57 @@ def test_run_once_returns_error_without_storage() -> None:
         result = agent.run_once({}, dry_run=True)
     assert result["status"] == "error"
     assert result["error_code"] == "storage_bootstrap_failed"
+
+
+# --- Persuasion-safety guardrails (arXiv 2507.13919) ---
+
+
+def test_guardrail_g1_distress_escalation_rule() -> None:
+    """G1: SKILL.md must contain a distress escalation rule that halts the loop and provides crisis resources."""
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "## Distress Escalation Rule" in content
+    assert "988" in content, "Must reference the 988 Suicide and Crisis Lifeline"
+    assert "Stop the coaching loop" in content
+
+
+def test_guardrail_g2_attitude_loop_opt_in() -> None:
+    """G2: Attitude check-in must be opt-in, not forced."""
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "Would you like to do the attitude check-in" in content
+    assert "skip the attitude loop" in content
+
+
+def test_guardrail_g3_future_loop_capped() -> None:
+    """G3: 'Can you tell the future?' loop must be capped at 2 cycles."""
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "at most **2 times**" in content
+    assert "That is okay" in content
+
+
+def test_guardrail_g4_no_body_part_probing() -> None:
+    """G4: Must not direct users to locate sensations in specific body parts."""
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "Do not direct them to locate sensations in specific body parts" in content
+    # The old somatic question must be gone
+    assert "where that score is felt in the body" not in content.lower()
+
+
+def test_guardrail_g5_accuracy_anchor() -> None:
+    """G5: Supportive feedback must include a factual observation."""
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "concrete, factual observation" in content
+    assert "acknowledge it honestly" in content
+
+
+def test_guardrail_g6_research_transparency() -> None:
+    """G6: Research sources must not be hidden by default."""
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "Keep research hidden" not in content
+    assert "Briefly mention the general source area" in content
+
+
+def test_guardrail_g7_attitude_trend_monitoring() -> None:
+    """G7: Must detect declining attitude scores across sessions."""
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "## Attitude Trend Monitoring" in content
+    assert "3 or more consecutive sessions" in content
