@@ -1,15 +1,24 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 SKILL_PATH = Path(__file__).resolve().parents[1] / "SKILL.md"
+SCHEMA_PATH = Path(__file__).resolve().parents[1] / "serendb_schema.sql"
+
+# Add scripts dir to path so we can import agent
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import agent  # noqa: E402
 
 
 def _read_fixture(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
 
+
+# --- Existing fixture tests (unchanged) ---
 
 def test_happy_path_fixture_is_successful() -> None:
     payload = _read_fixture("happy_path.json")
@@ -43,3 +52,95 @@ def test_skill_instructions_require_user_stated_dates() -> None:
     assert "due date (user-stated only, never agent-computed)" in content
     assert "expected close date (user-stated only)" in content
     assert "What is the next behavior for this prospect, and when do you want to do it?" in content
+
+
+# --- New: Schema file exists and contains required tables ---
+
+def test_schema_file_exists() -> None:
+    assert SCHEMA_PATH.exists(), "serendb_schema.sql must exist for first-run bootstrap"
+
+
+def test_schema_contains_all_required_tables() -> None:
+    content = SCHEMA_PATH.read_text(encoding="utf-8")
+    required_tables = [
+        "prospects",
+        "behavior_tasks",
+        "behavior_journals",
+        "attitude_journals",
+        "technique_plans",
+        "coaching_sessions",
+    ]
+    for table in required_tables:
+        assert f"{{{{schema_name}}}}.{table}" in content, f"Schema must define table: {table}"
+
+
+def test_schema_bootstrap_sql_renders_without_error() -> None:
+    statements = agent.storage_bootstrap_sql("bat_sales_coach")
+    assert len(statements) >= 6, "Schema must produce at least 6 SQL statements (one per table)"
+    for stmt in statements:
+        assert "{{schema_name}}" not in stmt, "Template variable must be replaced"
+        assert "bat_sales_coach" in stmt, "Schema name must appear in rendered SQL"
+
+
+# --- New: ensure_storage fails fast without API key ---
+
+def test_ensure_storage_fails_without_api_key() -> None:
+    import pytest
+    with patch.dict("os.environ", {}, clear=True):
+        with pytest.raises(agent.SerenBootstrapError, match="SEREN_API_KEY"):
+            agent.ensure_storage({})
+
+
+# --- New: Behavior table formatting ---
+
+def test_format_behavior_table_empty() -> None:
+    assert agent.format_behavior_table([]) == "No behaviors due today."
+
+
+def test_format_behavior_table_with_rows() -> None:
+    behaviors = [
+        agent.BehaviorDueToday(
+            task_id="t1", prospect_name="Alice", organization="Acme",
+            title="Send proposal", due_date="2026-03-31", status="planned",
+        ),
+    ]
+    table = agent.format_behavior_table(behaviors)
+    assert "Alice" in table
+    assert "Acme" in table
+    assert "Send proposal" in table
+    assert "|" in table
+
+
+# --- New: OAuth check returns both providers ---
+
+def test_check_oauth_returns_both_providers() -> None:
+    with patch.dict("os.environ", {}, clear=True):
+        statuses = agent.check_oauth_providers({})
+    providers = {s.provider for s in statuses}
+    assert providers == {"microsoft", "google"}
+    assert all(not s.authenticated for s in statuses)
+
+
+def test_check_oauth_detects_token() -> None:
+    with patch.dict("os.environ", {"MICROSOFT_OAUTH_TOKEN": "tok123"}, clear=True):
+        statuses = agent.check_oauth_providers({})
+    ms = next(s for s in statuses if s.provider == "microsoft")
+    assert ms.authenticated is True
+
+
+# --- New: SKILL.md documents first-run bootstrap ---
+
+def test_skill_md_documents_first_run_setup() -> None:
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "## First-Run Setup" in content
+    assert "bat-sales-coach" in content
+    assert "bat_sales_coach" in content
+
+
+# --- New: run_once returns required keys ---
+
+def test_run_once_returns_error_without_storage() -> None:
+    with patch.dict("os.environ", {}, clear=True):
+        result = agent.run_once({}, dry_run=True)
+    assert result["status"] == "error"
+    assert result["error_code"] == "storage_bootstrap_failed"

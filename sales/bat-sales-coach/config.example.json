@@ -31,5 +31,11 @@
     "technique_focus": "",
     "training_request": ""
   },
-  "skill": "bat-sales-coach"
+  "skill": "bat-sales-coach",
+  "storage": {
+    "project_name": "bat-sales-coach",
+    "database_name": "bat_sales_coach",
+    "schema_name": "bat_sales_coach",
+    "region": "aws-us-east-2"
+  }
 }
