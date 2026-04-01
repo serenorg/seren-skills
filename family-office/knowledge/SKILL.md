@@ -34,13 +34,13 @@ Violations of this rule — asserting capability status without verification —
 
 ## Integration Checks (Optional)
 
-On each invoke, the agent checks for external integrations by **trying to use them**, not by searching for tool names:
+On each invoke, the agent checks for external integrations by calling them via the standard Seren publisher path — the same way every other skill accesses external services:
 
-1. **SharePoint**: Try calling `connector.sharepoint.get` or any available MCP tool that provides SharePoint access. If it works, sync context. If it fails or no tool exists after a concrete check, say "I checked and SharePoint integration is not available in this session. You can enable it in SerenDesktop Settings."
-2. **Asana**: Try calling `connector.asana.get` or any available MCP tool that provides Asana access. If it works, sync context. If it fails or no tool exists, say "I checked and Asana integration is not available in this session."
-3. **Email/Calendar**: Try direct access first — if Playwright is available, navigate to Gmail or Outlook. If a dedicated email MCP tool exists, call it. Use whatever tools are available. If direct access fails or no relevant tools exist, say "I checked for email access and it is not available in this session. You can enable Gmail or Outlook in SerenDesktop Settings."
+1. **SharePoint**: Call `connector.sharepoint.get` or the SharePoint publisher via `call_publisher`. If it works, sync context. If it fails or is not configured, say "I called the SharePoint publisher and it is not configured in this session. You can enable it in SerenDesktop Settings."
+2. **Asana**: Call `connector.asana.get` or the Asana publisher via `call_publisher`. If it works, sync context. If it fails, say "I called the Asana publisher and it is not configured in this session."
+3. **Email/Calendar**: Call the `gmail` or `outlook` publisher via `call_publisher` to read emails, calendar, or contacts. This is the same pattern used for `alpaca`, `kraken`, `perplexity`, and every other Seren publisher. If the call fails (not configured or OAuth not connected), say "I called the Gmail/Outlook publisher and it is not configured in this session. You can connect it in SerenDesktop Settings."
 
-**Never search for imagined tool names** (e.g., `gmail_read`, `connector.gmail`). List what tools are actually available and try them. Report on tools you tried, not tools you searched for.
+**Do not use Playwright to navigate to Gmail or Outlook.** Playwright is a browser automation tool, not an email API. Do not use it as a workaround for email access.
 
 All integrations are optional. The skill works without any of them — it gracefully degrades to guided interview and manual document input.
 

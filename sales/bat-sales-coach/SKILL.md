@@ -41,12 +41,12 @@ Violations of this rule — asserting capability status without verification —
 
 ## Email/Calendar Integration (Optional)
 
-On each invoke, the agent checks for email/calendar integration by **trying to use it**, not by searching for tool names:
+Gmail and Microsoft Outlook are available as Seren publishers. Access email the same way every other skill accesses external services — via `call_publisher`.
 
-1. **Try direct access first.** If Playwright is available, navigate to Gmail or Outlook and check whether the user is logged in. If a dedicated email MCP tool is available, call it. Use whatever tools exist — do not search for tools you expect to find.
-2. If direct access works: use it to enrich coaching context (e.g., pull recent emails from prospects, check calendar for scheduled meetings).
-3. If direct access fails or no relevant tools exist after a concrete check: tell the user "I checked for email access and it is not available in this session. You can enable Gmail or Outlook in SerenDesktop Settings for richer coaching context."
-4. **Never search for imagined tool names** (e.g., `gmail_read`, `connector.gmail`). List what tools are actually available and try them. Do not report on tools you searched for — report on tools you tried.
+1. **Call the publisher.** Use `call_publisher` with the `gmail` or `outlook` publisher slug to read emails, calendar, or contacts. This is the same pattern used for `alpaca`, `kraken`, `perplexity`, and every other Seren publisher.
+2. If the call succeeds: use the result to enrich coaching context (e.g., recent emails from prospects, scheduled meetings, contact details).
+3. If the call fails (publisher not configured or OAuth not connected): tell the user "I called the Gmail/Outlook publisher and it is not configured in this session. You can connect it in SerenDesktop Settings for richer coaching context."
+4. **Do not use Playwright to navigate to Gmail.** Playwright is a browser automation tool, not an email API. Do not use it as a workaround for email access.
 5. Do not block the coaching flow — email integration is optional. Proceed with manual context if not available.
 
 ## Overview
