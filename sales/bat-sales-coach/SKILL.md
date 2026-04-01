@@ -9,6 +9,29 @@ description: "Supportive sales-executive coaching skill that runs a Behavior-Att
 
 Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
 
+## First-Run Setup
+
+The runtime auto-bootstraps BAT storage on first run:
+
+1. Resolves or creates the Seren project `bat-sales-coach`.
+2. Resolves or creates the Seren database `bat_sales_coach`.
+3. Applies the `bat_sales_coach` schema and required tables: `prospects`, `behavior_tasks`, `behavior_journals`, `attitude_journals`, `technique_plans`, `coaching_sessions`.
+
+If `SEREN_API_KEY` is missing, the runtime fails immediately with a setup message pointing to `https://docs.serendb.com/skills.md`.
+
+## Returning-User Behavior Check
+
+On each invoke, the skill queries `behavior_tasks` for planned behaviors due today or earlier:
+- If behaviors are due, display them in a table and ask the sales executive which they completed.
+- If no behaviors are due, proceed directly to the behavior interview for new tasks.
+
+## Email/Calendar Integration (Optional)
+
+The skill checks for Microsoft Outlook or Google Mail OAuth tokens in SerenDesktop:
+- If authenticated, the agent can read emails, calendar, and contacts to enrich coaching context.
+- If not authenticated, the skill prompts the user to connect in SerenDesktop Settings.
+- Coaching works without email integration — it gracefully degrades to manual context.
+
 ## Overview
 
 BAT stands for `Behavior`, `Attitude`, and `Technique`.
