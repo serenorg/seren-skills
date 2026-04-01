@@ -34,6 +34,11 @@ seren-skills/
 ├── kraken/
 │   ├── grid-trader/             # Kraken grid trading bot
 │   └── money-mode-router/       # Kraken product mode recommender
+├── kalshi/
+│   ├── hybrid-signal-trader/    # Kalshi hybrid signal trader
+│   ├── watchlist-explainer/     # Kalshi watchlist explainer
+│   ├── consensus-divergence-monitor/ # Kalshi cross-venue divergence monitor
+│   └── macro-signal-monitor/    # Kalshi macro signal monitor
 ├── polymarket/
 │   └── bot/                     # Polymarket prediction market bot
 └── seren/
@@ -51,6 +56,7 @@ The slug is derived by joining the org and skill name with a hyphen:
 coinbase/grid-trader     -> coinbase-grid-trader
 cryptobullseyezone/tax   -> cryptobullseyezone-tax
 polymarket/bot           -> polymarket-bot
+kalshi/hybrid-signal-trader -> kalshi-hybrid-signal-trader
 seren/getting-started    -> seren-getting-started
 seren/browser-automation -> seren-browser-automation
 ```

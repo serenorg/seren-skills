@@ -1,0 +1,41 @@
+{
+  "status": "ok",
+  "skill": "watchlist-explainer",
+  "workflow_step_count": 9,
+  "dry_run": true,
+  "inputs": {
+    "include_single_signal_candidates": true,
+    "max_watchlist_items": 8,
+    "mode": "watchlist"
+  },
+  "connectors": {
+    "kalshi_oracle": {
+      "get": {
+        "status": "ok",
+        "connector": "kalshi_oracle",
+        "action": "get"
+      }
+    },
+    "macro_coil": {
+      "get": {
+        "status": "ok",
+        "connector": "macro_coil",
+        "action": "get"
+      }
+    },
+    "macro_gap": {
+      "get": {
+        "status": "ok",
+        "connector": "macro_gap",
+        "action": "get"
+      }
+    },
+    "storage": {
+      "post": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "post"
+      }
+    }
+  }
+}

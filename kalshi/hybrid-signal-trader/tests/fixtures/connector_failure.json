@@ -1,0 +1,38 @@
+{
+  "status": "error",
+  "skill": "hybrid-signal-trader",
+  "error_code": "connector_failure",
+  "connector": "kalshi_oracle",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "kalshi_oracle": {
+      "get": {
+        "status": "error",
+        "connector": "kalshi_oracle",
+        "action": "get",
+        "error_code": "connector_failure"
+      }
+    },
+    "macro_coil": {
+      "get": {
+        "status": "ok",
+        "connector": "macro_coil",
+        "action": "get"
+      }
+    },
+    "macro_gap": {
+      "get": {
+        "status": "ok",
+        "connector": "macro_gap",
+        "action": "get"
+      }
+    },
+    "storage": {
+      "post": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "post"
+      }
+    }
+  }
+}

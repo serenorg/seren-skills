@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Every trading skill directory and its expected default action keyword.
 TRADING_SKILLS: list[tuple[str, str]] = [
+    ("kalshi/hybrid-signal-trader", "scan"),
     ("polymarket/maker-rebate-bot", "backtest"),
     ("polymarket/liquidity-paired-basis-maker", "backtest"),
     ("polymarket/high-throughput-paired-basis-maker", "backtest"),

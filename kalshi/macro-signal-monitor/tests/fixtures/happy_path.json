@@ -1,0 +1,41 @@
+{
+  "status": "ok",
+  "skill": "macro-signal-monitor",
+  "workflow_step_count": 10,
+  "dry_run": true,
+  "inputs": {
+    "include_ambiguous_signals": true,
+    "max_candidates": 10,
+    "mode": "monitor"
+  },
+  "connectors": {
+    "kalshi_oracle": {
+      "get": {
+        "status": "ok",
+        "connector": "kalshi_oracle",
+        "action": "get"
+      }
+    },
+    "macro_coil": {
+      "get": {
+        "status": "ok",
+        "connector": "macro_coil",
+        "action": "get"
+      }
+    },
+    "macro_gap": {
+      "get": {
+        "status": "ok",
+        "connector": "macro_gap",
+        "action": "get"
+      }
+    },
+    "storage": {
+      "post": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "post"
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "status": "ok",
+  "skill": "consensus-divergence-monitor",
+  "workflow_step_count": 7,
+  "dry_run": true,
+  "inputs": {
+    "max_candidates": 10,
+    "min_divergence_bps": 100,
+    "mode": "monitor"
+  },
+  "connectors": {
+    "kalshi_oracle": {
+      "get": {
+        "status": "ok",
+        "connector": "kalshi_oracle",
+        "action": "get"
+      }
+    },
+    "storage": {
+      "post": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "post"
+      }
+    }
+  }
+}
