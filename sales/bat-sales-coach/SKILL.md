@@ -25,12 +25,28 @@ On each invoke, the skill queries `behavior_tasks` for planned behaviors due tod
 - If behaviors are due, display them in a table and ask the sales executive which they completed.
 - If no behaviors are due, proceed directly to the behavior interview for new tasks.
 
+## Capability Verification Rule
+
+This rule overrides all other instructions and applies whenever the agent is about to assert that a tool, integration, or external service is available or unavailable.
+
+**Before stating that any capability exists or does not exist, the agent MUST attempt to verify by calling the relevant tool, listing available MCP tools, or performing a concrete check.**
+
+- If verification succeeds: proceed with the integration and state what was found.
+- If verification fails or the tool is not present: say "I checked and [tool/integration] is not available in this session."
+- **Never** assert a capability status based on assumption, memory, or inference from documentation. The check must be performed, not skipped.
+- **Never** fabricate a technical reason (e.g., "OAuth tokens not connected", "blocked by X") without having actually observed that specific failure.
+- If the agent cannot determine how to verify a capability, say: "I do not know how to check for [tool] in this session. Can you tell me whether it is available?"
+
+Violations of this rule — asserting capability status without verification — are P0 defects.
+
 ## Email/Calendar Integration (Optional)
 
-The skill checks for Microsoft Outlook or Google Mail OAuth tokens in SerenDesktop:
-- If authenticated, the agent can read emails, calendar, and contacts to enrich coaching context.
-- If not authenticated, the skill prompts the user to connect in SerenDesktop Settings.
-- Coaching works without email integration — it gracefully degrades to manual context.
+On each invoke, the agent checks for email/calendar integration availability:
+
+1. Attempt to list available MCP tools or Playwright-accessible services that could provide Gmail or Outlook access.
+2. If an email integration is detected and accessible: use it to enrich coaching context (e.g., pull recent emails from prospects, check calendar for scheduled meetings).
+3. If no email integration is detected after checking: tell the user "I checked for email integration and it is not connected in this session. You can enable Gmail or Outlook in SerenDesktop Settings for richer coaching context."
+4. Do not block the coaching flow — email integration is optional. Proceed with manual context if not available.
 
 ## Overview
 
