@@ -25,12 +25,12 @@ cd ~/.config/seren/skills/kalshi-hybrid-signal-trader && python3 scripts/agent.p
 
 If the user explicitly requests `paper` or `live`, run that mode instead. After results are displayed, present the next steps.
 
-## Shared Contract
+## Output Contract
 
-This skill uses the shared Kalshi suite response contract:
+This skill is self-contained. Use these local references:
 
-- `kalshi/_shared/output-contract.md`
-- `kalshi/_shared/desktop-summary-template.md`
+- `references/output-contract.md`
+- `references/desktop-summary-template.md`
 
 Human-facing output must be rendered first as a `mini research note`. Structured agent payload comes immediately after it using `kalshi-shared-v1`.
 
