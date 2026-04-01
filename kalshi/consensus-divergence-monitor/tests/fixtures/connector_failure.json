@@ -1,0 +1,24 @@
+{
+  "status": "error",
+  "skill": "consensus-divergence-monitor",
+  "error_code": "connector_failure",
+  "connector": "kalshi_oracle",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "kalshi_oracle": {
+      "get": {
+        "status": "error",
+        "connector": "kalshi_oracle",
+        "action": "get",
+        "error_code": "connector_failure"
+      }
+    },
+    "storage": {
+      "post": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "post"
+      }
+    }
+  }
+}

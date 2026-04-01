@@ -1,0 +1,18 @@
+{
+  "connectors": [
+    "kalshi_oracle",
+    "macro_coil",
+    "macro_gap",
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "bankroll_usd": 250,
+    "include_watchlist": true,
+    "max_selected_trades": 3,
+    "min_divergence_bps": 150,
+    "mode": "scan",
+    "require_dual_signal_confirmation": true
+  },
+  "skill": "hybrid-signal-trader"
+}

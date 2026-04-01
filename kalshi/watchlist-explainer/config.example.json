@@ -1,0 +1,15 @@
+{
+  "connectors": [
+    "kalshi_oracle",
+    "macro_coil",
+    "macro_gap",
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "include_single_signal_candidates": true,
+    "max_watchlist_items": 8,
+    "mode": "watchlist"
+  },
+  "skill": "watchlist-explainer"
+}

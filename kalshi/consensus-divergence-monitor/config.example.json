@@ -1,0 +1,13 @@
+{
+  "connectors": [
+    "kalshi_oracle",
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "max_candidates": 10,
+    "min_divergence_bps": 100,
+    "mode": "monitor"
+  },
+  "skill": "consensus-divergence-monitor"
+}

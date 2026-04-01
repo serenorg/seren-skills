@@ -1,0 +1,15 @@
+{
+  "connectors": [
+    "kalshi_oracle",
+    "macro_coil",
+    "macro_gap",
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "include_ambiguous_signals": true,
+    "max_candidates": 10,
+    "mode": "monitor"
+  },
+  "skill": "macro-signal-monitor"
+}
