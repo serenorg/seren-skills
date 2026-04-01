@@ -18,6 +18,30 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - show me the current working brief
 - what changed since the first brief
 
+## Capability Verification Rule
+
+This rule overrides all other instructions and applies whenever the agent is about to assert that a tool, integration, or external service is available or unavailable.
+
+**Before stating that any capability exists or does not exist, the agent MUST attempt to verify by calling the relevant tool, listing available MCP tools, or performing a concrete check.**
+
+- If verification succeeds: proceed with the integration and state what was found.
+- If verification fails or the tool is not present: say "I checked and [tool/integration] is not available in this session."
+- **Never** assert a capability status based on assumption, memory, or inference from documentation. The check must be performed, not skipped.
+- **Never** fabricate a technical reason (e.g., "OAuth tokens not connected", "blocked by X") without having actually observed that specific failure.
+- If the agent cannot determine how to verify a capability, say: "I do not know how to check for [tool] in this session. Can you tell me whether it is available?"
+
+Violations of this rule — asserting capability status without verification — are P0 defects.
+
+## Integration Checks (Optional)
+
+On each invoke, the agent checks for external integration availability:
+
+1. **SharePoint**: Attempt to call `connector.sharepoint.get` or list relevant MCP tools. If available, sync context. If not, say "I checked and SharePoint integration is not connected in this session. You can enable it in SerenDesktop Settings."
+2. **Asana**: Attempt to call `connector.asana.get` or list relevant MCP tools. If available, sync context. If not, say "I checked and Asana integration is not connected in this session."
+3. **Email/Calendar**: Attempt to list available Gmail or Outlook MCP tools. If available, use them to enrich knowledge context. If not, say "I checked and email integration is not connected in this session. You can enable Gmail or Outlook in SerenDesktop Settings."
+
+All integrations are optional. The skill works without any of them — it gracefully degrades to guided interview and manual document input.
+
 ## Workflow Summary
 
 1. `normalize_request` uses `transform.normalize_request`
