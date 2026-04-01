@@ -15,12 +15,12 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - rank kalshi consensus breaks
 - check kalshi spreads across venues
 
-## Shared Contract
+## Output Contract
 
-Use the same Kalshi suite response contract and desktop summary template:
+This skill is self-contained. Use these local references:
 
-- `kalshi/_shared/output-contract.md`
-- `kalshi/_shared/desktop-summary-template.md`
+- `references/output-contract.md`
+- `references/desktop-summary-template.md`
 
 ## Workflow Summary
 
