@@ -67,10 +67,37 @@ This rule overrides all other instructions and applies before ANY read or write 
 
 If `SEREN_API_KEY` is missing, the runtime fails immediately with a setup message pointing to `https://docs.serendb.com/skills.md`.
 
+## Pipeline Display Format
+
+**Never render pipeline data as a markdown table.** Tables break in narrow chat windows and become unreadable.
+
+Always render each prospect as a vertical list block with ultra-short lines. Use bold labels followed by the value on the same line. Separate prospects with a horizontal rule. Keep every line under 60 characters when possible.
+
+**Required format:**
+
+```
+**PIPELINE — [date]**
+
+---
+
+**[Organization]** | $[value]
+
+- **Contact:** [name] ([title])
+- **Stage:** [stage]
+- **Last Behavior:** [short description]
+- **Next Behavior:** [short description or TBD]
+- **Due:** [date or TBD]
+- **Notes:** [brief context]
+
+---
+```
+
+This format applies everywhere pipeline data is shown: skill start, returning-user check, behavior completion, and technique wrap-up.
+
 ## Returning-User Behavior Check
 
 On each invoke (after the Schema Guard passes), the skill queries `behavior_tasks` for planned behaviors due today or earlier:
-- If behaviors are due, display them in a table and ask the sales executive which they completed.
+- If behaviors are due, display them using the Pipeline Display Format and ask the sales executive which they completed.
 - If no behaviors are due, proceed directly to the behavior interview for new tasks.
 
 ## Capability Verification Rule
@@ -305,7 +332,7 @@ Each run should return:
 
 - what behavior was planned or completed
 - what win was recognized
-- current prospect-specific next steps
+- current prospect-specific next steps (rendered using the Pipeline Display Format)
 - current attitude state
 - whether the curiosity gate passed
 - the next technique experiment, if applicable
