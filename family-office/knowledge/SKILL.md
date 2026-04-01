@@ -18,6 +18,50 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - show me the current working brief
 - what changed since the first brief
 
+## Schema Guard (Mandatory — runs every invoke)
+
+This rule overrides all other instructions and applies before ANY read or write to SerenDB. No data may be read from or written to the database until this guard passes.
+
+**On every invoke**, before loading the current brief or persisting anything:
+
+1. Resolve or create the Seren project for this skill via `list_projects` / `create_project`.
+2. Resolve or create the database for this skill via `list_databases` / `create_database`.
+3. Check whether the required tables exist by running:
+   ```sql
+   SELECT table_name FROM information_schema.tables
+   WHERE table_schema = 'public'
+   AND table_name IN ('knowledge_entries', 'knowledge_transcripts', 'knowledge_briefs', 'knowledge_retrieval_log', 'knowledge_rewards')
+   ```
+4. If **any** of the expected tables are missing, run the full DDL via `run_sql_transaction`:
+   ```sql
+   CREATE TABLE IF NOT EXISTS knowledge_entries (
+     id SERIAL PRIMARY KEY, entry_key TEXT NOT NULL, entry_value TEXT NOT NULL,
+     source TEXT, confidence TEXT, tags TEXT[],
+     created_by TEXT, created_at TIMESTAMPTZ DEFAULT now(),
+     updated_at TIMESTAMPTZ DEFAULT now(), expires_at TIMESTAMPTZ
+   );
+   CREATE TABLE IF NOT EXISTS knowledge_transcripts (
+     id SERIAL PRIMARY KEY, session_id TEXT, transcript TEXT NOT NULL,
+     created_by TEXT, created_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS knowledge_briefs (
+     id SERIAL PRIMARY KEY, brief_version INTEGER DEFAULT 1,
+     brief_content TEXT NOT NULL, entry_ids INTEGER[],
+     created_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS knowledge_retrieval_log (
+     id SERIAL PRIMARY KEY, query TEXT, matched_entry_ids INTEGER[],
+     result_summary TEXT, created_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS knowledge_rewards (
+     id SERIAL PRIMARY KEY, user_id TEXT, action TEXT,
+     amount NUMERIC, reason TEXT, created_at TIMESTAMPTZ DEFAULT now()
+   );
+   ```
+5. Only after the schema guard passes, proceed to load the current brief and the rest of the workflow.
+
+**Do not skip this guard.** Do not assume tables exist from a prior session. Do not proceed to any read or write if the check has not run. Violations of this rule are P0 data-loss defects.
+
 ## Capability Verification Rule
 
 This rule overrides all other instructions and applies whenever the agent is about to assert that a tool, integration, or external service is available or unavailable.

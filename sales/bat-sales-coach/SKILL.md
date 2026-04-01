@@ -9,19 +9,67 @@ description: "Supportive sales-executive coaching skill that runs a Behavior-Att
 
 Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
 
-## First-Run Setup
+## Schema Guard (Mandatory — runs every invoke)
 
-The runtime auto-bootstraps BAT storage on first run:
+This rule overrides all other instructions and applies before ANY read or write to SerenDB. No data may be read from or written to the database until this guard passes.
 
-1. Resolves or creates the Seren project `bat-sales-coach`.
-2. Resolves or creates the Seren database `bat_sales_coach`.
-3. Applies the `bat_sales_coach` schema and required tables: `prospects`, `behavior_tasks`, `behavior_journals`, `attitude_journals`, `technique_plans`, `coaching_sessions`.
+**On every invoke**, before loading pipeline context or persisting anything:
+
+1. Resolve or create the Seren project `bat-sales-coach` via `list_projects` / `create_project`.
+2. Resolve or create the Seren database `bat_sales_coach` via `list_databases` / `create_database`.
+3. Check whether the required tables exist by running:
+   ```sql
+   SELECT table_name FROM information_schema.tables
+   WHERE table_schema = 'public'
+   AND table_name IN ('prospects', 'behavior_tasks', 'behavior_journals', 'attitude_journals', 'technique_plans', 'coaching_sessions')
+   ```
+4. If **any** of the 6 tables are missing, run the following DDL via `run_sql_transaction`:
+   ```sql
+   CREATE TABLE IF NOT EXISTS prospects (
+     id SERIAL PRIMARY KEY, name TEXT NOT NULL, organization TEXT, email TEXT,
+     phone TEXT, pipeline_stage TEXT, opportunity_value NUMERIC,
+     expected_close_date TEXT, notes TEXT,
+     created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS behavior_tasks (
+     id SERIAL PRIMARY KEY, prospect_name TEXT, organization TEXT,
+     pipeline_stage TEXT, title TEXT NOT NULL, status TEXT DEFAULT 'planned',
+     due_date TEXT, start_time TIMESTAMPTZ, completion_time TIMESTAMPTZ,
+     opportunity_value NUMERIC, expected_close_date TEXT,
+     prospect_response TEXT, next_behavior TEXT,
+     created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS behavior_journals (
+     id SERIAL PRIMARY KEY, behavior_task_id INTEGER REFERENCES behavior_tasks(id),
+     journal_entry TEXT, outcome TEXT, wins TEXT,
+     created_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS attitude_journals (
+     id SERIAL PRIMARY KEY, session_id INTEGER, score INTEGER,
+     feeling_note TEXT, can_tell_future TEXT, curiosity TEXT,
+     created_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS technique_plans (
+     id SERIAL PRIMARY KEY, session_id INTEGER, technique_area TEXT,
+     behavior_experiment TEXT, practice_focus TEXT, behavior_quota TEXT,
+     next_steps TEXT, created_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS coaching_sessions (
+     id SERIAL PRIMARY KEY, session_date TIMESTAMPTZ DEFAULT now(),
+     behavior_completed BOOLEAN, attitude_completed BOOLEAN,
+     technique_completed BOOLEAN, notes TEXT,
+     created_at TIMESTAMPTZ DEFAULT now()
+   );
+   ```
+5. Only after the schema guard passes, proceed to the Returning-User Behavior Check.
+
+**Do not skip this guard.** Do not assume tables exist from a prior session. Do not proceed to any read or write if the check has not run. Violations of this rule are P0 data-loss defects.
 
 If `SEREN_API_KEY` is missing, the runtime fails immediately with a setup message pointing to `https://docs.serendb.com/skills.md`.
 
 ## Returning-User Behavior Check
 
-On each invoke, the skill queries `behavior_tasks` for planned behaviors due today or earlier:
+On each invoke (after the Schema Guard passes), the skill queries `behavior_tasks` for planned behaviors due today or earlier:
 - If behaviors are due, display them in a table and ask the sales executive which they completed.
 - If no behaviors are due, proceed directly to the behavior interview for new tasks.
 
