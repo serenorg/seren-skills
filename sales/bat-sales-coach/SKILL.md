@@ -21,9 +21,9 @@ This rule overrides all other instructions and applies before ANY read or write 
    ```sql
    SELECT table_name FROM information_schema.tables
    WHERE table_schema = 'public'
-   AND table_name IN ('prospects', 'behavior_tasks', 'behavior_journals', 'attitude_journals', 'technique_plans', 'coaching_sessions')
+   AND table_name IN ('prospects', 'behavior_tasks', 'behavior_journals', 'attitude_journals', 'technique_plans', 'coaching_sessions', 'prospect_contacts')
    ```
-4. If **any** of the 6 tables are missing, run the following DDL via `run_sql_transaction`:
+4. If **any** of the 7 tables are missing, run the following DDL via `run_sql_transaction`:
    ```sql
    CREATE TABLE IF NOT EXISTS prospects (
      id SERIAL PRIMARY KEY, name TEXT NOT NULL, organization TEXT, email TEXT,
@@ -60,6 +60,15 @@ This rule overrides all other instructions and applies before ANY read or write 
      technique_completed BOOLEAN, notes TEXT,
      created_at TIMESTAMPTZ DEFAULT now()
    );
+   CREATE TABLE IF NOT EXISTS prospect_contacts (
+     id SERIAL PRIMARY KEY,
+     prospect_id INTEGER REFERENCES prospects(id),
+     name TEXT NOT NULL, title TEXT, email TEXT, phone TEXT,
+     linkedin_url TEXT, source TEXT, connection_degree TEXT,
+     mutual_connections INTEGER, is_primary BOOLEAN DEFAULT false,
+     notes TEXT,
+     created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now()
+   );
    ```
 5. Only after the schema guard passes, proceed to the Returning-User Behavior Check.
 
@@ -83,6 +92,7 @@ Always render each prospect as a vertical list block with ultra-short lines. Use
 **[Organization]** | $[value]
 
 - **Contact:** [name] ([title])
+- **Other Contacts:** [count] stored
 - **Stage:** [stage]
 - **Last Behavior:** [short description]
 - **Next Behavior:** [short description or TBD]
@@ -123,6 +133,20 @@ Gmail and Microsoft Outlook are available as Seren publishers. Access email the 
 3. If the call fails (publisher not configured or OAuth not connected): tell the user "I called the Gmail/Outlook publisher and it is not configured in this session. You can connect it in SerenDesktop Settings for richer coaching context."
 4. **Do not use Playwright to navigate to Gmail.** Playwright is a browser automation tool, not an email API. Do not use it as a workaround for email access.
 5. Do not block the coaching flow — email integration is optional. Proceed with manual context if not available.
+
+## Contact Persistence Rule
+
+This rule applies whenever the agent discovers or receives contact information for a prospect during any phase of the coaching session.
+
+**When contacts are identified** (via LinkedIn search, Apollo lookup, Perplexity research, user-provided info, or any other source):
+
+1. Resolve or create the prospect in `prospects` if it does not exist.
+2. For each contact discovered, upsert into `prospect_contacts` matching on `prospect_id` + `name`.
+3. Set `is_primary = true` on the first contact added to a prospect if no primary exists.
+4. Record `source` as the discovery method (e.g., `linkedin`, `apollo`, `perplexity`, `manual`).
+5. Do not skip persistence because the contact lacks an email or title — persist what is known.
+
+**This is not optional.** Contacts are critical CRM data. Failure to persist discovered contacts is a P0 data-loss defect, equivalent to the Schema Guard violation.
 
 ## Overview
 
@@ -320,6 +344,7 @@ The skill may do background research for general sales-improvement ideas during 
 Persist BAT progress in SerenDB so the skill becomes a durable personal CRM and coaching memory:
 
 - `prospects`
+- `prospect_contacts`
 - `behavior_tasks`
 - `behavior_journals`
 - `attitude_journals`
