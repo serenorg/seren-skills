@@ -84,6 +84,7 @@ for (const skillPath of skillFiles) {
   skills.push({
     slug,
     name: fm.name || skillName,
+    displayName: fm["display-name"] || undefined,
     description: fm.description || "",
     source: "serenorg",
     sourceUrl,
