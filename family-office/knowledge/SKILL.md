@@ -1,5 +1,6 @@
 ---
 name: knowledge
+display-name: "Family Office Knowledge"
 description: "Captures, stores, and retrieves institutional knowledge for family offices through guided knowledge interviews, SharePoint and document ingestion, Asana-aware context seeding, same-user cross-thread recall, explicit freshness cues, and retrieval-linked SerenBucks incentives."
 ---
 

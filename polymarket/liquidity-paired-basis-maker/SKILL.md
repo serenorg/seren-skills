@@ -1,5 +1,6 @@
 ---
 name: liquidity-paired-basis-maker
+display-name: "Liquidity Basis Maker"
 description: "Run a liquidity-filtered paired-market basis strategy on Polymarket with mandatory backtest-first gating before trade intents."
 ---
 

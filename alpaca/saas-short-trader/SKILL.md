@@ -1,5 +1,6 @@
 ---
 name: saas-short-trader
+display-name: "Alpaca SaaS Short Trader"
 description: "Alpaca-branded SaaS short trader with MCP-native execution: scores AI disruption risk, builds capped short baskets, and tracks paper/live PnL in SerenDB."
 ---
 

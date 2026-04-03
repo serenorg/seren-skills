@@ -1,5 +1,6 @@
 ---
 name: google-drive
+display-name: "Google Drive"
 description: "Create, read, update, and manage files and folders in Google Drive. Upload documents, organize folder structures, search files, and manage sharing permissions with OAuth authentication."
 ---
 

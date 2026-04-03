@@ -1,5 +1,6 @@
 ---
 name: crm
+display-name: "Attio CRM"
 description: "Connect to Attio CRM to manage contacts, companies, deals, lists, tasks, notes, meetings, and comments through AI agents. Search records, create entries, update pipelines, and manage your sales workflow."
 ---
 

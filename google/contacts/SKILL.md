@@ -1,5 +1,6 @@
 ---
 name: google-contacts
+display-name: "Google Contacts"
 description: "Read and manage Google Contacts via the People API. Access contact information including names, emails, phone numbers, and organizations with OAuth authentication."
 ---
 

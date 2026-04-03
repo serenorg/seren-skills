@@ -1,5 +1,6 @@
 ---
 name: tax-prep
+display-name: "Wells Fargo Tax Prep"
 description: "Map Wells Fargo transaction categories to IRS tax line items, calculate estimated quarterly payments, flag deductible expenses, and produce a tax-ready summary with totals per line item."
 ---
 

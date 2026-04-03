@@ -1,5 +1,6 @@
 ---
 name: google-docs
+display-name: "Google Docs"
 description: "Create, read, and update Google Docs documents. Supports document creation, content insertion, formatting, and batch updates with OAuth authentication."
 ---
 

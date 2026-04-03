@@ -1,5 +1,6 @@
 ---
 name: watchlist-explainer
+display-name: "Kalshi Watchlist Explainer"
 description: "Explain why a Kalshi contract is interesting but not yet tradable, with freshness caveats, near-miss logic, and plain-language watchlist guidance."
 ---
 
