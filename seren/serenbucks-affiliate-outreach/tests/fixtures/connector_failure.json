@@ -1,0 +1,9 @@
+{
+  "status": "error",
+  "skill": "serenbucks-affiliate-outreach",
+  "error_code": "affiliate_bootstrap_failed",
+  "connector": "affiliates",
+  "retry_count": 3,
+  "fail_closed": true,
+  "message": "Default affiliate campaign context could not be bootstrapped after three immediate attempts."
+}

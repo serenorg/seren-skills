@@ -1,0 +1,30 @@
+{
+  "status": "ok",
+  "skill": "serenbucks-affiliate-outreach",
+  "workflow_step_count": 12,
+  "dry_run": true,
+  "campaign": {
+    "campaign_id": "serenbucks-default",
+    "tracked_link": "https://seren.ai/serenbucks?ref=default",
+    "source_of_truth": "seren-affiliates"
+  },
+  "bootstrap": {
+    "auth_path": "seren_desktop",
+    "affiliate_context_ready": true
+  },
+  "proposal": {
+    "editable": true,
+    "size": 10
+  },
+  "approval": {
+    "new_outbound_required": true,
+    "replies_required": true
+  },
+  "limits": {
+    "new_outbound_daily_cap": 10,
+    "replies_count_against_daily_cap": false
+  },
+  "crm": {
+    "source_of_truth": "skill_owned_serendb"
+  }
+}

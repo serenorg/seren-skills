@@ -1,0 +1,9 @@
+{
+  "status": "error",
+  "skill": "serenbucks-affiliate-outreach",
+  "error_code": "dnc_blocked",
+  "signal": "unsubscribe",
+  "hard_stop": true,
+  "blocked_action": "draft_send",
+  "message": "Candidate was moved to hard DNC after an unsubscribe signal."
+}
