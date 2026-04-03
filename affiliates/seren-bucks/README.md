@@ -1,6 +1,6 @@
-# SerenBucks Affiliate Outreach
+# Seren Bucks
 
-Review-first skill bundle for operating a single SerenBucks affiliate campaign.
+Review-first skill bundle for operating a single Seren Bucks affiliate campaign.
 
 ## What this package includes
 

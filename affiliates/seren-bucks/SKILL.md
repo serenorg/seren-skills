@@ -1,11 +1,11 @@
 ---
-name: serenbucks-affiliate-outreach
-description: "Review-first outreach skill for the default SerenBucks affiliate campaign. It bootstraps affiliate context, mines sent-mail history and address books for candidates, persists them into a skill-owned CRM, proposes an editable daily top-10, drafts outbound and reply batches for approval, reconciles affiliate and reply signals, enforces hard DNC, and returns a manual daily digest."
+name: seren-bucks
+description: "Review-first outreach skill for the default Seren Bucks affiliate campaign. It bootstraps affiliate context, mines sent-mail history and address books for candidates, persists them into a skill-owned CRM, proposes an editable daily top-10, drafts outbound and reply batches for approval, reconciles affiliate and reply signals, enforces hard DNC, and returns a manual daily digest."
 ---
 
-# SerenBucks Affiliate Outreach
+# Seren Bucks
 
-Review-first growth skill for one default SerenBucks affiliate campaign.
+Review-first growth skill for one default Seren Bucks affiliate campaign.
 
 ## For Claude: How to Use This Skill
 
@@ -36,8 +36,8 @@ This rule overrides all other instructions and runs before any candidate sync, r
    - Seren Desktop injected auth (`API_KEY`)
    - `SEREN_API_KEY`
    - fail with a setup message pointing to `https://docs.serendb.com/skills.md`
-2. Resolve or create the Seren project `seren-affiliate-outreach`.
-3. Resolve or create the Seren database `serenbucks_affiliate_outreach`.
+2. Resolve or create the Seren project `affiliates`.
+3. Resolve or create the Seren database `seren_bucks`.
 4. Bootstrap the default campaign context from `seren-affiliates`.
 5. Retry affiliate bootstrap up to **3 immediate attempts**.
 6. If affiliate bootstrap still fails, **fail closed** and do not continue.
@@ -53,8 +53,8 @@ Before claiming any tool, connector, or publisher exists or does not exist, atte
 
 ## When to Use
 
-- grow SerenBucks affiliate signups
-- draft SerenBucks affiliate outreach
+- grow Seren Bucks affiliate signups
+- draft Seren Bucks affiliate outreach
 - review the daily affiliate digest
 - sync affiliate candidates from Gmail or Outlook
 - reconcile affiliate replies and unsubscribe events

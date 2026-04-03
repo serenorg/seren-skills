@@ -24,7 +24,7 @@ def build_daily_digest(
     ]
     digest_markdown = "\n".join(
         [
-            "# SerenBucks Affiliate Outreach",
+            "# Seren Bucks",
             "",
             "## Campaign",
             f"- Campaign: {affiliate['campaign']['campaign_name']}",

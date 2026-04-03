@@ -7,7 +7,7 @@ SAMPLE_REPLY_QUEUE = [
         "candidate_id": "cand-amelia-ross",
         "full_name": "Amelia Ross",
         "organization": "Studio Alpha",
-        "reply_summary": "Asked for a short explanation of the SerenBucks program.",
+        "reply_summary": "Asked for a short explanation of the Seren Bucks program.",
     },
     {
         "candidate_id": "cand-zoe-patel",
@@ -29,7 +29,7 @@ def build_draft_batches(proposal: dict, config: dict) -> dict:
                 "draft_id": f"draft-{candidate['candidate_id']}",
                 "draft_type": "new_outbound",
                 "candidate_id": candidate["candidate_id"],
-                "subject_line": f"{candidate['organization']} x SerenBucks affiliate fit",
+                "subject_line": f"{candidate['organization']} x Seren Bucks affiliate fit",
                 "message_body": (
                     f"Draft outreach for {candidate['full_name']}.\n\n"
                     f"Include the default tracked link: {link}"

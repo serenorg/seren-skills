@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime stub for serenbucks-affiliate-outreach."""
+"""Runtime stub for seren-bucks."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from sending import prepare_send_actions
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the SerenBucks affiliate outreach stub.")
+    parser = argparse.ArgumentParser(description="Run the Seren Bucks affiliate skill stub.")
     parser.add_argument(
         "--config",
         default="config.json",
@@ -141,7 +141,7 @@ def _run_pipeline(config: dict, *, mode: str) -> dict:
         }
 
     return {
-        "skill": "serenbucks-affiliate-outreach",
+        "skill": "seren-bucks",
         "run_status": "ok",
         "mode": mode,
         "generated_at": utc_now(),

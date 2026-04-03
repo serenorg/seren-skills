@@ -9,16 +9,16 @@ from typing import Any
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "dry_run": True,
-    "skill": "serenbucks-affiliate-outreach",
+    "skill": "seren-bucks",
     "campaign": {
-        "campaign_id": "serenbucks-default",
-        "campaign_name": "SerenBucks Default Affiliate Campaign",
+        "campaign_id": "seren-bucks-default",
+        "campaign_name": "Seren Bucks Default Affiliate Campaign",
         "tracked_link": "https://seren.ai/serenbucks?ref=default",
         "affiliate_source_of_truth": "seren-affiliates",
     },
     "database": {
-        "project": "seren-affiliate-outreach",
-        "name": "serenbucks_affiliate_outreach",
+        "project": "affiliates",
+        "name": "seren_bucks",
     },
     "auth": {
         "desktop_auth_first": True,
