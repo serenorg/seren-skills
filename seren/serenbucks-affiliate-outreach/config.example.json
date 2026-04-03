@@ -1,0 +1,60 @@
+{
+  "dry_run": true,
+  "skill": "serenbucks-affiliate-outreach",
+  "campaign": {
+    "campaign_id": "serenbucks-default",
+    "campaign_name": "SerenBucks Default Affiliate Campaign",
+    "tracked_link": "https://seren.ai/serenbucks?ref=default",
+    "affiliate_source_of_truth": "seren-affiliates"
+  },
+  "database": {
+    "project": "seren-affiliate-outreach",
+    "name": "serenbucks_affiliate_outreach"
+  },
+  "auth": {
+    "desktop_auth_first": true,
+    "api_key_env": "SEREN_API_KEY",
+    "setup_url": "https://docs.serendb.com/skills.md"
+  },
+  "candidate_sources": {
+    "gmail_sent": true,
+    "outlook_sent": true,
+    "gmail_contacts": true,
+    "outlook_contacts": true
+  },
+  "approval": {
+    "new_outbound_requires_approval": true,
+    "replies_require_approval": true
+  },
+  "limits": {
+    "proposal_size": 10,
+    "new_outbound_daily_cap": 10,
+    "replies_count_against_daily_cap": false
+  },
+  "dnc": {
+    "hard_stop_signals": [
+      "unsubscribe",
+      "do_not_contact",
+      "hostile_negative"
+    ]
+  },
+  "inputs": {
+    "command": "run",
+    "json_output": false,
+    "proposal_size": 10,
+    "new_outbound_daily_cap": 10,
+    "strict_mode": true,
+    "tracked_link": "https://seren.ai/serenbucks?ref=default"
+  },
+  "connectors": [
+    "affiliates",
+    "storage",
+    "gmail",
+    "outlook",
+    "model"
+  ],
+  "simulate": {
+    "affiliate_bootstrap_failure": false,
+    "reply_signal": ""
+  }
+}
