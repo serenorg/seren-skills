@@ -1,5 +1,6 @@
 ---
 name: cash-flow-statement
+display-name: "Wells Fargo Cash Flow"
 description: "Generate operating, investing, and financing cash flow statements from Wells Fargo transaction data stored in SerenDB."
 ---
 

@@ -1,5 +1,6 @@
 ---
 name: customer-support-intake
+display-name: "Customer Support Intake"
 description: "Secure customer support evidence collection for SerenDesktop incidents. Use when users report failures and need one-click collection of logs, diagnostics, chat history, and screenshots with consent checks, PII redaction, and storage in SerenDB."
 ---
 

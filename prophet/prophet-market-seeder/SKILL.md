@@ -1,5 +1,6 @@
 ---
 name: prophet-market-seeder
+display-name: "Prophet Market Seeder"
 description: "Take referred Prophet users from setup through bounded market creation with referral-aware auth checks, candidate scoring, filtered submission, and clear run reporting."
 ---
 

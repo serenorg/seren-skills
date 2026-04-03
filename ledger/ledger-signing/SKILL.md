@@ -1,5 +1,6 @@
 ---
 name: ledger-signing
+display-name: "Ledger Signing"
 description: "Guide Ledger device owners through secure transaction and message signing with explicit support for clear signing and blind signing fallback flows."
 ---
 

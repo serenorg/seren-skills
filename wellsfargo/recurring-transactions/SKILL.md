@@ -1,5 +1,6 @@
 ---
 name: recurring-transactions
+display-name: "Wells Fargo Recurring"
 description: "Detect and track recurring subscriptions, bills, and regular payments from Wells Fargo transaction data stored in SerenDB."
 ---
 

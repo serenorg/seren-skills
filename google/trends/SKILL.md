@@ -1,5 +1,6 @@
 ---
 name: google-trends
+display-name: "Google Trends"
 description: "Access real-time Google Trends data including interest over time, regional breakdowns, related topics and queries. Supports up to 5 keywords per search, geographic filtering, date ranges, and search property filters."
 ---
 

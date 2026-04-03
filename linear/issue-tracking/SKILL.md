@@ -1,5 +1,6 @@
 ---
 name: issue-tracking
+display-name: "Linear Issue Tracking"
 description: "Connect to Linear to manage issues, projects, cycles, and team workflows through AI agents. Create and update issues, manage project roadmaps, track sprint cycles, and search across your workspace."
 ---
 

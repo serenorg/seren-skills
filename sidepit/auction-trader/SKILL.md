@@ -1,5 +1,6 @@
 ---
 name: auction-trader
+display-name: "Sidepit Auction Trader"
 description: "AI agent trading skill for Sidepit's 1-second discrete auction exchange — submit orders, subscribe to market data, manage positions, and persist all auction activity to SerenDB via NNG/protobuf API."
 ---
 

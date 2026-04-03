@@ -1,5 +1,6 @@
 ---
 name: sass-short-trader-delta-neutral
+display-name: "Alpaca SaaS Short Trader DN"
 description: "Alpaca-branded SaaS delta-neutral trader with MCP-native execution: scores AI disruption risk, builds capped short baskets, adds a configurable long hedge leg, and tracks paper/live PnL in SerenDB."
 ---
 

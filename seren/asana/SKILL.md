@@ -1,5 +1,6 @@
 ---
 name: asana
+display-name: "Asana"
 description: "Manage Asana tasks, projects, sections, goals, portfolios, tags, teams, and workspaces through AI agents. Create, update, and organize work items with OAuth token passthrough."
 ---
 

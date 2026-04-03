@@ -1,5 +1,6 @@
 ---
 name: tax
+display-name: "CryptoBullseye Tax"
 version: "2.0.0"
 description: "Use when a user has a Form 1099-DA from a crypto exchange and wants to review it, understand it, or check it for issues before filing Form 8949."
 ---

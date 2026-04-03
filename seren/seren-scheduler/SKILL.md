@@ -1,5 +1,6 @@
 ---
 name: seren-scheduler
+display-name: "Seren Scheduler"
 description: "Create and manage scheduled HTTP jobs with the seren-cron publisher. Use when users want to create recurring webhook runs, list and inspect existing schedules, update jobs, pause or resume execution, organize jobs into groups, or review run history."
 ---
 

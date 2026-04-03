@@ -1,5 +1,6 @@
 ---
 name: bat-sales-coach
+display-name: "BAT Sales Coach"
 description: "Supportive sales-executive coaching skill that runs a Behavior-Attitude-Technique loop, journals completed sales work, tracks pipeline progress in SerenDB, reinforces momentum without pressure, and turns self-directed technique reviews into the next behavior plan."
 ---
 

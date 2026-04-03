@@ -1,5 +1,6 @@
 ---
 name: prophet-adversarial-auditor
+display-name: "Prophet Adversarial Auditor"
 description: "Inspect Prophet market creation history for rejected submissions, replayable failures, suspicious patterns, and plausible economic loss scenarios with structured findings for operators."
 ---
 

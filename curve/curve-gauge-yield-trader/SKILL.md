@@ -1,5 +1,6 @@
 ---
 name: curve-gauge-yield-trader
+display-name: "Curve Gauge Yield Trader"
 description: "Multi-chain Curve gauge yield trading skill with paper-first defaults. Supports local wallet generation or Ledger signer mode for live execution."
 ---
 

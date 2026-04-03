@@ -1,5 +1,6 @@
 ---
 name: google-meet
+display-name: "Google Meet"
 description: "Create and manage Google Meet meeting spaces. Generate meeting links, configure meeting settings, and manage active conferences with OAuth authentication."
 ---
 

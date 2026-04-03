@@ -1,5 +1,6 @@
 ---
 name: consensus-divergence-monitor
+display-name: "Kalshi Divergence Monitor"
 description: "Monitor Kalshi cross-venue consensus breaks, rank the largest divergences, and summarize what changed since the previous scan."
 ---
 

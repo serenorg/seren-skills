@@ -1,5 +1,6 @@
 ---
 name: p2p-leverage-bitcoin-usdc-deposit
+display-name: "P2P Leveraged BTC Deposit"
 description: "This skill will allow you to deposit 73% of your cash into Polymarket, on Base, with Bitcoin Leverage. Use any supported Payment app on Peer."
 ---
 
