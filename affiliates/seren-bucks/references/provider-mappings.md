@@ -1,4 +1,4 @@
-# SerenBucks Affiliate Outreach V1 Provider Mapping
+# Seren Bucks V1 Provider Mapping
 
 | Capability | Provider | Role in v1 |
 | --- | --- | --- |

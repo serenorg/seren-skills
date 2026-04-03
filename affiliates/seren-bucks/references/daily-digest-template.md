@@ -1,4 +1,4 @@
-# SerenBucks Affiliate Outreach V1 Daily Digest Template
+# Seren Bucks V1 Daily Digest Template
 
 ## Campaign
 

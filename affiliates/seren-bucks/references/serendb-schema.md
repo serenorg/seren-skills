@@ -1,4 +1,4 @@
-# SerenBucks Affiliate Outreach V1 SerenDB Schema
+# Seren Bucks V1 SerenDB Schema
 
 The v1 schema is split into five responsibilities:
 

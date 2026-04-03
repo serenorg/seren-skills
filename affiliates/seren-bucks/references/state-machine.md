@@ -1,4 +1,4 @@
-# SerenBucks Affiliate Outreach V1 State Machine
+# Seren Bucks V1 State Machine
 
 ## Primary states
 

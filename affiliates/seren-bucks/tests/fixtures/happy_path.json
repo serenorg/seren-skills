@@ -1,10 +1,10 @@
 {
   "status": "ok",
-  "skill": "serenbucks-affiliate-outreach",
+  "skill": "seren-bucks",
   "workflow_step_count": 12,
   "dry_run": true,
   "campaign": {
-    "campaign_id": "serenbucks-default",
+    "campaign_id": "seren-bucks-default",
     "tracked_link": "https://seren.ai/serenbucks?ref=default",
     "source_of_truth": "seren-affiliates"
   },

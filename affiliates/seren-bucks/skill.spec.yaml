@@ -1,8 +1,8 @@
-skill: serenbucks-affiliate-outreach
-description: Review-first outreach skill for the default SerenBucks affiliate campaign. It bootstraps affiliate context, mines sent-mail history and address books for candidates, persists them into a skill-owned CRM, proposes an editable daily top-10, drafts outbound and reply batches for approval, reconciles affiliate and reply signals, enforces hard DNC, and returns a manual daily digest.
+skill: seren-bucks
+description: Review-first outreach skill for the default Seren Bucks affiliate campaign. It bootstraps affiliate context, mines sent-mail history and address books for candidates, persists them into a skill-owned CRM, proposes an editable daily top-10, drafts outbound and reply batches for approval, reconciles affiliate and reply signals, enforces hard DNC, and returns a manual daily digest.
 triggers:
-  - grow SerenBucks affiliate signups
-  - draft SerenBucks affiliate outreach
+  - grow Seren Bucks affiliate signups
+  - draft Seren Bucks affiliate outreach
   - review the daily affiliate digest
   - sync affiliate candidates from Gmail or Outlook
   - reconcile affiliate replies and unsubscribe events
@@ -44,7 +44,7 @@ inputs:
     default: true
   tracked_link:
     type: string
-    description: Canonical tracked link for the default SerenBucks affiliate campaign.
+    description: Canonical tracked link for the default Seren Bucks affiliate campaign.
     default: https://seren.ai/serenbucks?ref=default
 secrets:
   - SEREN_API_KEY
@@ -67,27 +67,27 @@ connectors:
 state:
   runs:
     kind: serendb
-    database: serenbucks_affiliate_outreach
+    database: seren_bucks
     table: affiliate_runs
   candidates:
     kind: serendb
-    database: serenbucks_affiliate_outreach
+    database: seren_bucks
     table: candidate_profiles
   proposals:
     kind: serendb
-    database: serenbucks_affiliate_outreach
+    database: seren_bucks
     table: proposal_sets
   drafts:
     kind: serendb
-    database: serenbucks_affiliate_outreach
+    database: seren_bucks
     table: message_drafts
   approvals:
     kind: serendb
-    database: serenbucks_affiliate_outreach
+    database: seren_bucks
     table: approval_events
   digests:
     kind: serendb
-    database: serenbucks_affiliate_outreach
+    database: seren_bucks
     table: daily_digests
 policies:
   dry_run_default: true
@@ -169,8 +169,8 @@ tests:
     - persists_candidates_before_ranking
     - renders_manual_digest_from_fixture
 publish:
-  org: seren
-  slug: serenbucks-affiliate-outreach
+  org: affiliates
+  slug: seren-bucks
 metadata:
   category: growth
   product_role: primary

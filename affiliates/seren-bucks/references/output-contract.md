@@ -1,4 +1,4 @@
-# SerenBucks Affiliate Outreach V1 Output Contract
+# Seren Bucks V1 Output Contract
 
 Return the operator-facing digest first, then the structured payload.
 

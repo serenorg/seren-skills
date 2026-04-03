@@ -1,6 +1,6 @@
 {
   "status": "error",
-  "skill": "serenbucks-affiliate-outreach",
+  "skill": "seren-bucks",
   "error_code": "affiliate_bootstrap_failed",
   "connector": "affiliates",
   "retry_count": 3,
