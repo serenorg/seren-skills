@@ -18,6 +18,7 @@ import psycopg
 import requests
 
 from affiliates_webhook import fire_reward_webhook
+import team_memory
 
 DEFAULT_DRY_RUN = True
 DEFAULT_API_BASE = "https://api.serendb.com"
@@ -26,12 +27,23 @@ CAPTURE_COMMANDS = {"capture", "start", "start_capture", "knowledge_capture"}
 RETRIEVE_COMMANDS = {"retrieve", "recall", "search", "what_did_i_say_about"}
 BRIEF_COMMANDS = {"brief", "show_brief", "show_the_current_working_brief"}
 DIFF_COMMANDS = {"diff", "compare", "what_changed_since_the_first_brief"}
+DIGEST_COMMANDS = {"memory_digest", "digest", "weekly_digest", "daily_digest"}
+PRE_MEETING_COMMANDS = {"pre_meeting_brief", "meeting_prep", "prep_meeting"}
+DECISION_RECALL_COMMANDS = {"decision_recall", "what_did_we_decide", "decision_history"}
+VALIDATE_COMMANDS = {"validate_memory", "validate", "confirm_memory", "review_stale"}
+WATCH_COMMANDS = {"watch_topic", "watch", "subscribe"}
 STORAGE_COLLECTIONS = {
     "briefs",
     "knowledge_entries",
     "retrieval_events",
     "reward_audits",
     "transcripts",
+    "memory_objects",
+    "memory_links",
+    "memory_validations",
+    "memory_subscriptions",
+    "memory_nudges",
+    "engagement_events",
 }
 
 
@@ -675,6 +687,16 @@ def normalize_request(config: dict[str, Any]) -> dict[str, Any]:
         mode = "brief"
     elif raw_command in DIFF_COMMANDS:
         mode = "diff"
+    elif raw_command in DIGEST_COMMANDS:
+        mode = "memory_digest"
+    elif raw_command in PRE_MEETING_COMMANDS:
+        mode = "pre_meeting_brief"
+    elif raw_command in DECISION_RECALL_COMMANDS:
+        mode = "decision_recall"
+    elif raw_command in VALIDATE_COMMANDS:
+        mode = "validate_memory"
+    elif raw_command in WATCH_COMMANDS:
+        mode = "watch_topic"
     else:
         mode = raw_command or "capture"
     query_text = str(inputs.get("query_text", "")).strip()
@@ -1062,6 +1084,42 @@ def run_once(config: dict[str, Any], dry_run: bool) -> dict[str, Any]:
         knowledge_entries = distill_knowledge_entries(config, request, transcript, sharepoint_context, asana_context, extracted_documents)
         transcript_write = archive_transcript(storage, request, transcript)
         knowledge_writes = persist_knowledge_entries(storage, knowledge_entries)
+
+        # --- Team Memory: distill structured memory objects from entries ---
+        memory_objects = team_memory.distill_structured_memories(knowledge_entries, request)
+        for mem in memory_objects:
+            storage.upsert("memory_objects", mem)
+
+        # --- Load existing memories for resurfacing/digest/validation ---
+        all_memories_response = storage.query("memory_objects", filters={"organization_name": request["organization_name"]})
+        all_memories = all_memories_response.get("records", [])
+
+        # --- Handle team memory modes ---
+        team_memory_result: dict[str, Any] = {}
+        if request["mode"] == "memory_digest":
+            team_memory_result = team_memory.generate_memory_digest(all_memories, request["current_date"])
+        elif request["mode"] == "pre_meeting_brief":
+            team_memory_result = team_memory.generate_pre_meeting_brief(all_memories, request["query_text"] or request["topic"], request["current_date"])
+        elif request["mode"] == "decision_recall":
+            decisions = [m for m in all_memories if m.get("memory_type") == "decision"]
+            resurfaced = team_memory.find_memories_to_resurface(decisions, request["query_text"] or request["topic"], request["current_date"], threshold=0.1)
+            team_memory_result = {"decisions": resurfaced, "total": len(resurfaced)}
+        elif request["mode"] == "validate_memory":
+            stale = team_memory.find_stale_memories(all_memories, request["current_date"])
+            team_memory_result = {"stale_memories": stale, "total": len(stale)}
+        elif request["mode"] == "watch_topic":
+            sub = {"id": f"sub-{str(uuid4())[:8]}", "user_id": request["requester_id"], "topic": request["query_text"] or request["topic"], "created_at": request["current_date"]}
+            storage.upsert("memory_subscriptions", sub)
+            team_memory_result = {"subscription": sub}
+
+        # --- Proactive resurfacing during retrieve mode ---
+        proactive_memories: list[dict[str, Any]] = []
+        if request["mode"] == "retrieve" and all_memories:
+            proactive_memories = team_memory.find_memories_to_resurface(all_memories, request["query_text"] or request["topic"], request["current_date"])
+            for mem in proactive_memories:
+                event = team_memory.build_engagement_event(event_type="reuse", memory_id=mem.get("id", ""), user_id=request["requester_id"], current_date=request["current_date"])
+                storage.upsert("engagement_events", event)
+
         candidate_entries = retrieve_candidate_entries(storage, request)
         if request["mode"] == "capture":
             candidate_entries = {"status": "ok", "records": knowledge_entries, "collection": "knowledge_entries", "connector": "storage", "action": "query"}
@@ -1077,6 +1135,13 @@ def run_once(config: dict[str, Any], dry_run: bool) -> dict[str, Any]:
         reward_audit = persist_rewards(storage, request, reward)
         working_brief = render_working_brief(storage, request, current_brief, sharepoint_context, asana_context, extracted_documents, filtered_results)
         brief_write = persist_working_brief_snapshot(storage, request, working_brief)
+
+        # --- Reinforcement messaging ---
+        reinforcement: str | None = None
+        engagement_events = storage.query("engagement_events").get("records", [])
+        if memory_objects:
+            reinforcement = team_memory.generate_reinforcement_message(engagement_events, memory_objects[0])
+
         return {
             "status": "ok",
             "skill": "knowledge",
@@ -1089,6 +1154,10 @@ def run_once(config: dict[str, Any], dry_run: bool) -> dict[str, Any]:
             "extracted_documents": extracted_documents,
             "transcript": transcript,
             "knowledge_entries": knowledge_entries,
+            "memory_objects": memory_objects,
+            "proactive_memories": proactive_memories,
+            "team_memory_result": team_memory_result,
+            "reinforcement": reinforcement,
             "transcript_write": transcript_write,
             "knowledge_writes": knowledge_writes,
             "retrieval_candidates": candidate_entries,
