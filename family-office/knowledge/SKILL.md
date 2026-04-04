@@ -1,7 +1,7 @@
 ---
 name: knowledge
 display-name: "Family Office Knowledge"
-description: "Captures, stores, and retrieves institutional knowledge for family offices through guided knowledge interviews, SharePoint and document ingestion, Asana-aware context seeding, same-user cross-thread recall, explicit freshness cues, and retrieval-linked SerenBucks incentives."
+description: "Team memory system for family offices. Captures structured institutional knowledge (decisions, assumptions, risks, commitments, open questions), proactively resurfaces relevant context, asks for stale-memory validation, generates pre-meeting briefs and memory digests, and rewards contribution through visible team leverage."
 ---
 
 # Knowledge
@@ -18,6 +18,11 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - what did i say about
 - show me the current working brief
 - what changed since the first brief
+- show me a memory digest
+- prep for a meeting
+- what did we decide about
+- validate stale memories
+- watch this topic
 
 ## Schema Guard (Mandatory — runs every invoke)
 
@@ -31,7 +36,7 @@ This rule overrides all other instructions and applies before ANY read or write 
    ```sql
    SELECT table_name FROM information_schema.tables
    WHERE table_schema = 'public'
-   AND table_name IN ('knowledge_entries', 'knowledge_transcripts', 'knowledge_briefs', 'knowledge_retrieval_log', 'knowledge_rewards')
+   AND table_name IN ('knowledge_entries', 'knowledge_transcripts', 'knowledge_briefs', 'knowledge_retrieval_log', 'knowledge_rewards', 'memory_objects', 'memory_links', 'memory_validations', 'memory_subscriptions', 'engagement_events')
    ```
 4. If **any** of the expected tables are missing, run the full DDL via `run_sql_transaction`:
    ```sql
@@ -57,6 +62,35 @@ This rule overrides all other instructions and applies before ANY read or write 
    CREATE TABLE IF NOT EXISTS knowledge_rewards (
      id SERIAL PRIMARY KEY, user_id TEXT, action TEXT,
      amount NUMERIC, reason TEXT, created_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS memory_objects (
+     id TEXT PRIMARY KEY, memory_type TEXT NOT NULL, key_claim TEXT NOT NULL,
+     subject TEXT, owner_id TEXT, team_scope TEXT DEFAULT 'team',
+     organization_name TEXT, department TEXT,
+     confidence_score TEXT DEFAULT 'medium', importance_score TEXT DEFAULT 'medium',
+     validity_status TEXT DEFAULT 'active', source TEXT, source_id TEXT,
+     entity_refs TEXT[], derived_from_ids TEXT[],
+     review_cadence_days INTEGER DEFAULT 30,
+     used_count INTEGER DEFAULT 0, last_used_at TIMESTAMPTZ,
+     last_validated_at TIMESTAMPTZ DEFAULT now(), next_review_at TIMESTAMPTZ,
+     created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS memory_links (
+     id TEXT PRIMARY KEY, from_memory_id TEXT NOT NULL, to_id TEXT NOT NULL,
+     link_type TEXT NOT NULL, label TEXT, created_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS memory_validations (
+     id TEXT PRIMARY KEY, memory_id TEXT NOT NULL, validator_id TEXT,
+     action TEXT NOT NULL, previous_claim TEXT, revised_claim TEXT,
+     validated_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS memory_subscriptions (
+     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, topic TEXT NOT NULL,
+     created_at TIMESTAMPTZ DEFAULT now()
+   );
+   CREATE TABLE IF NOT EXISTS engagement_events (
+     id TEXT PRIMARY KEY, event_type TEXT NOT NULL, memory_id TEXT,
+     user_id TEXT, detail TEXT, created_at TIMESTAMPTZ DEFAULT now()
    );
    ```
 5. Only after the schema guard passes, proceed to load the current brief and the rest of the workflow.
@@ -100,10 +134,27 @@ All integrations are optional. The skill works without any of them — it gracef
 7. `distill_knowledge_entries` uses `transform.distill_knowledge_entries`
 8. `archive_transcript` uses `connector.storage.upsert`
 9. `persist_knowledge_entries` uses `connector.storage.upsert`
-10. `retrieve_candidate_entries` uses `connector.storage.query`
-11. `apply_access_and_freshness_rules` uses `transform.apply_access_and_freshness_rules`
-12. `compose_answer_or_followup` uses `transform.compose_answer_or_followup`
-13. `log_retrieval_events` uses `connector.storage.upsert`
-14. `calculate_rewards` uses `transform.calculate_rewards`
-15. `persist_rewards` uses `connector.storage.upsert`
-16. `render_working_brief` uses `transform.render_working_brief`
+10. `distill_structured_memories` uses `transform.team_memory.distill_structured_memories`
+11. `persist_memory_objects` uses `connector.storage.upsert`
+12. `handle_team_memory_mode` — routes to digest, pre-meeting brief, decision recall, validate, or watch
+13. `proactive_resurfacing` uses `transform.team_memory.find_memories_to_resurface`
+14. `retrieve_candidate_entries` uses `connector.storage.query`
+15. `apply_access_and_freshness_rules` uses `transform.apply_access_and_freshness_rules`
+16. `compose_answer_or_followup` uses `transform.compose_answer_or_followup`
+17. `log_retrieval_events` uses `connector.storage.upsert`
+18. `calculate_rewards` uses `transform.calculate_rewards`
+19. `persist_rewards` uses `connector.storage.upsert`
+20. `render_working_brief` uses `transform.render_working_brief`
+21. `generate_reinforcement` uses `transform.team_memory.generate_reinforcement_message`
+
+## Memory Object Types
+
+Structured memories are classified into: `decision`, `assumption`, `preference`, `relationship`, `process`, `open_question`, `commitment`, `risk`, `source_claim`, `counterpoint`.
+
+## Additional Modes
+
+- `memory_digest` — daily/weekly digest of new, stale, and high-value memory
+- `pre_meeting_brief` — compile relevant memory for meetings and decisions
+- `decision_recall` — answer "what did we decide, why, and what assumptions did it depend on?"
+- `validate_memory` — surface stale memories for confirmation, revision, or retirement
+- `watch_topic` — subscribe to entities/topics for proactive resurfacing
