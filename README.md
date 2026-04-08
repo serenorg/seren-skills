@@ -27,6 +27,8 @@ Skills are organized by org (or publisher), with each skill in a subdirectory:
 seren-skills/
 ├── apollo/
 │   └── api/                     # Apollo.io API integration
+├── claude/
+│   └── serendb-memory/          # Claude Code CLI memory watcher + SerenDB sync
 ├── coinbase/
 │   └── grid-trader/             # Automated grid trading bot
 ├── cryptobullseyezone/
@@ -54,6 +56,7 @@ The slug is derived by joining the org and skill name with a hyphen:
 
 ```
 coinbase/grid-trader     -> coinbase-grid-trader
+claude/serendb-memory    -> claude-serendb-memory
 cryptobullseyezone/tax   -> cryptobullseyezone-tax
 polymarket/bot           -> polymarket-bot
 kalshi/hybrid-signal-trader -> kalshi-hybrid-signal-trader
@@ -85,7 +88,8 @@ Quick version:
 1. Create `<org>/<skill-name>/` at the repo root
 2. Add a `SKILL.md` with valid frontmatter where `name` equals `<skill-name>`
 3. For agent skills, put runtime code in `scripts/` and keep dependency/config templates at the skill root
-4. Open a PR
+4. If you are publishing a Claude Code-only skill, keep it under `claude/` and document any host restrictions in `compatibility`
+5. Open a PR
 
 ## Trading Skill Safety CI
 

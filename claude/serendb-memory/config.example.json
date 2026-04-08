@@ -1,0 +1,20 @@
+{
+  "dry_run": false,
+  "inputs": {
+    "command": "status",
+    "memory_root": "~/.claude/projects",
+    "poll_interval_seconds": 3,
+    "state_dir": "~/.seren/claude-serendb-memory"
+  },
+  "memory": {
+    "api_base_url": "https://api.serendb.com",
+    "memory_base_url": "https://memory.serendb.com"
+  },
+  "service": {
+    "auto_register_key": true,
+    "install_on_install": true,
+    "start_after_install": true,
+    "timeout_seconds": 5
+  },
+  "skill": "serendb-memory"
+}
