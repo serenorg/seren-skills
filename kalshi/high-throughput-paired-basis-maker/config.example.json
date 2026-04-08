@@ -1,0 +1,51 @@
+{
+  "execution": {
+    "dry_run": true,
+    "live_mode": false,
+    "require_positive_backtest": true,
+    "max_drawdown_pct": 15.0,
+    "max_position_age_hours": 72
+  },
+  "backtest": {
+    "bankroll_usd": 100,
+    "days": 270,
+    "days_min": 90,
+    "days_max": 540,
+    "participation_rate": 0.95,
+    "spread_decay_bps": 45,
+    "min_history_points": 72,
+    "min_events": 200,
+    "min_liquidity_usd": 5000,
+    "volatility_window_points": 24,
+    "synthetic_orderbook_half_spread_bps": 18,
+    "synthetic_orderbook_depth_usd": 125,
+    "telemetry_path": null
+  },
+  "strategy": {
+    "bankroll": 1000.0,
+    "pairs_max": 10,
+    "basis_entry_bps": 35,
+    "basis_exit_bps": 10,
+    "min_edge_bps": 2.0,
+    "expected_unwind_cost_bps": 2.0,
+    "expected_convergence_ratio": 0.35,
+    "base_pair_notional_usd": 600,
+    "max_notional_per_pair_usd": 850,
+    "max_total_notional_usd": 2000,
+    "max_leg_notional_usd": 900
+  },
+  "markets": [],
+  "state": {
+    "leg_exposure": {}
+  },
+  "cron": {
+    "runner_name": "",
+    "machine_label": "",
+    "poll_interval_seconds": 30,
+    "job_name": "kalshi-basis-maker-local-pull",
+    "cron_expression": "*/30 * * * *",
+    "timezone": "UTC",
+    "config_path": "config.json",
+    "dry_run": true
+  }
+}
