@@ -25,7 +25,7 @@ MAINT_RATES = {5: 0.03, 10: 0.03, 20: 0.025, 25: 0.02, 50: 0.01}
 
 def _fetch_btc_prices(api_base: str, api_key: str, days: int = BACKTEST_DAYS) -> list[tuple[str, float]]:
     """Fetch daily BTC prices from CoinGecko via Seren publisher."""
-    url = f"{api_base}/publishers/{COINGECKO_PUBLISHER}/call"
+    url = f"{api_base}/publishers/{COINGECKO_PUBLISHER}"
     body = json.dumps({
         "method": "GET",
         "path": f"/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days={days}&interval=daily",
