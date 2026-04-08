@@ -130,7 +130,7 @@ def _fatal(msg: str, **kw: Any) -> None:
 def _rpc_call(api_base: str, api_key: str, publisher: str, method: str,
               params: list, timeout: int = 30) -> Any:
     """Call a Seren publisher with a JSON-RPC payload."""
-    url = f"{api_base}/publishers/{publisher}/call"
+    url = f"{api_base}/publishers/{publisher}"
     body = json.dumps({
         "jsonrpc": "2.0",
         "id": 1,
