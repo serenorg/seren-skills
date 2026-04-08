@@ -86,6 +86,8 @@ class StrategyParams:
     max_total_notional_usd: float = 1400.0
     max_position_notional_usd: float = 300.0
     inventory_skew_strength_bps: float = 25.0
+    mvl_min_spread_bps: float = 50.0
+    mvl_max_depth_ratio: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -351,6 +353,8 @@ def to_params(config: dict[str, Any]) -> StrategyParams:
         max_total_notional_usd=_safe_float(strategy.get("max_total_notional_usd"), 1400.0),
         max_position_notional_usd=_safe_float(strategy.get("max_position_notional_usd"), 300.0),
         inventory_skew_strength_bps=_safe_float(strategy.get("inventory_skew_strength_bps"), 25.0),
+        mvl_min_spread_bps=max(0.0, _safe_float(strategy.get("mvl_min_spread_bps"), 50.0)),
+        mvl_max_depth_ratio=max(0.0, _safe_float(strategy.get("mvl_max_depth_ratio"), 0.5)),
     )
 
 
@@ -444,6 +448,48 @@ def _market_daily_volume_usd(market: dict[str, Any]) -> float | None:
         if key in market and market.get(key) is not None:
             return max(0.0, _safe_float(market.get(key), 0.0))
     return None
+
+
+def _compute_mvl_regime(market: dict[str, Any], p: StrategyParams) -> tuple[bool, str]:
+    """Check if a market exceeds its minimum viable liquidity ceiling.
+
+    A market is over-liquid when the spread is very tight AND the order book
+    depth is large relative to daily volume. In this regime, additional
+    liquidity provision destroys the signal the maker is trying to capture.
+
+    Returns (is_over_liquid, reason).
+    """
+    orderbooks = market.get("orderbooks", {})
+    if not orderbooks:
+        return False, ""
+
+    # Use the most recent order book snapshot
+    latest_ts = max(orderbooks.keys()) if orderbooks else None
+    if latest_ts is None:
+        return False, ""
+    book = orderbooks[latest_ts]
+
+    best_bid = getattr(book, "best_bid", 0.0) if hasattr(book, "best_bid") else _safe_float(book.get("best_bid") if isinstance(book, dict) else 0.0, 0.0)
+    best_ask = getattr(book, "best_ask", 0.0) if hasattr(book, "best_ask") else _safe_float(book.get("best_ask") if isinstance(book, dict) else 0.0, 0.0)
+    bid_size = getattr(book, "bid_size_usd", 0.0) if hasattr(book, "bid_size_usd") else _safe_float(book.get("bid_size_usd") if isinstance(book, dict) else 0.0, 0.0)
+    ask_size = getattr(book, "ask_size_usd", 0.0) if hasattr(book, "ask_size_usd") else _safe_float(book.get("ask_size_usd") if isinstance(book, dict) else 0.0, 0.0)
+
+    mid = (best_bid + best_ask) / 2.0 if (best_bid + best_ask) > 0 else 0.0
+    if mid <= 0:
+        return False, ""
+
+    spread_bps = (best_ask - best_bid) / mid * 10000.0
+    daily_volume = _market_daily_volume_usd(market)
+    if daily_volume is None or daily_volume <= 0:
+        return False, ""
+
+    depth = bid_size + ask_size
+    depth_ratio = depth / daily_volume
+
+    if spread_bps < p.mvl_min_spread_bps and depth_ratio > p.mvl_max_depth_ratio:
+        return True, f"over_liquid(spread={spread_bps:.0f}bps,depth_ratio={depth_ratio:.2f})"
+
+    return False, ""
 
 
 def _is_inventory_exit_market(market: dict[str, Any]) -> bool:
@@ -2175,7 +2221,20 @@ def _evaluate_backtest(
     telemetry_records: list[dict[str, Any]] = []
     orderbook_modes: set[str] = set()
 
-    selected_markets = markets[: strategy_params.markets_max]
+    # MVL filter: drop over-liquid markets before simulation
+    mvl_passed = []
+    mvl_dropped = 0
+    for m in markets:
+        is_over_liquid, reason = _compute_mvl_regime(m, strategy_params)
+        if is_over_liquid:
+            mvl_dropped += 1
+            print(f"  MVL filter: dropped {_safe_str(m.get('question'), m.get('market_id', 'unknown'))[:60]} — {reason}")
+        else:
+            mvl_passed.append(m)
+    if mvl_dropped:
+        print(f"  MVL filter: {mvl_dropped} over-liquid markets removed, {len(mvl_passed)} remain")
+
+    selected_markets = mvl_passed[: strategy_params.markets_max]
     capital_per_market = strategy_params.bankroll_usd / max(1, len(selected_markets))
 
     for market in selected_markets:

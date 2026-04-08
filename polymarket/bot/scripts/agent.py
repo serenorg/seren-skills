@@ -145,6 +145,10 @@ class TradingAgent:
         self.min_edge_to_spread_ratio = float(self.config.get('min_edge_to_spread_ratio', 3.0))
         self.max_depth_fraction = float(self.config.get('max_depth_fraction', 0.25))
 
+        # MVL (Minimum Viable Liquidity) filter thresholds
+        self.mvl_min_spread_bps = float(self.config.get('mvl_min_spread_bps', 50.0))
+        self.mvl_max_depth_ratio = float(self.config.get('mvl_max_depth_ratio', 0.5))
+
         # Calibration-driven threshold override
         self._calibration = calibration.load_calibration()
         self.effective_mispricing_threshold, self._threshold_reason = (
@@ -709,7 +713,40 @@ class TradingAgent:
         if low_vol_count:
             print(f"  Filtered {low_vol_count} markets with volume < ${min_vol:,.0f}")
 
-        ranked = sorted(volume_filtered, key=score, reverse=True)
+        # MVL filter: skip over-liquid markets where spread is too tight to capture edge
+        # Saves SerenBucks by avoiding Perplexity/Claude calls on saturated markets
+        mvl_filtered = []
+        mvl_dropped = 0
+        for m in volume_filtered:
+            liquidity = float(m.get('liquidity', 0))
+            volume = float(m.get('volume', 0))
+            if volume <= 0 or liquidity <= 0:
+                mvl_filtered.append(m)
+                continue
+            # Estimate spread from liquidity/volume relationship
+            # Higher liquidity-to-volume ratio with low spread = over-liquid
+            depth_ratio = liquidity / volume
+            # Use outcomePrices to estimate spread
+            op = m.get('outcomePrices', '')
+            spread_bps = 10000.0  # default: assume wide spread (passes filter)
+            if op:
+                try:
+                    parts = [float(p.strip()) for p in op.split(',')]
+                    if len(parts) >= 2:
+                        mid = (parts[0] + parts[1]) / 2.0
+                        spread = abs(parts[0] - (1.0 - parts[1]))
+                        if mid > 0:
+                            spread_bps = spread / mid * 10000.0
+                except (ValueError, TypeError):
+                    pass
+            if spread_bps < self.mvl_min_spread_bps and depth_ratio > self.mvl_max_depth_ratio:
+                mvl_dropped += 1
+            else:
+                mvl_filtered.append(m)
+        if mvl_dropped:
+            print(f"  MVL filter: {mvl_dropped} over-liquid markets skipped (saves ~${mvl_dropped * 0.04:.2f} SerenBucks)")
+
+        ranked = sorted(mvl_filtered, key=score, reverse=True)
 
         # Filter out markets resolving too far in the future
         now = datetime.now(timezone.utc)

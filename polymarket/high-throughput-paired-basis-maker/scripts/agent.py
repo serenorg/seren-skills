@@ -97,6 +97,8 @@ class StrategyParams:
     max_notional_per_pair_usd: float = 850.0
     max_total_notional_usd: float = 2000.0
     max_leg_notional_usd: float = 900.0
+    mvl_min_spread_bps: float = 50.0
+    mvl_max_depth_ratio: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -282,6 +284,8 @@ def to_strategy_params(config: dict[str, Any]) -> StrategyParams:
         max_notional_per_pair_usd=max(1.0, _safe_float(raw.get("max_notional_per_pair_usd"), 850.0)),
         max_total_notional_usd=max(1.0, _safe_float(raw.get("max_total_notional_usd"), 2000.0)),
         max_leg_notional_usd=max(1.0, _safe_float(raw.get("max_leg_notional_usd"), 900.0)),
+        mvl_min_spread_bps=max(0.0, _safe_float(raw.get("mvl_min_spread_bps"), 50.0)),
+        mvl_max_depth_ratio=max(0.0, _safe_float(raw.get("mvl_max_depth_ratio"), 0.5)),
     )
 
 
@@ -990,7 +994,40 @@ def _diff_section(original: dict[str, Any], updated: dict[str, Any]) -> dict[str
     return diff
 
 
-def _rank_pair_markets(markets: list[dict[str, Any]], result: dict[str, Any]) -> list[dict[str, Any]]:
+def _compute_pair_mvl_regime(market: dict[str, Any], p: StrategyParams) -> tuple[bool, str]:
+    """Check if a market leg exceeds its MVL ceiling using order book snapshots."""
+    orderbooks = market.get("orderbooks", {})
+    if not orderbooks:
+        return False, ""
+
+    latest_ts = max(orderbooks.keys()) if orderbooks else None
+    if latest_ts is None:
+        return False, ""
+    book = orderbooks[latest_ts]
+
+    best_bid = getattr(book, "best_bid", 0.0) if hasattr(book, "best_bid") else _safe_float(book.get("best_bid") if isinstance(book, dict) else 0.0, 0.0)
+    best_ask = getattr(book, "best_ask", 0.0) if hasattr(book, "best_ask") else _safe_float(book.get("best_ask") if isinstance(book, dict) else 0.0, 0.0)
+    bid_size = getattr(book, "bid_size_usd", 0.0) if hasattr(book, "bid_size_usd") else _safe_float(book.get("bid_size_usd") if isinstance(book, dict) else 0.0, 0.0)
+    ask_size = getattr(book, "ask_size_usd", 0.0) if hasattr(book, "ask_size_usd") else _safe_float(book.get("ask_size_usd") if isinstance(book, dict) else 0.0, 0.0)
+
+    mid = (best_bid + best_ask) / 2.0 if (best_bid + best_ask) > 0 else 0.0
+    if mid <= 0:
+        return False, ""
+
+    spread_bps = (best_ask - best_bid) / mid * 10000.0
+    volume24hr = _safe_float(market.get("volume24hr"), 0.0)
+    if volume24hr <= 0:
+        return False, ""
+
+    depth = bid_size + ask_size
+    depth_ratio = depth / volume24hr
+
+    if spread_bps < p.mvl_min_spread_bps and depth_ratio > p.mvl_max_depth_ratio:
+        return True, f"over_liquid(spread={spread_bps:.0f}bps,depth_ratio={depth_ratio:.2f})"
+    return False, ""
+
+
+def _rank_pair_markets(markets: list[dict[str, Any]], result: dict[str, Any], p: StrategyParams) -> list[dict[str, Any]]:
     pnl_by_pair: dict[tuple[str, str], float] = {}
     for row in result.get("pairs", []):
         if not isinstance(row, dict):
@@ -1000,9 +1037,22 @@ def _rank_pair_markets(markets: list[dict[str, Any]], result: dict[str, Any]) ->
             _safe_str(row.get("pair_market_id"), "unknown"),
         )
         pnl_by_pair[key] = _safe_float(row.get("pnl_usd"), 0.0)
+
+    # MVL deprioritization: pairs where both legs are over-liquid get pushed to bottom
+    for market in markets:
+        primary_over, _ = _compute_pair_mvl_regime(market, p)  # uses "orderbooks"
+        pair_data = {
+            **market,
+            "orderbooks": market.get("pair_orderbooks", {}),
+            "volume24hr": market.get("pair_volume24hr", market.get("volume24hr", 0.0)),
+        }
+        pair_over, _ = _compute_pair_mvl_regime(pair_data, p)
+        market["_mvl_both_over_liquid"] = primary_over and pair_over
+
     return sorted(
         markets,
         key=lambda market: (
+            1 if not market.get("_mvl_both_over_liquid") else 0,
             pnl_by_pair.get(
                 (
                     _safe_str(market.get("market_id"), "unknown"),
@@ -1517,7 +1567,7 @@ def _optimize_backtest(
         return baseline
 
     optimization = to_optimization_params(config)
-    ranked_markets = _rank_pair_markets(markets, baseline)
+    ranked_markets = _rank_pair_markets(markets, baseline, to_strategy_params(config))
     best_result = baseline
     best_config = _clone_config(config)
     best_targets = _pair_target_descriptors(ranked_markets)
