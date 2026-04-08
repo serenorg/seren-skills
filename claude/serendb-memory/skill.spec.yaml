@@ -1,0 +1,67 @@
+skill: serendb-memory
+description: Sync Claude Code auto-memory files into SerenDB for CLI-only users without Seren Desktop.
+triggers:
+  - sync claude code memory to serendb
+  - install claude memory watcher
+  - migrate claude memory files
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  command:
+    type: string
+    description: Command to run for the memory watcher skill.
+    default: status
+    enum:
+      - install
+      - start
+      - stop
+      - status
+      - doctor
+      - migrate
+      - flush
+      - uninstall
+      - export
+  memory_root:
+    type: string
+    description: Claude projects root to scan for memory files.
+    default: ~/.claude/projects
+  state_dir:
+    type: string
+    description: Local state directory for queue, logs, and service metadata.
+    default: ~/.seren/claude-serendb-memory
+  poll_interval_seconds:
+    type: integer
+    description: Poll interval used by the foreground watcher loop.
+    default: 3
+    min: 1
+    max: 300
+secrets:
+  - SEREN_API_KEY
+policies:
+  dry_run_default: true
+  idempotency_required: true
+workflow:
+  steps:
+    - id: bootstrap_runtime
+      use: transform.bootstrap_runtime
+      with:
+        command: "{command}"
+        memory_root: "{memory_root}"
+        state_dir: "{state_dir}"
+    - id: sync_memory
+      use: transform.sync_memory
+      with:
+        interval_seconds: "{poll_interval_seconds}"
+tests:
+  quick:
+    - blocks_seren_desktop_runtime
+  smoke:
+    - syncs_memory_to_serendb
+publish:
+  org: claude
+  slug: serendb-memory
+metadata:
+  category: memory
+  runtime_target: claude_code_cli
+  desktop_compatibility: excluded
