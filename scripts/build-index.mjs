@@ -2,11 +2,41 @@
 // ABOUTME: Builds a skills index JSON from all SKILL.md files in the repo.
 // ABOUTME: Output is uploaded to Cloudflare R2 by the build-skills-index workflow.
 
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
 const RAW_BASE = "https://raw.githubusercontent.com/serenorg/seren-skills/main";
+
+/**
+ * Get the last-commit ISO timestamp for a file from Git history.
+ *
+ * mtime is unreliable in CI because Git checkouts reset all file mtimes to
+ * the checkout time, not the original commit time. Using `git log -1 --format=%cI`
+ * gives us the actual last-commit timestamp, which is what desktop clients
+ * need to detect stale installed skills without hitting the GitHub API
+ * (seren-desktop#1476).
+ *
+ * Falls back to file mtime if git is unavailable or the file is untracked.
+ */
+function lastCommitISO(filePath) {
+  try {
+    const out = execFileSync(
+      "git",
+      ["log", "-1", "--format=%cI", "--", filePath],
+      { cwd: REPO_ROOT, encoding: "utf-8" },
+    ).trim();
+    if (out) return out;
+  } catch {
+    // Fall through to mtime fallback
+  }
+  try {
+    return statSync(filePath).mtime.toISOString();
+  } catch {
+    return undefined;
+  }
+}
 
 function walkDir(dir) {
   const results = [];
@@ -91,13 +121,20 @@ for (const skillPath of skillFiles) {
     tags: parseTags(fm),
     author: fm.author,
     version: fm.version,
+    // Last-commit ISO timestamp for the SKILL.md file. Desktop clients use
+    // this to detect stale installed skills without hitting GitHub's
+    // anonymous-rate-limited commits API. (seren-desktop#1476)
+    lastModified: lastCommitISO(skillPath),
   });
 }
 
 skills.sort((a, b) => a.name.localeCompare(b.name));
 
 const index = {
-  version: "1",
+  // Bumped from "1" to "2" — schema now includes per-skill `lastModified`.
+  // Desktop clients that don't know about lastModified will simply ignore
+  // the new field and continue using the GitHub fallback for staleness checks.
+  version: "2",
   updatedAt: new Date().toISOString(),
   skills,
   tree: tree.sort(),
