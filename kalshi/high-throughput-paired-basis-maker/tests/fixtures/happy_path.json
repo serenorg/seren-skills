@@ -1,0 +1,16 @@
+{
+  "status": "ok",
+  "skill": "kalshi-high-throughput-paired-basis-maker",
+  "mode": "backtest",
+  "results": {
+    "starting_bankroll_usd": 100,
+    "return_pct": 12.5,
+    "annualized_return_pct": 16.9,
+    "sharpe_score": 1.2,
+    "max_drawdown_pct": 4.3,
+    "hit_rate": 62.0,
+    "total_events": 250,
+    "fill_events": 180,
+    "pair_count": 5
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "status": "error",
+  "skill": "kalshi-high-throughput-paired-basis-maker",
+  "error_code": "connector_failure",
+  "message": "Failed to connect to Kalshi API: connection timeout"
+}
