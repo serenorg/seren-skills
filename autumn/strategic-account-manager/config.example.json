@@ -1,0 +1,9 @@
+{
+  "mode": "prep",
+  "packet_depth": "standard",
+  "confidence_floor": 7,
+  "interruptiveness": "medium",
+  "focus_mode": "stakeholder-and-risk",
+  "account_name": "Example Strategic Account",
+  "meeting_objective": "Align on renewal path and expansion blockers"
+}

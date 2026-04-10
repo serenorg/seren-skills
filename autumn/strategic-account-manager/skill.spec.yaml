@@ -1,0 +1,72 @@
+skill: strategic-account-manager
+description: Strategic account copilot for prep-first meeting support with explicit consolidation, confidence, and anti-repetition guardrails.
+triggers:
+  - prepare for a strategic account meeting
+  - build an account prep packet
+  - support me live in a customer meeting
+  - reconcile post-meeting follow-up
+  - consolidate account notes into a canonical brief
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  mode:
+    type: string
+    description: Primary operating mode.
+    enum:
+      - prep
+      - live
+      - post_meeting
+    default: prep
+  packet_depth:
+    type: string
+    description: Preferred output density.
+    enum:
+      - compressed
+      - standard
+      - deep
+    default: standard
+  confidence_floor:
+    type: integer
+    description: Minimum confidence score required before asserting a non-observed claim.
+    min: 1
+    max: 10
+    default: 7
+  interruptiveness:
+    type: string
+    description: Live guidance aggressiveness.
+    enum:
+      - low
+      - medium
+      - high
+    default: medium
+policies:
+  dry_run_default: true
+  idempotency_required: true
+workflow:
+  steps:
+    - id: normalize_request
+      use: transform.normalize_account_request
+      with:
+        mode: "{mode}"
+        packet_depth: "{packet_depth}"
+        confidence_floor: "{confidence_floor}"
+        interruptiveness: "{interruptiveness}"
+    - id: enforce_guardrails
+      use: transform.enforce_consolidation_guardrails
+      with:
+        from_step: normalize_request
+    - id: render_account_manager_guide
+      use: transform.render_guide
+      with:
+        from_step: enforce_guardrails
+tests:
+  quick:
+    - validates_spec_schema
+  smoke:
+    - asserts_skill_guardrails_are_present
+publish:
+  org: autumn
+  slug: strategic-account-manager
+metadata:
+  category: sales
