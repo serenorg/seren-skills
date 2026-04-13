@@ -568,7 +568,13 @@ class StrategyEngine:
 
             sim = self.simulate(selected, orders)
             marks = self.build_marks_from_orders(orders, sim["mark_map"], run_id)
-            self.storage.upsert_position_marks(date.today(), mode, marks, source_run_id=run_id)
+            self.storage.upsert_position_marks(
+                date.today(),
+                mode,
+                marks,
+                source_run_id=run_id,
+                scan_run_id=run_id,
+            )
 
             self.storage.upsert_pnl_daily(
                 as_of_date=date.today(),
@@ -579,6 +585,7 @@ class StrategyEngine:
                 net_exposure=sim["net_exposure"],
                 hit_rate=sim["hit_rate_5d"],
                 max_drawdown=sim["max_drawdown"],
+                scan_run_id=run_id,
                 source_run_id=run_id,
             )
             # Keep reporting rows aligned across paper/paper-sim/live.
@@ -592,6 +599,7 @@ class StrategyEngine:
                     net_exposure=sim["net_exposure"],
                     hit_rate=sim["hit_rate_5d"],
                     max_drawdown=sim["max_drawdown"],
+                    scan_run_id=run_id,
                     source_run_id=run_id,
                 )
             self.storage.upsert_pnl_daily(
@@ -603,6 +611,7 @@ class StrategyEngine:
                 net_exposure=0.0,
                 hit_rate=0.0,
                 max_drawdown=sim["max_drawdown"],
+                scan_run_id=run_id,
                 source_run_id=run_id,
             )
 
@@ -765,6 +774,7 @@ class StrategyEngine:
                     marks.append(
                         {
                             "ticker": ticker,
+                            "scan_run_id": order.get("run_id"),
                             "qty": 0.0,
                             "avg_entry_price": entry,
                             "mark_price": mark,
@@ -785,6 +795,7 @@ class StrategyEngine:
                 marks.append(
                     {
                         "ticker": ticker,
+                        "scan_run_id": order.get("run_id"),
                         "qty": qty,
                         "avg_entry_price": entry,
                         "mark_price": mark,
@@ -799,6 +810,12 @@ class StrategyEngine:
             if close_events:
                 self.storage.insert_order_events(run_id, mode, close_events)
             self.storage.upsert_position_marks(date.today(), mode, marks, source_run_id=run_id)
+            scan_run_ids = {
+                str(order.get("run_id") or "").strip()
+                for order in latest_orders
+                if str(order.get("run_id") or "").strip()
+            }
+            pnl_scan_run_id = next(iter(scan_run_ids)) if len(scan_run_ids) == 1 else None
             total_net = total_realized + total_unrealized
             hit_rate = wins / max(1, len(latest_orders))
             max_drawdown = self.compute_drawdown(mode, total_net)
@@ -811,6 +828,7 @@ class StrategyEngine:
                 net_exposure=net,
                 hit_rate=hit_rate,
                 max_drawdown=max_drawdown,
+                scan_run_id=pnl_scan_run_id,
                 source_run_id=run_id,
             )
             self.storage.update_run_status(

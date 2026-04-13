@@ -71,7 +71,7 @@ class SerenDBStorage:
                     WHERE strategy_name = 'saas-short-trader'
                       AND mode = %s
                       AND status = 'running'
-                      AND COALESCE(metadata->>'run_type', '') = %s
+                      AND COALESCE(run_type, metadata->>'run_type', '') = %s
                       AND created_at >= NOW() - (%s || ' hours')::interval
                     ORDER BY created_at DESC
                     LIMIT 1
@@ -92,6 +92,7 @@ class SerenDBStorage:
         metadata: Dict[str, Any],
     ) -> str:
         run_id = str(uuid4())
+        run_type = str(metadata.get("run_type") or "").strip() or None
         self.reporter.start_run(
             run_id,
             mode=mode,
@@ -103,10 +104,10 @@ class SerenDBStorage:
                 cur.execute(
                     """
                     INSERT INTO trading.strategy_runs
-                      (run_id, skill_slug, venue, strategy_name, mode, status, dry_run, started_at,
+                      (run_id, skill_slug, venue, strategy_name, mode, run_type, status, dry_run, started_at,
                        run_date, universe, max_names_scored, max_names_orders, min_conviction, config, summary, metadata)
                     VALUES
-                      (%s, %s, 'alpaca', %s, %s, %s, %s, NOW(),
+                      (%s, %s, 'alpaca', %s, %s, %s, %s, %s, NOW(),
                        CURRENT_DATE, %s::text[], %s, %s, %s, %s::jsonb, '{}'::jsonb, %s::jsonb)
                     """,
                     (
@@ -114,6 +115,7 @@ class SerenDBStorage:
                         SKILL_SLUG,
                         STRATEGY_NAME,
                         mode,
+                        run_type,
                         status,
                         mode != "live",
                         universe,
@@ -304,13 +306,21 @@ class SerenDBStorage:
                         )
             conn.commit()
 
-    def upsert_position_marks(self, as_of_date: date, mode: str, rows: List[Dict[str, Any]], source_run_id: str) -> None:
+    def upsert_position_marks(
+        self,
+        as_of_date: date,
+        mode: str,
+        rows: List[Dict[str, Any]],
+        source_run_id: str,
+        scan_run_id: Optional[str] = None,
+    ) -> None:
         self.reporter.record_position_marks(source_run_id, rows)
         with self.connect() as conn:
             with conn.cursor() as cur:
                 for r in rows:
                     side = self._position_side(r.get("net_exposure"))
                     status = "closed" if abs(float(r["qty"])) <= 1e-9 else "open"
+                    row_scan_run_id = str(r.get("scan_run_id") or scan_run_id or source_run_id)
                     period_start, _ = self._period_bounds(as_of_date)
                     metadata_json = json.dumps(
                         {
@@ -318,15 +328,16 @@ class SerenDBStorage:
                             "mode": mode,
                             "gross_exposure": r.get("gross_exposure"),
                             "net_exposure": r.get("net_exposure"),
+                            "scan_run_id": row_scan_run_id,
                         }
                     )
                     cur.execute(
                         """
                         INSERT INTO trading.position_marks_daily
                           (as_of_date, mode, ticker, qty, avg_entry_price, mark_price, market_value,
-                           realized_pnl, unrealized_pnl, gross_exposure, net_exposure, source_run_id)
+                           realized_pnl, unrealized_pnl, gross_exposure, net_exposure, scan_run_id, source_run_id)
                         VALUES
-                          (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                          (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (as_of_date, mode, ticker) DO UPDATE
                         SET qty = EXCLUDED.qty,
                             avg_entry_price = EXCLUDED.avg_entry_price,
@@ -336,6 +347,7 @@ class SerenDBStorage:
                             unrealized_pnl = EXCLUDED.unrealized_pnl,
                             gross_exposure = EXCLUDED.gross_exposure,
                             net_exposure = EXCLUDED.net_exposure,
+                            scan_run_id = EXCLUDED.scan_run_id,
                             source_run_id = EXCLUDED.source_run_id
                         """,
                         (
@@ -350,6 +362,7 @@ class SerenDBStorage:
                             r.get("unrealized_pnl", 0.0),
                             r.get("gross_exposure"),
                             r.get("net_exposure"),
+                            row_scan_run_id,
                             source_run_id,
                         ),
                     )
@@ -432,6 +445,7 @@ class SerenDBStorage:
         hit_rate: float,
         max_drawdown: float,
         source_run_id: str,
+        scan_run_id: Optional[str] = None,
     ) -> None:
         self.reporter.record_pnl(
             source_run_id,
@@ -450,9 +464,9 @@ class SerenDBStorage:
                     """
                     INSERT INTO trading.pnl_daily
                       (as_of_date, mode, realized_pnl, unrealized_pnl, net_pnl, gross_exposure, net_exposure,
-                       hit_rate, max_drawdown, source_run_id)
+                       hit_rate, max_drawdown, scan_run_id, source_run_id)
                     VALUES
-                      (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                      (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (as_of_date, mode) DO UPDATE
                     SET realized_pnl = EXCLUDED.realized_pnl,
                         unrealized_pnl = EXCLUDED.unrealized_pnl,
@@ -461,6 +475,7 @@ class SerenDBStorage:
                         net_exposure = EXCLUDED.net_exposure,
                         hit_rate = EXCLUDED.hit_rate,
                         max_drawdown = EXCLUDED.max_drawdown,
+                        scan_run_id = EXCLUDED.scan_run_id,
                         source_run_id = EXCLUDED.source_run_id
                     """,
                     (
@@ -473,6 +488,7 @@ class SerenDBStorage:
                         net_exposure,
                         hit_rate,
                         max_drawdown,
+                        scan_run_id,
                         source_run_id,
                     ),
                 )
@@ -523,7 +539,7 @@ class SerenDBStorage:
                       ON sr.run_id = e.run_id
                     WHERE sr.strategy_name = 'saas-short-trader'
                       AND sr.mode = %s
-                      AND COALESCE(sr.metadata->>'run_type', '') = 'scan'
+                      AND COALESCE(sr.run_type, sr.metadata->>'run_type', '') = 'scan'
                       AND sr.status = 'completed'
                       AND e.side = 'SELL'
                       AND NOT EXISTS (

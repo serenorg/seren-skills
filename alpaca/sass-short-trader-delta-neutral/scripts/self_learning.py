@@ -172,7 +172,7 @@ def upsert_feature_snapshots(conn: psycopg.Connection, mode: str = "paper-sim") 
               SELECT
                 cs.run_id,
                 sr.mode,
-                COALESCE(sr.metadata->>'run_type', 'scan') AS run_type,
+                COALESCE(sr.run_type, sr.metadata->>'run_type', 'scan') AS run_type,
                 cs.ticker,
                 COALESCE(cs.created_at, NOW()) AS as_of_ts,
                 jsonb_build_object(
@@ -245,7 +245,7 @@ def upsert_outcome_labels(conn: psycopg.Connection, mode: str = "paper-sim") -> 
               END AS realized_return
             FROM trading.learning_feature_snapshots fs
             LEFT JOIN trading.position_marks_daily pm
-              ON pm.source_run_id = fs.run_id
+              ON COALESCE(pm.scan_run_id, pm.source_run_id) = fs.run_id
              AND pm.ticker = fs.ticker
              AND pm.mode = fs.mode
             WHERE fs.mode = %s
