@@ -1,0 +1,37 @@
+name: Enforce SerenDB Publisher Routes
+
+on:
+  pull_request:
+    paths:
+      - "alpaca/**"
+      - "crypto-bullseye-zone/tax/**"
+      - "polymarket/bot/**"
+      - "prophet/**"
+      - "tests/test_serendb_publisher_routes.py"
+      - ".github/workflows/enforce-serendb-publisher-routes.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "alpaca/**"
+      - "crypto-bullseye-zone/tax/**"
+      - "polymarket/bot/**"
+      - "prophet/**"
+      - "tests/test_serendb_publisher_routes.py"
+      - ".github/workflows/enforce-serendb-publisher-routes.yml"
+
+jobs:
+  enforce-serendb-publisher-routes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pytest
+
+      - name: Verify SerenDB publisher routes
+        run: python -m pytest tests/test_serendb_publisher_routes.py
