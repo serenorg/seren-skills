@@ -36,7 +36,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "daily_cap_max": 25,
     },
     "unsubscribe": {
-        "endpoint_base": "https://api.seren.ai/affiliates/unsubscribe",
+        "endpoint_base": "https://affiliates.serendb.com/unsubscribe",
+        "sync_api_base": "https://affiliates.serendb.com/public/unsubscribes",
         "phase1_operator_blocklist_only": True,
     },
     "inputs": {
@@ -139,6 +140,7 @@ def unsubscribe_link(
     email: str,
     program_slug: str,
     run_id: str,
+    agent_id: str,
 ) -> str:
     secret_env = config["auth"].get("referral_token_secret_env", "REFERRAL_TOKEN_SECRET")
     token = unsubscribe_token(
@@ -148,7 +150,7 @@ def unsubscribe_link(
         secret=os.environ.get(secret_env),
     )
     base = str(config["unsubscribe"]["endpoint_base"]).rstrip("/")
-    return f"{base}/{token}"
+    return f"{base}/{agent_id}/{token}"
 
 
 def footer_missing_placeholders(body_template: str) -> list[str]:

@@ -24,7 +24,7 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - Per-program dedupe is DB-level: a (program_slug, contact_email) pair is sent at most once, ever.
 - Global unsubscribe list: one opt-out blocks all future sends across every program.
 - Mandatory send footer: sender identity, physical address, and unsubscribe link.
-- **Phase 1 operator-managed blocklist only.** The `/affiliates/unsubscribe/{token}` endpoint does not exist in seren-affiliates yet; click-to-unsubscribe flips on in Phase 2 when the backend ships.
+- **Phase 1 operator-managed blocklist only.** The public `/unsubscribe/{agent_id}/{token}` route on `seren-affiliates-website` does not exist yet; click-to-unsubscribe flips on in Phase 2 when that ships. `seren-affiliates` itself stores no recipient PII and needs no changes.
 
 ## Bootstrap Order (Mandatory)
 
@@ -117,8 +117,8 @@ Schema in `serendb_schema.sql`. Tables:
 
 ## Unsubscribe Handling (Phase 1 vs Phase 2)
 
-- **Phase 1 (today).** The drafted footer contains a `{unsubscribe_link}` that points at `https://api.seren.ai/affiliates/unsubscribe/{token}`, where `token` is an HMAC of `(email, program_slug, run_id)`. The endpoint does **not** exist in the seren-affiliates backend yet. Until it ships, the operator handles unsubscribes manually via `command: block` with `block_email=<recipient>`.
-- **Phase 2.** Once the seren-affiliates backend adds `GET /affiliates/unsubscribe/{token}` and `GET /affiliates/me/unsubscribes?since=...`, the skill's `sync` step mirrors remote unsubscribes into the local `unsubscribes` table automatically.
+- **Phase 1 (today).** The drafted footer contains a `{unsubscribe_link}` that points at `https://affiliates.serendb.com/unsubscribe/{agent_id}/{token}`, where `token` is an HMAC of `(email, program_slug, run_id)` and `agent_id` identifies the affiliate account. The route does **not** exist on `seren-affiliates-website` yet. Until it ships, the operator handles unsubscribes manually via `command: block` with `block_email=<recipient>`.
+- **Phase 2.** Once `seren-affiliates-website` adds `GET /unsubscribe/[agent_id]/[token]` and `GET /public/unsubscribes?agent_id=...&since=...`, the skill's `sync` step calls the public read API, joins returned tokens against the local `distributions` table to resolve `token → email`, and upserts into `unsubscribes` with `source=link_click`. `seren-affiliates` (the backend) is intentionally **not** involved — it stores no recipient PII by design.
 
 ## Status and Stats
 
