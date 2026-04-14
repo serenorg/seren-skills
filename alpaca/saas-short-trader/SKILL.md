@@ -75,14 +75,15 @@ Use `scripts/dry_run_prompt.txt` for one-copy/paste execution.
 
 Before any live run:
 
-1. Verify `SEREN_API_KEY` is loaded and the `alpaca` publisher can read `/v2/account`.
+1. Verify `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, and optional `APCA_API_BASE_URL` are loaded for local Alpaca REST broker access.
 2. Verify `sec-filings-intelligence`, `google-trends`, and `perplexity` or `exa` are reachable.
-3. Verify `strict_required_feeds` and `live_controls` still fit the account before submitting orders.
-4. If any required feed, credential, or account preflight fails, stop here and fail closed instead of placing orders.
+3. Verify `SEREN_API_KEY` is loaded so market data can still use the `alpaca` publisher snapshots path.
+4. Verify `strict_required_feeds` and `live_controls` still fit the account before submitting orders.
+5. If any required feed, credential, or account preflight fails, stop here and fail closed instead of placing orders.
 
 ## Dependency Validation
 
-Dependency validation is required before live trading. Verify `SEREN_API_KEY`, the `alpaca` publisher, `sec-filings-intelligence`, `google-trends`, and the news research publisher are loaded and reachable. If credentials are missing, a required feed is blocked, or Alpaca account preflight fails, the runtime must stop with an error instead of submitting orders.
+Dependency validation is required before live trading. Verify local Alpaca REST credentials (`APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, optional `APCA_API_BASE_URL`), `SEREN_API_KEY`, the `alpaca` market-data publisher, `sec-filings-intelligence`, `google-trends`, and the news research publisher are loaded and reachable. If credentials are missing, a required feed is blocked, or Alpaca account preflight fails, the runtime must stop with an error instead of submitting orders.
 
 ## Live Safety Opt-In
 

@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from self_learning import ensure_champion, run_label_update
 from backtest_optimizer import optimize_scan_config
+from alpaca_local_broker import AlpacaLocalBrokerClient
 from seren_client import SerenClient
 from serendb_bootstrap import resolve_dsn
 from serendb_storage import SerenDBStorage
@@ -132,6 +133,7 @@ class StrategyEngine:
         self.storage = SerenDBStorage(dsn)
         self.strict_required_feeds = strict_required_feeds
         self.api_key = api_key or os.getenv("SEREN_API_KEY")
+        self.broker: Optional[AlpacaLocalBrokerClient] = AlpacaLocalBrokerClient.from_env()
         self.seren: Optional[SerenClient] = None
         self.live_controls = self._normalize_live_controls(live_controls)
         self.live_safety_state = self._load_live_safety_state()
@@ -245,34 +247,111 @@ class StrategyEngine:
         return refs
 
     def _get_alpaca_account(self) -> Dict[str, Any]:
-        if not self.seren:
-            raise LiveRiskError("SEREN_API_KEY is required for live Alpaca preflight")
-        response = self.seren.call_publisher(
-            "alpaca",
-            method="GET",
-            path="/v2/account",
-            timeout=max(1, int(self._live_operation_timeout_seconds())),
-        )
-        body = SerenClient.unwrap_body(response)
-        if not isinstance(body, dict):
-            raise LiveRiskError("alpaca account response was not an object")
-        return body
+        if not self.broker:
+            raise LiveRiskError(
+                "local Alpaca broker credentials are required for live trading "
+                "(APCA_API_KEY_ID/APCA_API_SECRET_KEY)"
+            )
+        return self.broker.get_account(timeout=max(1, int(self._live_operation_timeout_seconds())))
 
     def _list_alpaca_open_orders(self) -> List[Dict[str, Any]]:
-        if not self.seren:
+        if not self.broker:
             return []
-        response = self.seren.call_publisher(
-            "alpaca",
-            method="GET",
-            path="/v2/orders?status=open&limit=500&nested=false",
+        return self.broker.list_orders(
+            status="open",
+            limit=500,
+            nested=False,
             timeout=max(1, int(self._live_operation_timeout_seconds())),
         )
-        body = SerenClient.unwrap_body(response)
-        if isinstance(body, dict) and isinstance(body.get("orders"), list):
-            return [row for row in body["orders"] if isinstance(row, dict)]
-        if isinstance(body, list):
-            return [row for row in body if isinstance(row, dict)]
-        return []
+
+    @staticmethod
+    def _optional_float(value: Any) -> Optional[float]:
+        if value in (None, ""):
+            return None
+        return safe_float(value)
+
+    @staticmethod
+    def _format_order_number(value: Any) -> str:
+        number = safe_float(value)
+        return f"{number:.6f}".rstrip("0").rstrip(".") or "0"
+
+    def _build_live_order_request(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        order_type = str(order.get("order_type") or "limit").lower()
+        qty = abs(safe_float(order.get("qty")))
+        if qty <= 0:
+            raise LiveRiskError(f"planned order {order.get('order_ref')} has invalid quantity")
+
+        payload = {
+            "symbol": str(order["ticker"]).upper(),
+            "side": str(order.get("side", "SELL")).lower(),
+            "type": order_type,
+            "qty": self._format_order_number(qty),
+            "time_in_force": "day",
+            "client_order_id": str(order["order_ref"]),
+        }
+        limit_price = self._optional_float(order.get("limit_price"))
+        if order_type != "market":
+            if limit_price is None or limit_price <= 0:
+                raise LiveRiskError(f"planned order {order.get('order_ref')} is missing limit_price")
+            payload["limit_price"] = self._format_order_number(limit_price)
+        stop_price = self._optional_float(order.get("stop_price"))
+        if order_type == "stop" and stop_price is not None and stop_price > 0:
+            payload["stop_price"] = self._format_order_number(stop_price)
+        return payload
+
+    def _live_order_event_from_response(
+        self,
+        planned_order: Dict[str, Any],
+        response: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        details = dict(planned_order.get("details") or {})
+        details.update(
+            {
+                "planned_order_ref": planned_order["order_ref"],
+                "client_order_id": str(response.get("client_order_id") or planned_order["order_ref"]),
+                "broker_order_status": str(response.get("status") or "submitted"),
+                "broker_submitted_at": response.get("submitted_at"),
+                "broker_order_class": response.get("order_class"),
+            }
+        )
+        return {
+            "order_ref": planned_order["order_ref"],
+            "order_id": str(response.get("id") or planned_order["order_ref"]),
+            "instrument_id": str(response.get("asset_id") or response.get("symbol") or planned_order["ticker"]),
+            "symbol": str(response.get("symbol") or planned_order["ticker"]).upper(),
+            "broker": "alpaca_local_python",
+            "ticker": planned_order["ticker"],
+            "side": str(response.get("side") or planned_order.get("side", "SELL")).upper(),
+            "order_type": str(response.get("type") or planned_order.get("order_type", "limit")).lower(),
+            "status": str(response.get("status") or "submitted"),
+            "qty": safe_float(response.get("qty"), safe_float(planned_order.get("qty"))),
+            "limit_price": self._optional_float(response.get("limit_price")) or self._optional_float(planned_order.get("limit_price")),
+            "stop_price": self._optional_float(response.get("stop_price")) or self._optional_float(planned_order.get("stop_price")),
+            "filled_qty": self._optional_float(response.get("filled_qty")),
+            "filled_avg_price": self._optional_float(response.get("filled_avg_price")),
+            "is_simulated": False,
+            "details": details,
+        }
+
+    def _submit_live_orders(self, planned_orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not self.broker:
+            raise LiveRiskError(
+                "local Alpaca broker credentials are required for live trading "
+                "(APCA_API_KEY_ID/APCA_API_SECRET_KEY)"
+            )
+
+        submitted_orders: List[Dict[str, Any]] = []
+        timeout = max(1, int(self._live_operation_timeout_seconds()))
+        for order in planned_orders:
+            payload = self._build_live_order_request(order)
+            response = self._call_with_timeout(
+                f"alpaca_submit_order:{order['order_ref']}",
+                lambda body=payload: self.broker.submit_order(body, timeout=timeout),
+            )
+            if not isinstance(response, dict):
+                raise LiveRiskError(f"alpaca order submit for {order['order_ref']} returned a non-object response")
+            submitted_orders.append(self._live_order_event_from_response(order, response))
+        return submitted_orders
 
     def _compute_live_risk(self, planned_orders: List[Dict[str, Any]]) -> Dict[str, Any]:
         account = self._call_with_timeout("alpaca_account", self._get_alpaca_account)
@@ -336,7 +415,7 @@ class StrategyEngine:
         return live_risk
 
     def _cancel_live_orders(self, order_refs: List[str]) -> List[Dict[str, Any]]:
-        if not self.seren:
+        if not self.broker:
             return []
         ref_set = {str(ref).strip() for ref in order_refs if str(ref).strip()}
         if not ref_set:
@@ -351,10 +430,8 @@ class StrategyEngine:
                 continue
             result = self._call_with_timeout(
                 f"alpaca_cancel_order:{order_id}",
-                lambda oid=order_id: self.seren.call_publisher(
-                    "alpaca",
-                    method="DELETE",
-                    path=f"/v2/orders/{oid}",
+                lambda oid=order_id: self.broker.cancel_order(
+                    oid,
                     timeout=max(1, int(self._live_operation_timeout_seconds())),
                 ),
             )
@@ -362,7 +439,7 @@ class StrategyEngine:
                 {
                     "order_id": order_id,
                     "client_order_id": client_order_id,
-                    "result": SerenClient.unwrap_body(result) if isinstance(result, dict) else result,
+                    "result": result,
                 }
             )
         return cancelled
@@ -537,6 +614,35 @@ class StrategyEngine:
                     lambda: self._compute_live_risk(orders),
                     timeout_seconds=self._live_run_timeout_seconds(),
                 )
+                submitted_orders = self._call_with_timeout(
+                    "live_scan_submit",
+                    lambda: self._submit_live_orders(orders),
+                    timeout_seconds=self._live_run_timeout_seconds(),
+                )
+                self.storage.insert_order_events(run_id, mode, submitted_orders)
+                metadata_patch = {
+                    "feed_status": feed_status,
+                    "feed_errors": feed_errors,
+                    "selected_count": len(selected),
+                    "runtime_version": LIVE_SAFETY_VERSION,
+                    "live_risk": live_risk,
+                    "live_execution_path": "local_python_alpaca_rest",
+                    "order_refs": [row["order_ref"] for row in submitted_orders],
+                    "submitted_order_ids": [row["order_id"] for row in submitted_orders],
+                    "submitted_count": len(submitted_orders),
+                    "data_sources": ["alpaca", "sec-filings-intelligence", "google-trends", news_result.data.get("_source", "exa")],
+                }
+                self.storage.update_run_status(run_id, "completed", metadata_patch)
+                return {
+                    "status": "completed",
+                    "run_id": run_id,
+                    "mode": mode,
+                    "run_type": run_type,
+                    "selected": [r["ticker"] for r in selected],
+                    "feed_status": feed_status,
+                    "live_risk": live_risk,
+                    "submitted_orders": submitted_orders,
+                }
             self.storage.insert_order_events(run_id, mode, orders)
 
             sim = self.simulate(selected, orders)
