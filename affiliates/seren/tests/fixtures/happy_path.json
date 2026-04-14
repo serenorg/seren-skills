@@ -1,0 +1,42 @@
+{
+  "status": "ok",
+  "skill": "seren-affiliate",
+  "workflow_step_count": 21,
+  "dry_run": true,
+  "inputs": {
+    "approve_draft": false,
+    "block_email": "",
+    "command": "run",
+    "contacts": "",
+    "contacts_source": "pasted",
+    "daily_cap": 10,
+    "json_output": false,
+    "program_slug": "",
+    "provider": "auto",
+    "strict_mode": true,
+    "voice_notes": ""
+  },
+  "connectors": {
+    "affiliates": {
+      "get": {
+        "status": "ok",
+        "connector": "affiliates",
+        "action": "get"
+      }
+    },
+    "model": {
+      "post": {
+        "status": "ok",
+        "connector": "model",
+        "action": "post"
+      }
+    },
+    "storage": {
+      "upsert": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "upsert"
+      }
+    }
+  }
+}

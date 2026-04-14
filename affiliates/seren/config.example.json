@@ -1,0 +1,24 @@
+{
+  "connectors": [
+    "affiliates",
+    "gmail",
+    "model",
+    "outlook",
+    "storage"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "approve_draft": false,
+    "block_email": "",
+    "command": "run",
+    "contacts": "",
+    "contacts_source": "pasted",
+    "daily_cap": 10,
+    "json_output": false,
+    "program_slug": "",
+    "provider": "auto",
+    "strict_mode": true,
+    "voice_notes": ""
+  },
+  "skill": "seren-affiliate"
+}
