@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS trading.strategy_runs (
   run_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   strategy_name TEXT NOT NULL DEFAULT 'sass-short-trader-delta-neutral',
   mode TEXT NOT NULL CHECK (mode IN ('paper', 'paper-sim', 'live')),
+  run_type TEXT,
   run_date DATE NOT NULL DEFAULT CURRENT_DATE,
   status TEXT NOT NULL DEFAULT 'completed',
   universe TEXT[] NOT NULL,
@@ -28,6 +29,7 @@ ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS config JSONB NOT NULL
 ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS summary JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS error_code TEXT;
 ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS error_message TEXT;
+ALTER TABLE trading.strategy_runs ADD COLUMN IF NOT EXISTS run_type TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_strategy_runs_skill_mode_started
   ON trading.strategy_runs (skill_slug, mode, started_at DESC);
@@ -185,10 +187,13 @@ CREATE TABLE IF NOT EXISTS trading.position_marks_daily (
   unrealized_pnl NUMERIC(18, 6) NOT NULL DEFAULT 0,
   gross_exposure NUMERIC(18, 6),
   net_exposure NUMERIC(18, 6),
+  scan_run_id UUID REFERENCES trading.strategy_runs(run_id),
   source_run_id UUID REFERENCES trading.strategy_runs(run_id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (as_of_date, mode, ticker)
 );
+
+ALTER TABLE trading.position_marks_daily ADD COLUMN IF NOT EXISTS scan_run_id UUID REFERENCES trading.strategy_runs(run_id);
 
 CREATE INDEX IF NOT EXISTS idx_position_marks_mode_date ON trading.position_marks_daily(mode, as_of_date DESC);
 
@@ -202,10 +207,13 @@ CREATE TABLE IF NOT EXISTS trading.pnl_daily (
   net_exposure NUMERIC(18, 6),
   hit_rate NUMERIC(8, 4),
   max_drawdown NUMERIC(18, 6),
+  scan_run_id UUID REFERENCES trading.strategy_runs(run_id),
   source_run_id UUID REFERENCES trading.strategy_runs(run_id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (as_of_date, mode)
 );
+
+ALTER TABLE trading.pnl_daily ADD COLUMN IF NOT EXISTS scan_run_id UUID REFERENCES trading.strategy_runs(run_id);
 
 CREATE INDEX IF NOT EXISTS idx_pnl_daily_mode_date ON trading.pnl_daily(mode, as_of_date DESC);
 
