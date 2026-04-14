@@ -1,0 +1,31 @@
+{
+  "status": "error",
+  "skill": "seren-affiliate",
+  "error_code": "connector_failure",
+  "connector": "affiliates",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "affiliates": {
+      "get": {
+        "status": "error",
+        "connector": "affiliates",
+        "action": "get",
+        "error_code": "connector_failure"
+      }
+    },
+    "model": {
+      "post": {
+        "status": "ok",
+        "connector": "model",
+        "action": "post"
+      }
+    },
+    "storage": {
+      "upsert": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "upsert"
+      }
+    }
+  }
+}
