@@ -47,6 +47,7 @@ def merge_and_send(
             email=contact["email"],
             program_slug=program["program_slug"],
             run_id=run_id,
+            agent_id=profile["agent_id"],
         )
         merged_body = _merge(
             body_template=draft["body_template"],
@@ -55,17 +56,17 @@ def merge_and_send(
             partner_link=program["partner_link_url"],
             link=token_link,
         )
+        token_suffix = token_link.rsplit("/", 1)[-1]
         if contact["email"] == hard_bounce_email:
             new_unsubscribes.append(
                 {
                     "email": contact["email"],
                     "unsubscribed_at": now,
                     "source": "hard_bounce",
+                    "unsubscribe_token": token_suffix,
                 }
             )
             continue
-
-        token_suffix = token_link.rsplit("/", 1)[-1]
         sent.append(
             {
                 "run_id": run_id,

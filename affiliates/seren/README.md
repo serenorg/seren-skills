@@ -60,7 +60,7 @@ tests/
 ## Rollout phases
 
 - **Phase 1 (shipped).** Operator-managed blocklist only. Unsubscribe link in the footer is a documented placeholder; operator removes recipients manually via `command: block`.
-- **Phase 2.** Requires a new `GET /affiliates/unsubscribe/{token}` route and `GET /affiliates/me/unsubscribes?since=...` list on the seren-affiliates backend. Once those ship, `sync` auto-mirrors remote unsubscribes into the local table.
+- **Phase 2.** Requires a new public `GET /unsubscribe/[agent_id]/[token]` route and `GET /public/unsubscribes?agent_id=...&since=...` read API on `seren-affiliates-website` — tracked in serenorg/seren-affiliates-website#36. Once that ships, `sync` mirrors remote opt-outs into the local `unsubscribes` table by joining returned tokens against local `distributions` to resolve `token → email`. `seren-affiliates` (the backend) is intentionally **not** involved and stores no recipient PII.
 
 ## Regenerating from the spec
 
