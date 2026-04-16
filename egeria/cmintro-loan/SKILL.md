@@ -1,5 +1,6 @@
 ---
 name: ovadiya-loan
+display-name: "Egeria Ovadiya Loan"
 description: "Qualify groups for non-recourse stock/crypto loans and institutional block trades based on Ovadiya criteria. Maintains provider anonymity during qualification. Notifies Erik @ Volume Finance upon qualification."
 license: Apache-2.0
 ---

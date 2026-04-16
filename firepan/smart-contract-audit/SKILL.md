@@ -1,5 +1,6 @@
 ---
 name: smart-contract-audit
+display-name: "FirePan Smart Contract Audit"
 description: Detect vulnerabilities in Solidity and Vyper smart contracts with FirePan. Use this skill to run a fast surface scan on a repo, then escalate to a paid full scan or deep audit for authenticated FirePan tenants.
 license: Apache-2.0
 compatibility: Requires internet access to api.firepan.com. Paid calls require a FirePan bearer token and x402-compatible payment handling.

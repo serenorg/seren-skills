@@ -1,5 +1,6 @@
 ---
 name: seren-cloud
+display-name: "Seren Cloud"
 description: "Deploy and operate hosted skills through the first-class seren-cloud publisher."
 ---
 

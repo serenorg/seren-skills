@@ -1,5 +1,6 @@
 ---
 name: backtester
+display-name: "PlausibleAI Backtester"
 description: "Use to perform market backtests with PlausibleAI Backtester, including symbol discovery, strategy validation, strategy mining, and batch execution."
 ---
 

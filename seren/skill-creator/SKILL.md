@@ -1,5 +1,6 @@
 ---
 name: skill-creator
+display-name: "Seren Skill Creator"
 description: "Create or update skills that comply with the Agent Skills specification and Seren repo conventions."
 ---
 

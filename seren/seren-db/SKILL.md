@@ -1,5 +1,6 @@
 ---
 name: seren-db
+display-name: "SerenDB"
 description: "Create, manage, and query SerenDB databases through the first-class seren-db publisher."
 ---
 
