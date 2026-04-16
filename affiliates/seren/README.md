@@ -57,10 +57,9 @@ tests/
   fixtures/                      Happy-path, failure, dry-run-guard, policy-violation fixtures
 ```
 
-## Rollout phases
+## Unsubscribe
 
-- **Phase 1 (shipped).** Operator-managed blocklist only. Unsubscribe link in the footer is a documented placeholder; operator removes recipients manually via `command: block`.
-- **Phase 2.** Requires a new public `GET /unsubscribe/[agent_id]/[token]` route and `GET /public/unsubscribes?agent_id=...&since=...` read API on `seren-affiliates-website` — tracked in serenorg/seren-affiliates-website#36. Once that ships, `sync` mirrors remote opt-outs into the local `unsubscribes` table by joining returned tokens against local `distributions` to resolve `token → email`. `seren-affiliates` (the backend) is intentionally **not** involved and stores no recipient PII.
+One-click unsubscribe is live. Every outbound email links to `https://affiliates-ui.serendb.com/unsubscribe/{agent_id}/{token}` (hosted on `seren-affiliates-website`). The `sync` command calls the public read API to pull new opt-outs into the local `unsubscribes` table. Operators can also manually block addresses via `command: block`.
 
 ## Regenerating from the spec
 

@@ -24,7 +24,7 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 - Per-program dedupe is DB-level: a (program_slug, contact_email) pair is sent at most once, ever.
 - Global unsubscribe list: one opt-out blocks all future sends across every program.
 - Mandatory send footer: sender identity, physical address, and unsubscribe link.
-- **Phase 1 operator-managed blocklist only.** The public `/unsubscribe/{agent_id}/{token}` route on `seren-affiliates-website` does not exist yet; click-to-unsubscribe flips on in Phase 2 when that ships. `seren-affiliates` itself stores no recipient PII and needs no changes.
+- **One-click unsubscribe is live.** Every outbound email includes a footer link to `https://affiliates-ui.serendb.com/unsubscribe/{agent_id}/{token}`. Recipients click once to opt out. Operators can also manually block addresses via `command: block`.
 
 ## Bootstrap Order (Mandatory)
 
@@ -116,10 +116,13 @@ Schema in `serendb_schema.sql`. Tables:
 - `provider=gmail` or `provider=outlook` → explicit choice; fail closed if that one is not authorized.
 - Both publishers are authorized at the Seren platform level, not inside this skill. If neither is authorized, the skill instructs the operator to authorize one via the Seren platform.
 
-## Unsubscribe Handling (Phase 1 vs Phase 2)
+## Unsubscribe Handling
 
-- **Phase 1 (today).** The drafted footer contains a `{unsubscribe_link}` that points at `https://affiliates-ui.serendb.com/unsubscribe/{agent_id}/{token}`, where `token` is an HMAC of `(email, program_slug, run_id)` and `agent_id` identifies the affiliate account. The route is live on `seren-affiliates-website` — recipients get a one-click opt-out confirmation page. Operators can also record manual opt-outs via `command: block` with `block_email=<recipient>` when they learn about them out-of-band. (Note: `affiliates.serendb.com` is the Rust API surface and does **not** host this route; emitting there would 404.)
-- **Phase 2.** The skill's `sync` step calls the public read API at `https://affiliates-ui.serendb.com/public/unsubscribes?agent_id=...&since=...`, joins returned tokens against the local `distributions` table to resolve `token → email`, and upserts into `unsubscribes` with `source=link_click`. `seren-affiliates` (the backend) is intentionally **not** involved — it stores no recipient PII by design.
+Every outbound email contains a footer link: `https://affiliates-ui.serendb.com/unsubscribe/{agent_id}/{token}`, where `token` is an HMAC of `(email, program_slug, run_id)` and `agent_id` identifies the affiliate account.
+
+- **Recipient one-click opt-out.** Clicking the link renders a confirmation page on `seren-affiliates-website` and records the opt-out in Cloudflare KV, scoped to the affiliate's `agent_id`. No recipient PII leaves the skill — only the opaque HMAC token.
+- **Operator manual block.** `command: block` with `block_email=<recipient>` inserts directly into the local `unsubscribes` table (`source=operator_manual`).
+- **Sync.** The `sync` command calls `https://affiliates-ui.serendb.com/public/unsubscribes?agent_id=...&since=...`, joins returned tokens against the local `distributions` table to resolve `token → email`, and upserts into `unsubscribes` with `source=link_click`. `seren-affiliates` (the backend) is not involved — it stores no recipient PII by design.
 
 ## Status and Stats
 

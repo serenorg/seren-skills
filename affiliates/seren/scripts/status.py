@@ -72,9 +72,7 @@ def render_report(
             "new_unsubscribes": len(send_result["new_unsubscribes"]) if send_result else 0,
         },
         "live": live,
-        "phase1_operator_blocklist_only": bool(
-            config["unsubscribe"]["phase1_operator_blocklist_only"]
-        ),
+        "unsubscribe_live": True,
     }
     if json_output:
         return local

@@ -38,7 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "unsubscribe": {
         "endpoint_base": "https://affiliates-ui.serendb.com/unsubscribe",
         "sync_api_base": "https://affiliates-ui.serendb.com/public/unsubscribes",
-        "phase1_operator_blocklist_only": True,
+        "unsubscribe_live": True,
     },
     "inputs": {
         "command": "run",
