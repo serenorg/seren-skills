@@ -1,5 +1,6 @@
 ---
 name: getting-started
+display-name: "Seren Getting Started"
 description: "Learn how to use skills, add them to threads, invoke them, and create custom skills with Skill Creator"
 ---
 

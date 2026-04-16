@@ -1,5 +1,6 @@
 ---
 name: serendb-memory
+display-name: "Claude SerenDB Memory"
 description: "Sync Claude Code auto-memory files into SerenDB for CLI-only users without Seren Desktop."
 compatibility: "Claude Code CLI only. Do not invoke from Seren Desktop."
 ---

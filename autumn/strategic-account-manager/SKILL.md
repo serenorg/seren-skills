@@ -1,5 +1,6 @@
 ---
 name: strategic-account-manager
+display-name: "Autumn Strategic Account Manager"
 description: Prepare for strategic account meetings, support selective live guidance, and reconcile post-meeting follow-up while enforcing consolidation, confidence, and anti-repetition guardrails.
 ---
 

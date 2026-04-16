@@ -1,5 +1,6 @@
 ---
 name: job-seeker
+display-name: "Seren Job Seeker"
 description: "AI-powered job search agent that finds hiring managers, researches companies, discovers networking events, generates personalized outreach, and auto-applies to jobs — dual strategy for maximum coverage"
 ---
 

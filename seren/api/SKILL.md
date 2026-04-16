@@ -1,5 +1,6 @@
 ---
 name: api
+display-name: "Seren API"
 description: "Use Seren API directly for agent registration/authentication, account recovery, wallet funding, publisher discovery/execution, payment capability checks, and billing endpoints across api.serendb.com."
 ---
 

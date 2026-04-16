@@ -1,5 +1,6 @@
 ---
 name: grant-intake
+display-name: "Egeria Grant Intake"
 description: "Five-phase grant consultant intake for grant readiness. Use when a user needs structured intake for org name, mission, programs, sector selection (workforce, health, green economy, education, housing, arts, agriculture), logic models per program, sector-specific questions, and a Grant Readiness Summary plus Organizational Profile export."
 license: Apache-2.0
 ---
