@@ -26,7 +26,7 @@ from draft import await_approval, draft_pitch
 from ingest import enforce_daily_cap, filter_eligible, ingest_contacts, resolve_provider
 from send import merge_and_send
 from status import fetch_live_stats, render_report
-from sync import select_program, sync_joined_programs
+from sync import select_program, sync_joined_programs, sync_remote_unsubscribes
 
 COMMAND_CHOICES = (
     "bootstrap",
@@ -133,6 +133,16 @@ def _block(config: dict, run_id: str) -> dict:
             **{k: v for k, v in stage.items() if k != "stage_status"},
         }
     result = block_email(config)
+    persist_unsubscribes: list[dict] = []
+    if result["status"] == "ok":
+        persist_unsubscribes.append(
+            {
+                "email": result["unsubscribe"]["email"],
+                "unsubscribed_at": result["unsubscribe"]["unsubscribed_at"],
+                "source": "operator_manual",
+                "agent_id": stage["profile"]["profile"]["agent_id"],
+            }
+        )
     return {
         "skill": "seren-affiliate",
         "run_id": run_id,
@@ -140,7 +150,62 @@ def _block(config: dict, run_id: str) -> dict:
         "run_status": "ok" if result["status"] == "ok" else "blocked",
         "generated_at": utc_now(),
         "block_result": result,
+        "persist": {"unsubscribes": persist_unsubscribes},
     }
+
+
+def _seed_watermark(config: dict, agent_id: str) -> str | None:
+    """Reference implementation: in production the runtime harness reads
+    sync_state.last_synced_at WHERE agent_id=? AND source='link_click'.
+    Here we let the operator or a test fixture seed it via simulate."""
+    simulate = config.get("simulate", {})
+    seeded = simulate.get("sync_state_watermark")
+    if isinstance(seeded, dict):
+        return seeded.get(agent_id)
+    if isinstance(seeded, str):
+        return seeded
+    return None
+
+
+def _seed_persisted_blocklist(config: dict) -> set[str]:
+    """Reference implementation: the runtime harness fills this via
+    SELECT email FROM unsubscribes. Tests can seed it with
+    simulate.unsubscribed_emails so the end-to-end filter path is verifiable."""
+    simulate = config.get("simulate", {})
+    seeded = simulate.get("unsubscribed_emails") or []
+    return {str(e).strip().lower() for e in seeded if str(e).strip()}
+
+
+def _token_resolver(config: dict):
+    """Reference implementation: in production the runtime harness resolves
+    tokens via SELECT contact_email FROM distributions WHERE unsubscribe_token=?.
+    Here we let a test fixture provide a token->email map."""
+    simulate = config.get("simulate", {})
+    token_map = simulate.get("distributions_by_token") or {}
+
+    def _resolve(token: str) -> str | None:
+        return token_map.get(token)
+
+    return _resolve
+
+
+def _hard_bounce_rows(send_result: dict | None, agent_id: str) -> list[dict]:
+    if not send_result:
+        return []
+    out: list[dict] = []
+    for row in send_result.get("new_unsubscribes", []) or []:
+        if row.get("source") != "hard_bounce":
+            continue
+        out.append(
+            {
+                "email": row["email"],
+                "unsubscribed_at": row["unsubscribed_at"],
+                "source": "hard_bounce",
+                "agent_id": agent_id,
+                "unsubscribe_token": row.get("unsubscribe_token"),
+            }
+        )
+    return out
 
 
 def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
@@ -203,11 +268,21 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
             "ingest": ingest,
         }
 
+    remote_sync = sync_remote_unsubscribes(
+        config=config,
+        agent_id=stage["profile"]["profile"]["agent_id"],
+        watermark=_seed_watermark(config, stage["profile"]["profile"]["agent_id"]),
+        resolve_token=_token_resolver(config),
+    )
+    persisted_blocklist = _seed_persisted_blocklist(config)
+    remote_blocklist = {row["email"] for row in remote_sync["new_unsubscribes"]}
+    unsubscribes_set = persisted_blocklist | remote_blocklist
+
     eligibility = filter_eligible(
         contacts=ingest["contacts"],
         program_slug=program["program_slug"],
         already_sent_for_program=set(),
-        unsubscribes=set(),
+        unsubscribes=unsubscribes_set,
     )
     cap = daily_cap_from_input(config)
     cap_summary = enforce_daily_cap(
@@ -288,6 +363,18 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
         live=live,
     )
 
+    persist_unsubscribes: list[dict] = list(remote_sync["new_unsubscribes"])
+    persist_unsubscribes.extend(_hard_bounce_rows(send_result, stage["profile"]["profile"]["agent_id"]))
+    persist_sync_state: list[dict] = []
+    if not remote_sync["stale"]:
+        persist_sync_state.append(
+            {
+                "agent_id": stage["profile"]["profile"]["agent_id"],
+                "source": "link_click",
+                "last_synced_at": remote_sync["next_watermark"],
+            }
+        )
+
     return {
         "skill": "seren-affiliate",
         "run_id": run_id,
@@ -298,6 +385,7 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
         "program": program,
         "provider": provider,
         "ingest": ingest,
+        "remote_sync": remote_sync,
         "eligibility": eligibility,
         "cap_summary": cap_summary,
         "draft": draft,
@@ -305,6 +393,10 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
         "send": send_result,
         "live": live,
         "report": report,
+        "persist": {
+            "unsubscribes": persist_unsubscribes,
+            "sync_state": persist_sync_state,
+        },
     }
 
 

@@ -118,11 +118,17 @@ Schema in `serendb_schema.sql`. Tables:
 
 ## Unsubscribe Handling
 
-Every outbound email contains a footer link: `https://affiliates-ui.serendb.com/unsubscribe/{agent_id}/{token}`, where `token` is an HMAC of `(email, program_slug, run_id)` and `agent_id` identifies the affiliate account.
+Every outbound email contains a footer link: `https://affiliates-ui.serendb.com/unsubscribe/{agent_id}/{token}`, where `token` is an HMAC of `(email, program_slug, run_id)` and `agent_id` identifies the affiliate account. Three sources feed the local `unsubscribes` table, all converging through one `persist.unsubscribes` payload on every run:
 
-- **Recipient one-click opt-out.** Clicking the link renders a confirmation page on `seren-affiliates-website` and records the opt-out in Cloudflare KV, scoped to the affiliate's `agent_id`. No recipient PII leaves the skill — only the opaque HMAC token.
-- **Operator manual block.** `command: block` with `block_email=<recipient>` inserts directly into the local `unsubscribes` table (`source=operator_manual`).
-- **Sync.** The `sync` command calls `https://affiliates-ui.serendb.com/public/unsubscribes?agent_id=...&since=...`, joins returned tokens against the local `distributions` table to resolve `token → email`, and upserts into `unsubscribes` with `source=link_click`. `seren-affiliates` (the backend) is not involved — it stores no recipient PII by design.
+- **`link_click`.** Before every pipeline run, `sync_remote_unsubscribes` pulls from `https://affiliates-ui.serendb.com/public/unsubscribes?agent_id=X&since=T&cursor=C`. The watermarked `since` read comes from the `sync_state` table — O(1) PK lookup, no `MAX()` over `unsubscribes`. Returned `(token, unsubscribed_at)` pairs are resolved to emails via `distributions.unsubscribe_token` (UNIQUE B-tree, sub-ms per lookup). Unresolvable tokens are logged and skipped.
+- **`operator_manual`.** `command: block` with `block_email=<recipient>` emits a row into `persist.unsubscribes` for the harness to upsert.
+- **`hard_bounce`.** `merge_and_send` promotes bounce events into `persist.unsubscribes` with `source=hard_bounce`.
+
+The pipeline filters `ingest.contacts` through the union of persisted `unsubscribes` plus freshly-pulled remote opt-outs before any draft or send.
+
+**Stale-blocklist fallback.** If the public API returns 5xx or times out, `sync_remote_unsubscribes` sets `stale=True`, does not advance the watermark, and the run proceeds with whatever's already persisted. Explicit operator tradeoff: a website outage must not block affiliate campaigns, and the blocklist is at most one run stale.
+
+`seren-affiliates` (the Rust backend) is not involved — it stores no recipient PII by design.
 
 ## Status and Stats
 

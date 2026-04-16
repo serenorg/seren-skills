@@ -31,7 +31,11 @@ from common import (  # noqa: E402
 from draft import await_approval, draft_pitch  # noqa: E402
 from ingest import enforce_daily_cap, filter_eligible, ingest_contacts, resolve_provider  # noqa: E402
 from send import merge_and_send  # noqa: E402
-from sync import select_program, sync_joined_programs  # noqa: E402
+from sync import (  # noqa: E402
+    select_program,
+    sync_joined_programs,
+    sync_remote_unsubscribes,
+)
 from validators import validate_tracked_link  # noqa: E402
 
 
@@ -426,6 +430,141 @@ def test_merge_and_send_fails_closed_when_draft_drops_partner_link_placeholder()
     assert send_result["status"] == "validation_failed"
     assert send_result["error_code"] == "tracked_link_missing"
     assert send_result["sent_count"] == 0
+
+
+# --- Issue #421: unsubscribe backflow (pull + persist end-to-end) ---
+
+
+def test_sync_remote_unsubscribes_paginates_resolves_and_skips_unknown() -> None:
+    """Cover the core transform: walk cursor, resolve token->email via
+    distributions, skip unresolvable tokens without raising."""
+    pages = [
+        {
+            "unsubscribes": [
+                {"token": "tok-alice", "unsubscribed_at": "2026-04-10T00:00:00Z"},
+                {"token": "tok-orphan", "unsubscribed_at": "2026-04-11T00:00:00Z"},
+            ],
+            "next_cursor": "p2",
+        },
+        {
+            "unsubscribes": [
+                {"token": "tok-bob", "unsubscribed_at": "2026-04-12T00:00:00Z"},
+            ],
+            "next_cursor": None,
+        },
+    ]
+    calls = []
+
+    def http_get(url: str) -> dict:
+        calls.append(url)
+        return pages[len(calls) - 1]
+
+    token_map = {"tok-alice": "alice@example.com", "tok-bob": "bob@example.com"}
+    result = sync_remote_unsubscribes(
+        config=deepcopy(DEFAULT_CONFIG),
+        agent_id="agent-demo-0001",
+        watermark="2026-04-01T00:00:00Z",
+        resolve_token=lambda t: token_map.get(t),
+        http_get=http_get,
+    )
+    assert result["status"] == "ok" and result["stale"] is False
+    assert len(calls) == 2
+    assert "cursor=p2" in calls[1]
+    assert result["resolved_count"] == 2
+    assert result["unresolved_count"] == 1
+    emails = sorted(r["email"] for r in result["new_unsubscribes"])
+    assert emails == ["alice@example.com", "bob@example.com"]
+    assert result["new_unsubscribes"][0]["source"] == "link_click"
+    assert result["next_watermark"] == "2026-04-12T00:00:00Z"
+
+
+def test_sync_remote_unsubscribes_stale_on_api_down_does_not_raise() -> None:
+    """Explicit design choice from #421: website outage must not block sends.
+    stale=True, watermark unchanged, pipeline continues with persisted blocklist."""
+    cfg = deepcopy(DEFAULT_CONFIG)
+    cfg["simulate"]["public_unsubscribes_api_down"] = True
+    result = sync_remote_unsubscribes(
+        config=cfg,
+        agent_id="agent-demo-0001",
+        watermark="2026-04-10T00:00:00Z",
+        resolve_token=lambda _t: None,
+    )
+    assert result["status"] == "ok"
+    assert result["stale"] is True
+    assert result["pulled_count"] == 0
+    assert result["new_unsubscribes"] == []
+    assert result["next_watermark"] == "2026-04-10T00:00:00Z"
+    assert "api_unavailable" in result["warning"]
+
+
+def test_end_to_end_run_filters_remote_unsubscribe_and_persists_all_sources() -> None:
+    """The bug that motivated #421: agent.py passed unsubscribes=set(). This
+    test proves (a) remote opt-outs block sends, and (b) remote + hard_bounce
+    both land in persist.unsubscribes."""
+    cfg = _config(
+        command="run",
+        program_slug="sample-saas-alpha",
+        contacts='alice@example.com\nbob@example.com',
+        approve_draft=True,
+        json_output=True,
+    )
+    cfg["simulate"]["hard_bounce_email"] = "bob@example.com"
+    cfg["simulate"]["distributions_by_token"] = {"tok-alice": "alice@example.com"}
+    cfg["simulate"]["public_unsubscribes_response"] = {
+        "unsubscribes": [
+            {"token": "tok-alice", "unsubscribed_at": "2026-04-14T00:00:00Z"},
+        ],
+        "next_cursor": None,
+    }
+    config_path = FIXTURE_DIR / "_unsub_backflow.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+    env = {**os.environ, "SEREN_API_KEY": "fake"}
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "agent.py"), "--config", str(config_path)],
+            capture_output=True, text=True, env=env, cwd=str(SCRIPTS_DIR),
+        )
+    finally:
+        config_path.unlink(missing_ok=True)
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+
+    assert payload["remote_sync"]["resolved_count"] == 1
+    assert payload["eligibility"]["skipped_unsub"] == 1, (
+        "alice must be filtered out by the remote-synced opt-out"
+    )
+    sent_emails = [r["contact_email"] for r in payload["send"]["sent"]]
+    assert "alice@example.com" not in sent_emails
+
+    persisted = payload["persist"]["unsubscribes"]
+    sources = sorted({row["source"] for row in persisted})
+    assert sources == ["hard_bounce", "link_click"], (
+        f"persist.unsubscribes missing sources: {sources}"
+    )
+    assert payload["persist"]["sync_state"][0]["source"] == "link_click"
+
+
+def test_block_command_persists_operator_manual_unsubscribe() -> None:
+    """The operator_manual source must also surface in persist.unsubscribes
+    so the harness can write it. Previously it lived only in a return dict."""
+    cfg = _config(command="block", block_email="stop@example.com")
+    config_path = FIXTURE_DIR / "_block_persist.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+    env = {**os.environ, "SEREN_API_KEY": "fake"}
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "agent.py"), "--config", str(config_path)],
+            capture_output=True, text=True, env=env, cwd=str(SCRIPTS_DIR),
+        )
+    finally:
+        config_path.unlink(missing_ok=True)
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["run_status"] == "ok"
+    rows = payload["persist"]["unsubscribes"]
+    assert len(rows) == 1
+    assert rows[0]["email"] == "stop@example.com"
+    assert rows[0]["source"] == "operator_manual"
 
 
 if __name__ == "__main__":
