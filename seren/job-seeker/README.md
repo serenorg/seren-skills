@@ -178,7 +178,7 @@ Download your LinkedIn data export first (see Quick Start step 3).
 ## Support
 
 - Seren Docs: https://docs.serendb.com
-- Issues: https://github.com/serenorg/seren-desktop-issues
+- Issues: https://github.com/serenorg/seren-desktop/issues
 
 ## License
 

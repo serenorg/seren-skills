@@ -312,7 +312,7 @@ tail -f logs/errors.jsonl
 
 - Seren Docs: https://docs.serendb.com
 - Kraken API: https://docs.kraken.com/api
-- Issues: https://github.com/serenorg/seren-desktop-issues
+- Issues: https://github.com/serenorg/seren-desktop/issues
 
 ## License
 
