@@ -118,8 +118,8 @@ Schema in `serendb_schema.sql`. Tables:
 
 ## Unsubscribe Handling (Phase 1 vs Phase 2)
 
-- **Phase 1 (today).** The drafted footer contains a `{unsubscribe_link}` that points at `https://affiliates.serendb.com/unsubscribe/{agent_id}/{token}`, where `token` is an HMAC of `(email, program_slug, run_id)` and `agent_id` identifies the affiliate account. The route does **not** exist on `seren-affiliates-website` yet. Until it ships, the operator handles unsubscribes manually via `command: block` with `block_email=<recipient>`.
-- **Phase 2.** Once `seren-affiliates-website` adds `GET /unsubscribe/[agent_id]/[token]` and `GET /public/unsubscribes?agent_id=...&since=...`, the skill's `sync` step calls the public read API, joins returned tokens against the local `distributions` table to resolve `token → email`, and upserts into `unsubscribes` with `source=link_click`. `seren-affiliates` (the backend) is intentionally **not** involved — it stores no recipient PII by design.
+- **Phase 1 (today).** The drafted footer contains a `{unsubscribe_link}` that points at `https://affiliates-ui.serendb.com/unsubscribe/{agent_id}/{token}`, where `token` is an HMAC of `(email, program_slug, run_id)` and `agent_id` identifies the affiliate account. The route is live on `seren-affiliates-website` — recipients get a one-click opt-out confirmation page. Operators can also record manual opt-outs via `command: block` with `block_email=<recipient>` when they learn about them out-of-band. (Note: `affiliates.serendb.com` is the Rust API surface and does **not** host this route; emitting there would 404.)
+- **Phase 2.** The skill's `sync` step calls the public read API at `https://affiliates-ui.serendb.com/public/unsubscribes?agent_id=...&since=...`, joins returned tokens against the local `distributions` table to resolve `token → email`, and upserts into `unsubscribes` with `source=link_click`. `seren-affiliates` (the backend) is intentionally **not** involved — it stores no recipient PII by design.
 
 ## Status and Stats
 

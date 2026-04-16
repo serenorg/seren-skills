@@ -46,4 +46,4 @@ Not a Seren publisher. Plain HTTPS from the skill.
 | emit_unsubscribe_link | (client-side URL only) | /unsubscribe/{agent_id}/{token} | Embedded in every outbound body_template as `{unsubscribe_link}` |
 | sync_remote_unsubscribes | GET | /public/unsubscribes?agent_id=...&since=... | Phase 2 dependency (serenorg/seren-affiliates-website#36); returns paginated tokens the skill joins against local `distributions` to resolve token → email |
 
-Base URL: `https://affiliates.serendb.com` (configured at `config.unsubscribe.endpoint_base` and `config.unsubscribe.sync_api_base`). No recipient PII is ever sent to this host — only HMAC tokens and `agent_id`. `seren-affiliates` (the backend) is intentionally not involved.
+Base URL: `https://affiliates-ui.serendb.com` (configured at `config.unsubscribe.endpoint_base` and `config.unsubscribe.sync_api_base`). No recipient PII is ever sent to this host — only HMAC tokens and `agent_id`. `seren-affiliates` (the backend) is intentionally not involved; `affiliates.serendb.com` is the Rust API surface and does not host the unsubscribe routes.

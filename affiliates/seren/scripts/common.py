@@ -36,8 +36,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "daily_cap_max": 25,
     },
     "unsubscribe": {
-        "endpoint_base": "https://affiliates.serendb.com/unsubscribe",
-        "sync_api_base": "https://affiliates.serendb.com/public/unsubscribes",
+        "endpoint_base": "https://affiliates-ui.serendb.com/unsubscribe",
+        "sync_api_base": "https://affiliates-ui.serendb.com/public/unsubscribes",
         "phase1_operator_blocklist_only": True,
     },
     "inputs": {
