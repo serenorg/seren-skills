@@ -72,6 +72,18 @@ CREATE TABLE IF NOT EXISTS drafts (
   approved_by TEXT
 );
 
+-- Per-affiliate, per-source watermark for incremental pulls. The link_click
+-- source pulls from https://affiliates-ui.serendb.com/public/unsubscribes;
+-- the row's last_synced_at is the `since` parameter on the next pull.
+-- PRIMARY KEY makes watermark reads O(1) instead of scanning unsubscribes
+-- for MAX(unsubscribed_at).
+CREATE TABLE IF NOT EXISTS sync_state (
+  agent_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('link_click')),
+  last_synced_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (agent_id, source)
+);
+
 -- One row per skill invocation. Counts populated at persist_run_state.
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY,
