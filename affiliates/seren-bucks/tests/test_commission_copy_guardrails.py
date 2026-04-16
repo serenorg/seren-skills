@@ -61,3 +61,22 @@ def test_default_tracked_link_uses_serendb_domain() -> None:
         assert link.startswith("https://serendb.com"), (
             f"default tracked_link must use serendb.com, got: {link}"
         )
+
+
+def test_signoff_does_not_attribute_sender_to_serendb() -> None:
+    """#417: the sender is an affiliate, not a SerenDB employee.
+    The sign-off must never carry a company attribution line."""
+    import re
+
+    body = EMAIL_TEMPLATE.read_text(encoding="utf-8")
+    signoff = re.search(
+        r"Cheers,\s*\n\s*\{\{sender_full_name\}\}\s*\n(.*?)```",
+        body,
+        re.DOTALL,
+    )
+    assert signoff, "cannot locate sign-off block in template"
+    after_name = signoff.group(1).strip()
+    assert after_name == "", (
+        f"sign-off has extra content after sender_full_name: {after_name!r}. "
+        "Affiliates must sign as themselves, not as SerenDB."
+    )
