@@ -478,6 +478,35 @@ def test_sync_remote_unsubscribes_paginates_resolves_and_skips_unknown() -> None
     assert result["next_watermark"] == "2026-04-12T00:00:00Z"
 
 
+def test_default_http_get_sends_identifying_user_agent() -> None:
+    """Cloudflare WAF on affiliates-ui.serendb.com 403s the default urllib
+    User-Agent. Production e2e caught this. Lock the UA so it can't regress."""
+    import sync as sync_mod
+
+    captured: dict = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self): return b'{"unsubscribes":[],"next_cursor":null}'
+
+    def fake_urlopen(req, *, timeout):
+        captured["headers"] = dict(req.header_items())
+        return FakeResp()
+
+    real_urlopen = sync_mod.urllib.request.urlopen
+    sync_mod.urllib.request.urlopen = fake_urlopen
+    try:
+        sync_mod._default_http_get("https://example.invalid/x")
+    finally:
+        sync_mod.urllib.request.urlopen = real_urlopen
+
+    ua = captured["headers"].get("User-agent") or captured["headers"].get("User-Agent")
+    assert ua and "seren-affiliate-skill" in ua, (
+        f"default http_get must send an identifying User-Agent, got: {ua!r}"
+    )
+
+
 def test_sync_remote_unsubscribes_stale_on_api_down_does_not_raise() -> None:
     """Explicit design choice from #421: website outage must not block sends.
     stale=True, watermark unchanged, pipeline continues with persisted blocklist."""

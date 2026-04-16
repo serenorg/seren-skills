@@ -11,6 +11,11 @@ from common import utc_now
 EPOCH_WATERMARK = "1970-01-01T00:00:00Z"
 DEFAULT_HTTP_TIMEOUT_SECONDS = 10
 MAX_PAGES_PER_RUN = 50  # 50 * 500 = 25k opt-outs per run, plenty per affiliate
+# Cloudflare's WAF on affiliates-ui.serendb.com 403s the default urllib
+# User-Agent. Send a proper identifying UA so the public read API is reachable.
+DEFAULT_USER_AGENT = (
+    "seren-affiliate-skill/1 (+https://github.com/serenorg/seren-skills)"
+)
 
 SAMPLE_PROGRAMS = [
     {
@@ -64,7 +69,13 @@ def sync_joined_programs(config: dict) -> dict:
 
 
 def _default_http_get(url: str, *, timeout: int = DEFAULT_HTTP_TIMEOUT_SECONDS) -> dict:
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": DEFAULT_USER_AGENT,
+        },
+    )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
