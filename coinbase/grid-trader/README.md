@@ -200,7 +200,7 @@ SerenDB persistence is best-effort; if unavailable, trading continues with local
 
 ## Known Limitations
 
-- **No live ticker**: The `coinbase-trading` publisher does not yet expose `GET /products/{id}/ticker`. The bot uses the midpoint of `price_range` as the reference price. Request the endpoint be added via [serenorg/seren-desktop-issues](https://github.com/serenorg/seren-desktop-issues).
+- **No live ticker**: The `coinbase-trading` publisher does not yet expose `GET /products/{id}/ticker`. The bot uses the midpoint of `price_range` as the reference price. Request the endpoint be added via [serenorg/seren-desktop](https://github.com/serenorg/seren-desktop/issues).
 - **No cancel-all endpoint**: The publisher exposes `DELETE /orders/{order_id}` only. `stop` loops through active orders to cancel each individually.
 - **No order history API**: Fill detection is done by comparing `active_orders` in memory against live `GET /orders`. A restart clears in-memory state; re-running `start` re-places the full grid.
 
@@ -220,5 +220,5 @@ SerenDB persistence is best-effort; if unavailable, trading continues with local
 
 ## Support
 
-- Issues: [serenorg/seren-desktop-issues](https://github.com/serenorg/seren-desktop-issues)
+- Issues: [serenorg/seren-desktop](https://github.com/serenorg/seren-desktop/issues)
 - Docs: [docs.serendb.com](https://docs.serendb.com)
