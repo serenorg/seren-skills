@@ -13,7 +13,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "campaign": {
         "campaign_id": "seren-bucks-default",
         "campaign_name": "Seren Bucks Default Affiliate Campaign",
-        "tracked_link": "https://seren.ai/serenbucks?ref=default",
+        "tracked_link": "https://serendb.com?ref=default",
         "affiliate_source_of_truth": "seren-affiliates",
     },
     "database": {
@@ -53,7 +53,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "proposal_size": 10,
         "new_outbound_daily_cap": 10,
         "strict_mode": True,
-        "tracked_link": "https://seren.ai/serenbucks?ref=default",
+        "tracked_link": "https://serendb.com?ref=default",
     },
     "simulate": {
         "affiliate_bootstrap_failure": False,

@@ -12,6 +12,25 @@ Review-first growth skill for one default Seren Bucks affiliate campaign.
 
 Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
 
+## Affiliate Program Structure (Read Before Drafting)
+
+SerenBucks is a **3-tier unilevel** program. Outreach copy MUST reflect this:
+
+- **Tier 0** — the affiliate earns **20%** direct commission on their own referrals.
+- **Tier 1 override** — the affiliate's sponsor earns **5%** when a direct child refers.
+- **Tier 2 override** — the sponsor's sponsor earns **5%** when a grandchild refers.
+
+The bootstrapped `tracked_link` is the **operator's own `SRN_` recruitment link**. When
+a recipient signs up through that link, they become a Tier 1 downstream of the operator
+and receive **their own unique `SRN_` code** to share. Only the recipient's own code
+credits them with Tier 0 (20%) commission — forwarding the operator's link credits the
+operator, not the recipient.
+
+Never draft outreach that claims the recipient earns 20% on the link inside the email.
+Pull all outreach copy from `references/email-templates.md`, which documents the correct
+three-step recruitment flow (join → get own code → share own code) and the full tier
+disclosure.
+
 ## Default V1 Contract
 
 - The skill operates exactly one default affiliate campaign in v1.
