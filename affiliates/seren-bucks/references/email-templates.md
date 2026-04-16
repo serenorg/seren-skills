@@ -63,7 +63,6 @@ that's the one you send to friends.
 
 Cheers,
 {{sender_full_name}}
-SerenDB
 ```
 
 ## What the draft MUST NOT say
