@@ -24,5 +24,5 @@ def block_email(config: dict) -> dict:
             "unsubscribed_at": utc_now(),
             "source": "operator_manual",
         },
-        "phase": "phase1_operator_blocklist_only",
+        "phase": "operator_manual",
     }

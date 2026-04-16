@@ -37,13 +37,13 @@ Operations: `upsert` and `get` only. Database `seren_affiliate`.
 
 Single call at `draft_pitch`. Prompt reference: `references/prompts/draft_pitch.md`. Output is validated for the five required placeholder tokens before persistence.
 
-## website — seren-affiliates-website (Phase 2)
+## website — seren-affiliates-website
 
 Not a Seren publisher. Plain HTTPS from the skill.
 
 | Step | Method | Path | Notes |
 |------|--------|------|-------|
 | emit_unsubscribe_link | (client-side URL only) | /unsubscribe/{agent_id}/{token} | Embedded in every outbound body_template as `{unsubscribe_link}` |
-| sync_remote_unsubscribes | GET | /public/unsubscribes?agent_id=...&since=... | Phase 2 dependency (serenorg/seren-affiliates-website#36); returns paginated tokens the skill joins against local `distributions` to resolve token → email |
+| sync_remote_unsubscribes | GET | /public/unsubscribes?agent_id=...&since=... | Returns paginated tokens the skill joins against local `distributions` to resolve token → email |
 
 Base URL: `https://affiliates-ui.serendb.com` (configured at `config.unsubscribe.endpoint_base` and `config.unsubscribe.sync_api_base`). No recipient PII is ever sent to this host — only HMAC tokens and `agent_id`. `seren-affiliates` (the backend) is intentionally not involved; `affiliates.serendb.com` is the Rust API surface and does not host the unsubscribe routes.
