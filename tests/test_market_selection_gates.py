@@ -107,11 +107,11 @@ def test_min_volume_filter_exists() -> None:
     assert "min_volume" in source, "agent.py missing min_volume config"
 
 
-def test_min_volume_default_is_1000() -> None:
+def test_min_volume_default_is_5000() -> None:
     source = _read(BOT_AGENT)
     match = re.search(r"['\"]min_volume['\"],\s*([\d.]+)", source)
     assert match, "Cannot find min_volume default in agent.py"
-    assert float(match.group(1)) == 1000.0
+    assert float(match.group(1)) == 5000.0
 
 
 def test_min_volume_in_config_example() -> None:
