@@ -9,6 +9,14 @@ import math
 import os
 import sys
 import time
+
+# --- Force unbuffered stdout so piped/background output is visible immediately ---
+if not sys.stdout.isatty():
+    os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+# --- End unbuffered stdout fix ---
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
