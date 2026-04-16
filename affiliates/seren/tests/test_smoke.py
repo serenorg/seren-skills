@@ -26,6 +26,7 @@ from common import (  # noqa: E402
     is_valid_email,
     parse_pasted_contacts,
     require_approve_draft_json_pairing,
+    unsubscribe_link,
 )
 from draft import await_approval, draft_pitch  # noqa: E402
 from ingest import enforce_daily_cap, filter_eligible, ingest_contacts, resolve_provider  # noqa: E402
@@ -349,6 +350,20 @@ def test_block_command_creates_operator_unsubscribe() -> None:
     result = block_email(cfg)
     assert result["status"] == "ok"
     assert result["unsubscribe"]["source"] == "operator_manual"
+
+
+def test_unsubscribe_link_targets_affiliates_ui_host() -> None:
+    """Issue #415: emit affiliates-ui.serendb.com (Next.js) not
+    affiliates.serendb.com (Rust API, which 404s on /unsubscribe/*)."""
+    link = unsubscribe_link(
+        config=deepcopy(DEFAULT_CONFIG),
+        email="alice@example.com",
+        program_slug="sample-saas-alpha",
+        run_id="run-1",
+        agent_id="agent-demo-0001",
+    )
+    assert link.startswith("https://affiliates-ui.serendb.com/unsubscribe/"), link
+    assert "//affiliates.serendb.com/" not in link, link
 
 
 # --- Issue #404: tracked_link validator (defense-in-depth) ---
