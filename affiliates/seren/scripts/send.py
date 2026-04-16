@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from common import hash_body, unsubscribe_link, utc_now
+from validators import validate_tracked_link
 
 
 def _merge(*, body_template: str, contact: dict, profile: dict, partner_link: str, link: str) -> str:
@@ -56,6 +57,22 @@ def merge_and_send(
             partner_link=program["partner_link_url"],
             link=token_link,
         )
+        link_check = validate_tracked_link(
+            merged_body=merged_body,
+            tracked_link=program["partner_link_url"],
+        )
+        if link_check["status"] != "ok":
+            return {
+                "status": "validation_failed",
+                "error_code": link_check["error_code"],
+                "message": link_check["message"],
+                "failed_contact_email": contact["email"],
+                "expected_tracked_link": link_check.get("expected_tracked_link"),
+                "sent": sent,
+                "new_unsubscribes": new_unsubscribes,
+                "sent_count": len(sent),
+                "provider_used": provider_used,
+            }
         token_suffix = token_link.rsplit("/", 1)[-1]
         if contact["email"] == hard_bounce_email:
             new_unsubscribes.append(

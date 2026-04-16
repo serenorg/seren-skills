@@ -105,6 +105,7 @@ Schema in `serendb_schema.sql`. Tables:
 - `policies.dry_run_default: true` — the skill previews every batch and refuses to send unless `approve_draft=true` (with `json_output=true`) or the interactive approval is recorded.
 - `policies.idempotency_required: true` — every distribution is keyed to a `run_id` plus `UNIQUE(program_slug, contact_email)`.
 - Mandatory footer placeholders in every drafted body: `{name}`, `{partner_link}`, `{sender_identity}`, `{sender_address}`, `{unsubscribe_link}`. A regex gate rejects drafts missing any of them.
+- Post-merge tracked-link validator (issue #404): after each per-contact merge, the skill asserts the bootstrapped `partner_link_url` substring is present in the merged body and **fails the send closed** (`validation_failed` / `tracked_link_missing`) if not. This is a defense-in-depth guard against a future LLM prompt change stripping the link or swapping a hallucinated URL.
 - `sender_address` is required before any send. The skill fails closed if `affiliate_profile.sender_address` is empty.
 - Hard-bounce on send auto-inserts into `unsubscribes` with `source=hard_bounce`.
 - PII posture: only `name` + `email` are pulled from provider address books. Never message bodies or threads. Email addresses never appear in stdout outside the final summary, and only in structured form under `json_output=true`.

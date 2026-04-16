@@ -31,6 +31,7 @@ from draft import await_approval, draft_pitch  # noqa: E402
 from ingest import enforce_daily_cap, filter_eligible, ingest_contacts, resolve_provider  # noqa: E402
 from send import merge_and_send  # noqa: E402
 from sync import select_program, sync_joined_programs  # noqa: E402
+from validators import validate_tracked_link  # noqa: E402
 
 
 def _config(**input_overrides) -> dict:
@@ -348,6 +349,68 @@ def test_block_command_creates_operator_unsubscribe() -> None:
     result = block_email(cfg)
     assert result["status"] == "ok"
     assert result["unsubscribe"]["source"] == "operator_manual"
+
+
+# --- Issue #404: tracked_link validator (defense-in-depth) ---
+
+
+def test_validate_tracked_link_accepts_body_containing_link() -> None:
+    result = validate_tracked_link(
+        merged_body="Hi Alice, here is the link: https://example.com/r/x?ref=demo\nThanks",
+        tracked_link="https://example.com/r/x?ref=demo",
+    )
+    assert result["status"] == "ok"
+
+
+def test_validate_tracked_link_rejects_body_missing_link() -> None:
+    result = validate_tracked_link(
+        merged_body="Hi Alice, here is the link: https://evil.example.com/hallucinated",
+        tracked_link="https://example.com/r/x?ref=demo",
+    )
+    assert result["status"] == "validation_failed"
+    assert result["error_code"] == "tracked_link_missing"
+    assert result["expected_tracked_link"] == "https://example.com/r/x?ref=demo"
+
+
+def test_merge_and_send_fails_closed_when_draft_drops_partner_link_placeholder() -> None:
+    cfg = deepcopy(DEFAULT_CONFIG)
+    cfg["inputs"]["approve_draft"] = True
+    cfg["inputs"]["json_output"] = True
+
+    program = {
+        "program_slug": "sample-saas-alpha",
+        "program_name": "SaaS Alpha",
+        "partner_link_url": "https://example.com/r/alpha?ref=demo",
+    }
+    draft_result = draft_pitch(config=cfg, program=program, run_id="run-404")
+    assert draft_result["status"] == "ok"
+
+    tampered_draft = dict(draft_result["draft"])
+    tampered_draft["body_template"] = (
+        "Hi {name},\n\nI wanted to share SaaS Alpha. "
+        "Here is a link: https://wrong.example.com/fake\n\n"
+        "---\n{sender_identity}\n{sender_address}\n"
+        "Unsubscribe: {unsubscribe_link}\n"
+    )
+    approval = await_approval(config=cfg, draft=tampered_draft)
+
+    send_result = merge_and_send(
+        config=cfg,
+        run_id="run-404",
+        profile={
+            "agent_id": "agent-x",
+            "display_name": "X",
+            "sender_address": "1 Market St",
+        },
+        program=program,
+        provider_used="gmail",
+        draft=tampered_draft,
+        sendable=[{"email": "alice@example.com", "display_name": "Alice"}],
+        approval=approval,
+    )
+    assert send_result["status"] == "validation_failed"
+    assert send_result["error_code"] == "tracked_link_missing"
+    assert send_result["sent_count"] == 0
 
 
 if __name__ == "__main__":
