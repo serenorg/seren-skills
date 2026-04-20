@@ -1,7 +1,8 @@
 ---
 name: investment-operations-review-checklist
-display-name: "Investment Operations Review Checklist"
-description: "Produce a checklist for an ongoing investment operations review — custody, reconciliation, fee verification, performance reporting."
+display-name: "Family Office · Investment Operations Review Checklist"
+description: "Family office: Produce a checklist for an ongoing investment operations review — custody, reconciliation, fee verification, performance reporting."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # Investment Operations Review Checklist

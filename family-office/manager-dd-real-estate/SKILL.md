@@ -1,7 +1,8 @@
 ---
 name: manager-dd-real-estate
-display-name: "Real Estate Manager DD Memo"
-description: "Produce a due diligence memo for a prospective real estate fund. Captures property type, geography, cap rate, leverage, and NOI assumptions."
+display-name: "Family Office · Real Estate Manager DD Memo"
+description: "Family office: Produce a due diligence memo for a prospective real estate fund. Captures property type, geography, cap rate, leverage, and NOI assumptions."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # Real Estate Manager DD Memo

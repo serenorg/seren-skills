@@ -1,7 +1,8 @@
 ---
 name: manager-dd-venture-capital
-display-name: "Venture Capital Manager DD Memo"
-description: "Produce a due diligence memo for a prospective venture capital fund. Captures stage focus, sourcing model, portfolio construction, and prior-fund mark-ups."
+display-name: "Family Office · Venture Capital Manager DD Memo"
+description: "Family office: Produce a due diligence memo for a prospective venture capital fund. Captures stage focus, sourcing model, portfolio construction, and prior-fund mark-ups."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # Venture Capital Manager DD Memo

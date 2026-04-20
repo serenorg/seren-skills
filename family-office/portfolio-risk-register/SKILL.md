@@ -1,7 +1,8 @@
 ---
 name: portfolio-risk-register
-display-name: "Portfolio Risk Register"
-description: "Produce a portfolio risk register. Captures concentration risks, liquidity risks, counterparty risks, tax-lot risks, and mitigations."
+display-name: "Family Office · Portfolio Risk Register"
+description: "Family office: Produce a portfolio risk register. Captures concentration risks, liquidity risks, counterparty risks, tax-lot risks, and mitigations."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # Portfolio Risk Register

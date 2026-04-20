@@ -1,7 +1,8 @@
 ---
 name: cashflow-forecast-worksheet
-display-name: "Cashflow Forecast Worksheet"
-description: "Produce a 12-month rolling cashflow forecast. Captures inflows, outflows, timing, and cushion requirements."
+display-name: "Family Office · Cashflow Forecast Worksheet"
+description: "Family office: Produce a 12-month rolling cashflow forecast. Captures inflows, outflows, timing, and cushion requirements."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Cashflow Forecast Worksheet

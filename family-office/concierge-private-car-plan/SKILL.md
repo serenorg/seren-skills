@@ -1,7 +1,8 @@
 ---
 name: concierge-private-car-plan
-display-name: "Private Car Coordination Plan"
-description: "Produce a private car coordination plan — operators, drivers, vehicles, standing reservations, billing."
+display-name: "Family Office · Private Car Coordination Plan"
+description: "Family office: Produce a private car coordination plan — operators, drivers, vehicles, standing reservations, billing."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Private Car Coordination Plan

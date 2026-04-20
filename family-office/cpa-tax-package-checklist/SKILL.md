@@ -1,7 +1,8 @@
 ---
 name: cpa-tax-package-checklist
-display-name: "CPA Tax Package Checklist"
-description: "Produce a checklist of every document the CPA needs for tax return preparation. Tailored to the family's entities and income sources."
+display-name: "Family Office · CPA Tax Package Checklist"
+description: "Family office: Produce a checklist of every document the CPA needs for tax return preparation. Tailored to the family's entities and income sources."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # CPA Tax Package Checklist

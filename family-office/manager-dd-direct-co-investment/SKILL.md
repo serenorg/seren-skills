@@ -1,7 +1,8 @@
 ---
 name: manager-dd-direct-co-investment
-display-name: "Direct / Co-Investment DD Memo"
-description: "Produce a due diligence memo for a direct or co-investment opportunity alongside a sponsor. Captures company, thesis, cap table, terms, and concentration risk."
+display-name: "Family Office · Direct / Co-Investment DD Memo"
+description: "Family office: Produce a due diligence memo for a direct or co-investment opportunity alongside a sponsor. Captures company, thesis, cap table, terms, and concentration risk."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # Direct / Co-Investment DD Memo

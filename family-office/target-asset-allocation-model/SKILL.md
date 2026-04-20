@@ -1,7 +1,8 @@
 ---
 name: target-asset-allocation-model
-display-name: "Target Asset Allocation Model"
-description: "Produce a target asset allocation model across public equities, fixed income, alternatives, real assets, and cash. Captures current allocation, target allocation, and drift bands."
+display-name: "Family Office · Target Asset Allocation Model"
+description: "Family office: Produce a target asset allocation model across public equities, fixed income, alternatives, real assets, and cash. Captures current allocation, target allocation, and drift bands."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # Target Asset Allocation Model

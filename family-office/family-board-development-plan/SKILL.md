@@ -1,7 +1,8 @@
 ---
 name: family-board-development-plan
-display-name: "Family Board Development Plan"
-description: "Produce a board development plan for the family enterprise — skills matrix, recruitment, education, evaluation."
+display-name: "Family Office · Family Board Development Plan"
+description: "Family office: Produce a board development plan for the family enterprise — skills matrix, recruitment, education, evaluation."
+tags: [family-office, pillar:legacy-preservation]
 ---
 
 # Family Board Development Plan

@@ -1,7 +1,8 @@
 ---
 name: real-estate-acquisition-plan
-display-name: "Real Estate Acquisition Plan"
-description: "Produce a plan for acquiring a real estate asset — property thesis, financing, entity structure, due diligence, and closing checklist."
+display-name: "Family Office · Real Estate Acquisition Plan"
+description: "Family office: Produce a plan for acquiring a real estate asset — property thesis, financing, entity structure, due diligence, and closing checklist."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Real Estate Acquisition Plan

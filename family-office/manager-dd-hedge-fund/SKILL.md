@@ -1,7 +1,8 @@
 ---
 name: manager-dd-hedge-fund
-display-name: "Hedge Fund Manager DD Memo"
-description: "Produce a due diligence memo for a prospective hedge fund manager. Captures strategy, track record, drawdowns, gates, side pockets, and fee terms."
+display-name: "Family Office · Hedge Fund Manager DD Memo"
+description: "Family office: Produce a due diligence memo for a prospective hedge fund manager. Captures strategy, track record, drawdowns, gates, side pockets, and fee terms."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # Hedge Fund Manager DD Memo

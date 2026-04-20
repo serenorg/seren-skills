@@ -1,7 +1,8 @@
 ---
 name: will-drafting-checklist
-display-name: "Will Drafting Checklist"
-description: "Produce a checklist an attorney uses to draft or update the principal's will. Captures executor, beneficiaries, specific bequests, residuary, and guardianship."
+display-name: "Family Office · Will Drafting Checklist"
+description: "Family office: Produce a checklist an attorney uses to draft or update the principal's will. Captures executor, beneficiaries, specific bequests, residuary, and guardianship."
+tags: [family-office, pillar:legacy-preservation]
 ---
 
 # Will Drafting Checklist

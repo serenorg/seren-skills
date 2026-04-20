@@ -1,7 +1,8 @@
 ---
 name: long-term-portfolio-strategy-plan
-display-name: "Long-Term Portfolio Strategy Plan"
-description: "Produce a long-term portfolio strategy plan for a single family office. Captures time horizon, liquidity needs, return targets, risk tolerance, and constraints; outputs a memo an advisor hands to the principal."
+display-name: "Family Office · Long-Term Portfolio Strategy Plan"
+description: "Family office: Produce a long-term portfolio strategy plan for a single family office. Captures time horizon, liquidity needs, return targets, risk tolerance, and constraints; outputs a memo an advisor hands to the principal."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # Long-Term Portfolio Strategy Plan

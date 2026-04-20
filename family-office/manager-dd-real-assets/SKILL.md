@@ -1,7 +1,8 @@
 ---
 name: manager-dd-real-assets
-display-name: "Real Assets Manager DD Memo"
-description: "Produce a due diligence memo for a prospective real assets manager (infrastructure, commodities, natural resources). Captures asset class, inflation-hedging profile, and yield."
+display-name: "Family Office · Real Assets Manager DD Memo"
+description: "Family office: Produce a due diligence memo for a prospective real assets manager (infrastructure, commodities, natural resources). Captures asset class, inflation-hedging profile, and yield."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # Real Assets Manager DD Memo

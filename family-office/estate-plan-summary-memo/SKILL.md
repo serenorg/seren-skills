@@ -1,7 +1,8 @@
 ---
 name: estate-plan-summary-memo
-display-name: "Estate Plan Summary Memo"
-description: "Produce an estate plan summary memo — wills, trusts, directives, guardianship, beneficiary designations, and gaps."
+display-name: "Family Office · Estate Plan Summary Memo"
+description: "Family office: Produce an estate plan summary memo — wills, trusts, directives, guardianship, beneficiary designations, and gaps."
+tags: [family-office, pillar:legacy-preservation]
 ---
 
 # Estate Plan Summary Memo

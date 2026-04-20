@@ -1,7 +1,8 @@
 ---
 name: password-management-setup-plan
-display-name: "Password Management Setup Plan"
-description: "Produce a password management setup plan — vault choice, account inventory, sharing model, 2FA, recovery."
+display-name: "Family Office · Password Management Setup Plan"
+description: "Family office: Produce a password management setup plan — vault choice, account inventory, sharing model, 2FA, recovery."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Password Management Setup Plan
