@@ -1,0 +1,120 @@
+- skill: family-office-estate-plan-summary-memo
+  artifact: "Estate Plan Summary Memo"
+  triggers:
+    - "estate plan summary"
+    - "estate planning memo"
+    - "estate overview"
+    - "estate structure"
+- skill: family-office-trust-selection-memo
+  artifact: "Trust Selection Memo"
+  triggers:
+    - "trust selection"
+    - "which trust"
+    - "compare trust types"
+    - "trust recommendation"
+- skill: family-office-will-drafting-checklist
+  artifact: "Will Drafting Checklist"
+  triggers:
+    - "will drafting"
+    - "update will"
+    - "will checklist"
+    - "testator checklist"
+- skill: family-office-healthcare-proxy-living-will-checklist
+  artifact: "Healthcare Proxy & Living Will Checklist"
+  triggers:
+    - "healthcare proxy"
+    - "living will"
+    - "advance directive"
+    - "medical power of attorney"
+- skill: family-office-private-trust-company-formation-plan
+  artifact: "Private Trust Company Formation Plan"
+  triggers:
+    - "private trust company"
+    - "PTC formation"
+    - "family PTC plan"
+    - "PTC jurisdiction"
+- skill: family-office-trust-situs-selection-memo
+  artifact: "Trust Situs Selection Memo"
+  triggers:
+    - "trust situs"
+    - "situs selection"
+    - "jurisdiction comparison"
+    - "where to form trust"
+- skill: family-office-family-philanthropy-strategic-plan
+  artifact: "Family Philanthropy Strategic Plan"
+  triggers:
+    - "philanthropy plan"
+    - "family giving strategy"
+    - "charitable plan"
+    - "philanthropic budget"
+- skill: family-office-family-mission-statement
+  artifact: "Family Mission Statement"
+  triggers:
+    - "family mission"
+    - "write mission statement"
+    - "family values statement"
+    - "family purpose"
+- skill: family-office-family-foundation-formation-plan
+  artifact: "Family Foundation Formation Plan"
+  triggers:
+    - "family foundation"
+    - "foundation formation"
+    - "501c3 plan"
+    - "private foundation"
+- skill: family-office-charitable-trust-selection-memo
+  artifact: "Charitable Trust Selection Memo"
+  triggers:
+    - "charitable trust"
+    - "CRUT CLT comparison"
+    - "charitable remainder trust"
+    - "charitable lead trust"
+- skill: family-office-family-governance-charter
+  artifact: "Family Governance Charter"
+  triggers:
+    - "family governance"
+    - "governance charter"
+    - "family council charter"
+    - "family rules"
+- skill: family-office-family-board-development-plan
+  artifact: "Family Board Development Plan"
+  triggers:
+    - "board development"
+    - "family board plan"
+    - "board skills matrix"
+    - "board recruitment"
+- skill: family-office-succession-planning-memo
+  artifact: "Succession Planning Memo"
+  triggers:
+    - "succession planning"
+    - "successor plan"
+    - "leadership transition"
+    - "ownership succession"
+- skill: family-office-family-meeting-agenda-minutes-template
+  artifact: "Family Meeting Agenda & Minutes Template"
+  triggers:
+    - "family meeting agenda"
+    - "meeting minutes template"
+    - "family council agenda"
+    - "family meeting prep"
+- skill: family-office-community-engagement-plan
+  artifact: "Community Engagement Plan"
+  triggers:
+    - "community engagement"
+    - "civic involvement plan"
+    - "nonprofit board service"
+    - "public engagement plan"
+- skill: family-office-next-generation-education-curriculum
+  artifact: "Next-Generation Education Curriculum"
+  triggers:
+    - "next generation curriculum"
+    - "kids curriculum"
+    - "family education plan"
+    - "rising generation education"
+- skill: family-office-family-risk-management-plan
+  artifact: "Family Risk Management Plan"
+  triggers:
+    - "family risk management"
+    - "cyber risk plan"
+    - "travel security plan"
+    - "Egypt travel security"
+    - "family security"

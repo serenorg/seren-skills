@@ -1,0 +1,155 @@
+- skill: family-office-tax-strategy-memo
+  artifact: "Tax Strategy Memo"
+  triggers:
+    - "tax strategy"
+    - "tax planning memo"
+    - "year-end tax planning"
+    - "tax posture"
+- skill: family-office-cpa-tax-package-checklist
+  artifact: "CPA Tax Package Checklist"
+  triggers:
+    - "CPA checklist"
+    - "tax package checklist"
+    - "tax documents for CPA"
+    - "CPA document list"
+- skill: family-office-external-advisor-management-plan
+  artifact: "External Advisor Management Plan"
+  triggers:
+    - "external advisors"
+    - "manage outside advisors"
+    - "advisor roster"
+    - "legal and tax management plan"
+- skill: family-office-annual-budget-workbook
+  artifact: "Annual Budget Workbook"
+  triggers:
+    - "annual budget"
+    - "family budget"
+    - "create budget"
+    - "budget workbook"
+- skill: family-office-cashflow-forecast-worksheet
+  artifact: "Cashflow Forecast Worksheet"
+  triggers:
+    - "cashflow forecast"
+    - "cash management"
+    - "12-month cash plan"
+    - "rolling cashflow"
+- skill: family-office-expedited-funding-access-plan
+  artifact: "Expedited Funding Access Plan"
+  triggers:
+    - "expedited funding"
+    - "emergency liquidity"
+    - "large cash access"
+    - "SBLOC plan"
+- skill: family-office-bookkeeping-bill-pay-setup-plan
+  artifact: "Bookkeeping & Bill Pay Setup Plan"
+  triggers:
+    - "bookkeeping setup"
+    - "bill pay plan"
+    - "family office accounting"
+    - "internal controls"
+- skill: family-office-document-management-plan
+  artifact: "Document Management Plan"
+  triggers:
+    - "document management"
+    - "DMS plan"
+    - "folder taxonomy"
+    - "document retention"
+- skill: family-office-consolidated-reporting-spec
+  artifact: "Consolidated Reporting Specification"
+  triggers:
+    - "consolidated reporting"
+    - "reporting spec"
+    - "family-office reporting"
+    - "portfolio reporting requirements"
+- skill: family-office-insurance-coverage-review-worksheet
+  artifact: "Insurance Coverage Review Worksheet"
+  triggers:
+    - "insurance review"
+    - "coverage review"
+    - "policy audit"
+    - "insurance worksheet"
+- skill: family-office-insurance-procurement-framework
+  artifact: "Insurance Procurement Framework"
+  triggers:
+    - "insurance procurement"
+    - "buy insurance"
+    - "insurance RFP"
+    - "coverage procurement factors"
+- skill: family-office-real-estate-acquisition-plan
+  artifact: "Real Estate Acquisition Plan"
+  triggers:
+    - "real estate acquisition"
+    - "buy property plan"
+    - "RE acquisition"
+    - "property purchase plan"
+- skill: family-office-art-acquisition-due-diligence
+  artifact: "Art Acquisition Due-Diligence Memo"
+  triggers:
+    - "art acquisition"
+    - "art due diligence"
+    - "buy painting"
+    - "Warhol purchase"
+    - "art DD"
+- skill: family-office-leisure-asset-ownership-comparison
+  artifact: "Leisure Asset Ownership Comparison"
+  triggers:
+    - "jet vs NetJets"
+    - "leisure asset comparison"
+    - "fractional vs full ownership"
+    - "yacht ownership model"
+- skill: family-office-collectibles-acquisition-logistics
+  artifact: "Collectibles Acquisition & Logistics Plan"
+  triggers:
+    - "collectibles logistics"
+    - "classic car transport"
+    - "rare wine acquisition"
+    - "Ferrari transport"
+- skill: family-office-concierge-private-aviation-plan
+  artifact: "Private Aviation Coordination Plan"
+  triggers:
+    - "private aviation plan"
+    - "charter aircraft"
+    - "jet booking plan"
+    - "flight coordination"
+- skill: family-office-concierge-private-car-plan
+  artifact: "Private Car Coordination Plan"
+  triggers:
+    - "private car plan"
+    - "driver coordination"
+    - "chauffeur plan"
+    - "car service roster"
+- skill: family-office-concierge-travel-coordination-plan
+  artifact: "Travel Coordination Plan"
+  triggers:
+    - "travel coordination"
+    - "trip plan"
+    - "itinerary"
+    - "family trip logistics"
+- skill: family-office-concierge-personal-shopping-plan
+  artifact: "Personal Shopping Plan"
+  triggers:
+    - "personal shopping"
+    - "shopping plan"
+    - "gift shopping"
+    - "wardrobe plan"
+- skill: family-office-concierge-personal-protection-plan
+  artifact: "Personal Protection Plan"
+  triggers:
+    - "personal protection"
+    - "executive protection"
+    - "security plan"
+    - "physical security"
+- skill: family-office-password-management-setup-plan
+  artifact: "Password Management Setup Plan"
+  triggers:
+    - "password manager setup"
+    - "1Password plan"
+    - "credential vault"
+    - "family password setup"
+- skill: family-office-virtual-mailbox-setup-plan
+  artifact: "Virtual Mailbox Setup Plan"
+  triggers:
+    - "virtual mailbox"
+    - "mail scanning"
+    - "mail forwarding plan"
+    - "remote mail setup"
