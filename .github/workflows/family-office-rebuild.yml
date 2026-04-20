@@ -1,0 +1,97 @@
+name: Enforce family-office catalog (rebuild)
+
+on:
+  pull_request:
+    paths:
+      - "family-office/**"
+      - "!family-office/knowledge/**"
+      - ".github/workflows/family-office-rebuild.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "family-office/**"
+      - "!family-office/knowledge/**"
+      - ".github/workflows/family-office-rebuild.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: Run critical smoke tests across all family-office leaves + routers
+        # --import-mode=importlib is required because every leaf has a
+        # scripts/agent.py and a tests/test_smoke.py; the default prepend
+        # mode would collide.
+        run: |
+          pytest family-office \
+            --ignore=family-office/knowledge \
+            --import-mode=importlib \
+            -q
+
+  forbid-publisher-root-skill-md:
+    # Regression guard against shipping a SKILL.md at the publisher root.
+    # The skill indexer at scripts/build-index.mjs requires 3-segment
+    # paths — a publisher-root SKILL.md is silently dropped and therefore
+    # pure repo pollution.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if family-office/SKILL.md exists
+        run: |
+          if [ -f "family-office/SKILL.md" ]; then
+            echo "::error::family-office/SKILL.md is a publisher-root file; indexer drops it. Move to family-office/<skill>/SKILL.md."
+            exit 1
+          fi
+
+  forbid-non-skill-folders:
+    # Every directory under family-office/ must contain a SKILL.md
+    # (making it an indexed skill) OR be the repo-level .pytest_cache.
+    # No _base/, no scripts/, no docs/ at the publisher level.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if any non-skill folder exists under family-office/
+        run: |
+          bad=$(find family-office -maxdepth 1 -mindepth 1 -type d \
+            -not -name knowledge \
+            -not -name '.*' \
+            | while read -r d; do
+                if [ ! -f "$d/SKILL.md" ]; then echo "$d"; fi
+              done)
+          if [ -n "$bad" ]; then
+            echo "::error::folders under family-office/ without SKILL.md (not indexed, not skills):"
+            echo "$bad"
+            exit 1
+          fi
+
+  indexer-smoke:
+    # Sanity: the repo's skill indexer picks up every new leaf + router.
+    # If it doesn't, the skills are invisible to SerenDesktop.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Ensure the indexer sees 55 leaves + 4 routers + 1 knowledge
+        run: |
+          COUNT=$(node scripts/build-index.mjs \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{console.log(JSON.parse(d).skills.filter(s=>s.slug.startsWith('family-office')).length)})")
+          if [ "$COUNT" != "60" ]; then
+            echo "::error::expected 60 family-office skills indexed, got $COUNT"
+            exit 1
+          fi

@@ -1,0 +1,4 @@
+# Exit Tax Minimization Plan
+# Minimal runtime deps. psycopg is optional (only needed when memory_dsn
+# is supplied in config). Tests mock it via skip.
+psycopg[binary]>=3.1

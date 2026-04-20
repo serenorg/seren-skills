@@ -1,0 +1,113 @@
+- skill: family-office-long-term-portfolio-strategy-plan
+  artifact: "Long-Term Portfolio Strategy Plan"
+  triggers:
+    - "long-term portfolio strategy"
+    - "investment policy statement"
+    - "portfolio plan"
+    - "long horizon allocation"
+- skill: family-office-target-asset-allocation-model
+  artifact: "Target Asset Allocation Model"
+  triggers:
+    - "asset allocation"
+    - "target allocation"
+    - "allocation model"
+    - "portfolio weights"
+- skill: family-office-portfolio-risk-register
+  artifact: "Portfolio Risk Register"
+  triggers:
+    - "portfolio risk"
+    - "risk register"
+    - "risk management memo"
+    - "portfolio risks"
+- skill: family-office-business-exit-strategy
+  artifact: "Exit Tax Minimization Plan"
+  triggers:
+    - "business exit"
+    - "sell business"
+    - "minimize taxes before selling"
+    - "exit planning"
+    - "operating business sale"
+- skill: family-office-new-business-diligence-memo
+  artifact: "New Business Diligence Memo"
+  triggers:
+    - "new business diligence"
+    - "acquire business"
+    - "evaluate new business"
+    - "business investment memo"
+- skill: family-office-investment-operations-review-checklist
+  artifact: "Investment Operations Review Checklist"
+  triggers:
+    - "investment operations review"
+    - "ops review"
+    - "custody check"
+    - "reconciliation review"
+- skill: family-office-client-sourced-deal-review-memo
+  artifact: "Client-Sourced Deal Review Memo"
+  triggers:
+    - "client sourced deal"
+    - "principal brought a deal"
+    - "friend referral investment"
+    - "review this deal"
+- skill: family-office-manager-dd-hedge-fund
+  artifact: "Hedge Fund Manager DD Memo"
+  triggers:
+    - "hedge fund manager DD"
+    - "hedge fund due diligence"
+    - "HF allocation memo"
+    - "evaluate hedge fund"
+- skill: family-office-manager-dd-private-equity
+  artifact: "Private Equity Manager DD Memo"
+  triggers:
+    - "private equity manager DD"
+    - "PE fund due diligence"
+    - "buyout fund memo"
+    - "PE allocation"
+- skill: family-office-manager-dd-private-debt
+  artifact: "Private Debt Manager DD Memo"
+  triggers:
+    - "private debt DD"
+    - "private credit manager"
+    - "direct lending fund"
+    - "private debt allocation"
+- skill: family-office-manager-dd-venture-capital
+  artifact: "Venture Capital Manager DD Memo"
+  triggers:
+    - "venture capital manager DD"
+    - "VC fund due diligence"
+    - "seed fund memo"
+    - "VC allocation"
+- skill: family-office-manager-dd-real-assets
+  artifact: "Real Assets Manager DD Memo"
+  triggers:
+    - "real assets manager DD"
+    - "infrastructure fund"
+    - "natural resources fund"
+    - "commodities allocation"
+- skill: family-office-manager-dd-real-estate
+  artifact: "Real Estate Manager DD Memo"
+  triggers:
+    - "real estate manager DD"
+    - "RE fund due diligence"
+    - "property fund memo"
+    - "real estate allocation"
+- skill: family-office-manager-dd-direct-co-investment
+  artifact: "Direct / Co-Investment DD Memo"
+  triggers:
+    - "direct investment DD"
+    - "co-investment memo"
+    - "SPV memo"
+    - "direct co-invest"
+- skill: family-office-manager-dd-esg-impact
+  artifact: "ESG / Impact Manager DD Memo"
+  triggers:
+    - "ESG manager DD"
+    - "impact fund due diligence"
+    - "impact investing memo"
+    - "ESG allocation"
+- skill: family-office-esg-impact-investing-mandate
+  artifact: "ESG / Impact Investing Mandate"
+  triggers:
+    - "ESG mandate"
+    - "impact mandate"
+    - "impact investing policy"
+    - "ESG investment policy"
