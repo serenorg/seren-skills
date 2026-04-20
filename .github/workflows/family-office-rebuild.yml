@@ -27,10 +27,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install pytest
+      - name: Install pytest + runtime deps
+        # `requests` is imported by the in-skill GatewayClient when a leaf
+        # pushes to SharePoint or Asana. snowflake-connector-python is NOT
+        # installed in CI — the sink tests stub `snowflake.connector`
+        # directly so the validation paths are exercised without the heavy
+        # native dep.
         run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install pytest requests
 
       - name: Run critical smoke tests across all family-office leaves + routers
         # --import-mode=importlib is required because every leaf has a
