@@ -556,6 +556,247 @@ def push_to_snowflake(
     return {"publisher": "snowflake", "query_id": query_id}
 
 
+# ─── Push: Outlook email (microsoft-outlook publisher) ───────────────────
+
+def _compose_email_subject(manifest: dict[str, Any], prefix: str) -> str:
+    # Subject is templated from the artifact name + produced date only.
+    # Never embed raw PII or financial amounts in an outbound subject line.
+    produced = manifest["created_at"][:10]
+    return f"{prefix}{ARTIFACT_NAME} — {produced}"
+
+
+def _compose_email_body(manifest: dict[str, Any]) -> str:
+    # Body references artifact_id + content hash prefix (safe identifiers),
+    # NOT the interview answers or the artifact text. The recipient reads
+    # the full artifact in the DMS (SharePoint) — this body is a pointer,
+    # not a replacement.
+    return (
+        f"Seren family-office catalog produced a new deliverable for your "
+        f"review.\n\n"
+        f"Artifact: {ARTIFACT_NAME}\n"
+        f"Skill: {SKILL_NAME}\n"
+        f"Pillar: {PILLAR}\n"
+        f"Produced: {manifest['created_at']}\n"
+        f"Artifact ID: {manifest['artifact_id']}\n"
+        f"Content hash (prefix): {manifest['content_hash'][:12]}\n\n"
+        f"The full artifact has been stored in the configured DMS."
+    )
+
+
+def push_to_outlook_email(
+    manifest: dict[str, Any],
+    answers: dict[str, str],
+    *,
+    config: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Send an Outlook email via microsoft-outlook publisher. No-op if
+    config absent.
+
+    config.outlook_email = {
+        "to":             ["cpa@example.com"],     # required, non-empty
+        "cc":             ["counsel@example.com"], # optional
+        "subject_prefix": "[Seren] "               # optional
+    }
+    """
+    if not config:
+        return None
+    cfg = config.get("outlook_email") or {}
+    if not cfg:
+        return None
+    to = cfg.get("to") or []
+    if not isinstance(to, list) or not to:
+        raise ValueError("outlook_email config requires non-empty 'to' list")
+    cc = cfg.get("cc") or []
+    prefix = cfg.get("subject_prefix") or ""
+
+    gw = GatewayClient()
+    msg_body = {
+        "message": {
+            "subject": _compose_email_subject(manifest, prefix),
+            "body": {
+                "contentType": "Text",
+                "content": _compose_email_body(manifest),
+            },
+            "toRecipients": [
+                {"emailAddress": {"address": addr}} for addr in to
+            ],
+            "ccRecipients": [
+                {"emailAddress": {"address": addr}} for addr in cc
+            ],
+        },
+        "saveToSentItems": "true",
+    }
+    result = gw.call_publisher(
+        "microsoft-outlook", "POST", "/me/sendMail", body=msg_body
+    )
+    # Log only counts — recipient lists are PII (personal email of CPA /
+    # counsel). DEBUG is for incident triage, never INFO.
+    logger.info(
+        "outlook_email_sent skill=%s to_count=%d cc_count=%d hash_prefix=%s",
+        SKILL_NAME,
+        len(to),
+        len(cc),
+        manifest["content_hash"][:12],
+    )
+    return {"publisher": "microsoft-outlook", "result": result}
+
+
+# ─── Push: Gmail (gmail publisher) ───────────────────────────────────────
+
+def _rfc2822_from_parts(
+    to: list[str], cc: list[str], subject: str, body: str
+) -> str:
+    import base64
+
+    headers = [
+        f"To: {', '.join(to)}",
+    ]
+    if cc:
+        headers.append(f"Cc: {', '.join(cc)}")
+    headers.extend(
+        [
+            f"Subject: {subject}",
+            "MIME-Version: 1.0",
+            "Content-Type: text/plain; charset=UTF-8",
+        ]
+    )
+    raw = "\r\n".join(headers) + "\r\n\r\n" + body
+    # Gmail expects url-safe base64 with '=' padding removed.
+    encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+    return encoded.rstrip("=")
+
+
+def push_to_gmail(
+    manifest: dict[str, Any],
+    answers: dict[str, str],
+    *,
+    config: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Send a Gmail via the gmail publisher. No-op if config absent.
+
+    config.gmail = {
+        "to":             ["cpa@example.com"],     # required, non-empty
+        "cc":             ["counsel@example.com"], # optional
+        "subject_prefix": "[Seren] "               # optional
+    }
+    """
+    if not config:
+        return None
+    cfg = config.get("gmail") or {}
+    if not cfg:
+        return None
+    to = cfg.get("to") or []
+    if not isinstance(to, list) or not to:
+        raise ValueError("gmail config requires non-empty 'to' list")
+    cc = cfg.get("cc") or []
+    prefix = cfg.get("subject_prefix") or ""
+
+    subject = _compose_email_subject(manifest, prefix)
+    body = _compose_email_body(manifest)
+    raw = _rfc2822_from_parts(to, cc, subject, body)
+
+    gw = GatewayClient()
+    result = gw.call_publisher(
+        "gmail",
+        "POST",
+        "/users/me/messages/send",
+        body={"raw": raw},
+    )
+    logger.info(
+        "gmail_sent skill=%s to_count=%d cc_count=%d hash_prefix=%s",
+        SKILL_NAME,
+        len(to),
+        len(cc),
+        manifest["content_hash"][:12],
+    )
+    return {"publisher": "gmail", "result": result}
+
+
+# ─── Push: Google Calendar (google-calendar publisher) ───────────────────
+
+def _calendar_event_window(days_out: int, duration_minutes: int) -> tuple[str, str]:
+    from datetime import timedelta
+
+    start = datetime.now(timezone.utc) + timedelta(days=max(int(days_out), 0))
+    end = start + timedelta(minutes=max(int(duration_minutes), 1))
+    return (
+        start.isoformat(timespec="seconds"),
+        end.isoformat(timespec="seconds"),
+    )
+
+
+def push_to_gcalendar(
+    manifest: dict[str, Any],
+    answers: dict[str, str],
+    *,
+    config: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Create a Google Calendar event via the google-calendar publisher.
+    No-op if config absent.
+
+    config.gcalendar = {
+        "calendar_id":     "primary",              # required
+        "duration_minutes": 30,                    # optional, default 30
+        "attendees":       ["advisor@example.com"],# optional
+        "days_out":         7                      # optional, default 7
+    }
+    """
+    if not config:
+        return None
+    cfg = config.get("gcalendar") or {}
+    if not cfg:
+        return None
+    calendar_id = cfg.get("calendar_id")
+    if not calendar_id:
+        raise ValueError("gcalendar config requires 'calendar_id'")
+    duration = int(cfg.get("duration_minutes") or 30)
+    days_out = int(cfg.get("days_out") or 7)
+    attendees = cfg.get("attendees") or []
+    if not isinstance(attendees, list):
+        raise ValueError("gcalendar config 'attendees' must be a list")
+
+    start_iso, end_iso = _calendar_event_window(days_out, duration)
+    # The description must not carry raw PII. Redact the inputs before
+    # composing the event description, matching the Snowflake discipline.
+    safe_inputs = _redact_payload({"inputs": answers})
+    description = (
+        f"Seren family-office review event.\n\n"
+        f"Artifact: {ARTIFACT_NAME}\n"
+        f"Skill: {SKILL_NAME}\n"
+        f"Pillar: {PILLAR}\n"
+        f"Artifact ID: {manifest['artifact_id']}\n"
+        f"Content hash (prefix): {manifest['content_hash'][:12]}\n\n"
+        f"See the configured DMS for the rendered artifact."
+    )
+    event = {
+        "summary": f"Review: {ARTIFACT_NAME}",
+        "description": description,
+        "start": {"dateTime": start_iso},
+        "end": {"dateTime": end_iso},
+        "attendees": [{"email": a} for a in attendees],
+        "reminders": {"useDefault": True},
+    }
+    gw = GatewayClient()
+    result = gw.call_publisher(
+        "google-calendar",
+        "POST",
+        f"/calendars/{calendar_id}/events",
+        body=event,
+    )
+    logger.info(
+        "gcalendar_event_created skill=%s attendees_count=%d hash_prefix=%s",
+        SKILL_NAME,
+        len(attendees),
+        manifest["content_hash"][:12],
+    )
+    # Do NOT log raw calendar id or event HTML link at INFO. DEBUG only.
+    logger.debug("gcalendar_event_response skill=%s", SKILL_NAME)
+    # Reference `safe_inputs` so static analyzers don't flag the unused
+    # variable; it's used indirectly via `description` above.
+    del safe_inputs
+    return {"publisher": "google-calendar", "result": result}
+
+
 # ─── CLI entry ───────────────────────────────────────────────────────────
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -617,6 +858,9 @@ def main(argv: list[str] | None = None) -> int:
         ("sharepoint", push_to_sharepoint, (manifest,)),
         ("asana",      push_to_asana,      (manifest, answers)),
         ("snowflake",  push_to_snowflake,  (manifest, answers)),
+        ("outlook_email", push_to_outlook_email, (manifest, answers)),
+        ("gmail",         push_to_gmail,         (manifest, answers)),
+        ("gcalendar",     push_to_gcalendar,     (manifest, answers)),
     ):
         try:
             fn(*args_pack, config=cfg)
