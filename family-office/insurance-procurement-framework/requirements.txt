@@ -1,4 +1,13 @@
 # Insurance Procurement Framework
-# Minimal runtime deps. psycopg is optional (only needed when memory_dsn
-# is supplied in config). Tests mock it via skip.
+#
+# Runtime deps:
+#   requests           — required for SharePoint / Asana pushes via the Seren gateway
+#   psycopg[binary]    — optional; only exercised when config.memory_dsn is set
+#   snowflake-connector-python — optional; only exercised when config.snowflake is set
+#
+# None of these are invoked unless the corresponding config block is present,
+# but we list them here so a single `pip install -r requirements.txt` gets
+# the skill demo-ready end-to-end.
+requests>=2.31
 psycopg[binary]>=3.1
+snowflake-connector-python>=3.7
