@@ -1,7 +1,8 @@
 ---
 name: family-governance-charter
-display-name: "Family Governance Charter"
-description: "Produce a family governance charter — principles, decision-making bodies, roles, meeting cadence, conflict-resolution."
+display-name: "Family Office · Family Governance Charter"
+description: "Family office: Produce a family governance charter — principles, decision-making bodies, roles, meeting cadence, conflict-resolution."
+tags: [family-office, pillar:legacy-preservation]
 ---
 
 # Family Governance Charter

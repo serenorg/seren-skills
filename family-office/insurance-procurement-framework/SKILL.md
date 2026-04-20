@@ -1,7 +1,8 @@
 ---
 name: insurance-procurement-framework
-display-name: "Insurance Procurement Framework"
-description: "Produce a procurement framework for acquiring new insurance coverage — factors to consider, broker RFP structure, policy-terms checklist."
+display-name: "Family Office · Insurance Procurement Framework"
+description: "Family office: Produce a procurement framework for acquiring new insurance coverage — factors to consider, broker RFP structure, policy-terms checklist."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Insurance Procurement Framework

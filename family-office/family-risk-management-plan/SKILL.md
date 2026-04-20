@@ -1,7 +1,8 @@
 ---
 name: family-risk-management-plan
-display-name: "Family Risk Management Plan"
-description: "Produce a family risk management plan covering cyber, personal security, travel security, reputational risk, and business-continuity. Example: an international trip to a higher-risk region."
+display-name: "Family Office · Family Risk Management Plan"
+description: "Family office: Produce a family risk management plan covering cyber, personal security, travel security, reputational risk, and business-continuity. Example: an international trip to a higher-risk region."
+tags: [family-office, pillar:legacy-preservation]
 ---
 
 # Family Risk Management Plan

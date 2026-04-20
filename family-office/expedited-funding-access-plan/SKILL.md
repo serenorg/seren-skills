@@ -1,7 +1,8 @@
 ---
 name: expedited-funding-access-plan
-display-name: "Expedited Funding Access Plan"
-description: "Produce a plan for expedited access to large liquidity when needed (margin, SBLOC, art loan, credit lines)."
+display-name: "Family Office · Expedited Funding Access Plan"
+description: "Family office: Produce a plan for expedited access to large liquidity when needed (margin, SBLOC, art loan, credit lines)."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Expedited Funding Access Plan

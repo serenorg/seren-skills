@@ -1,7 +1,8 @@
 ---
 name: external-advisor-management-plan
-display-name: "External Advisor Management Plan"
-description: "Produce a plan for managing external advisors (legal, tax, custodial, insurance, consulting). Captures advisor roster, meeting cadence, fee posture, and performance review."
+display-name: "Family Office · External Advisor Management Plan"
+description: "Family office: Produce a plan for managing external advisors (legal, tax, custodial, insurance, consulting). Captures advisor roster, meeting cadence, fee posture, and performance review."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # External Advisor Management Plan

@@ -1,7 +1,8 @@
 ---
 name: virtual-mailbox-setup-plan
-display-name: "Virtual Mailbox Setup Plan"
-description: "Produce a virtual mailbox setup plan — providers, forwarding rules, scanning cadence, privacy posture."
+display-name: "Family Office · Virtual Mailbox Setup Plan"
+description: "Family office: Produce a virtual mailbox setup plan — providers, forwarding rules, scanning cadence, privacy posture."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Virtual Mailbox Setup Plan

@@ -1,7 +1,8 @@
 ---
 name: manager-dd-esg-impact
-display-name: "ESG / Impact Manager DD Memo"
-description: "Produce a due diligence memo for a prospective ESG or impact-investing manager. Captures mandate, impact metrics, concessionary-return posture, and reporting."
+display-name: "Family Office · ESG / Impact Manager DD Memo"
+description: "Family office: Produce a due diligence memo for a prospective ESG or impact-investing manager. Captures mandate, impact metrics, concessionary-return posture, and reporting."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # ESG / Impact Manager DD Memo

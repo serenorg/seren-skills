@@ -1,7 +1,8 @@
 ---
 name: document-management-plan
-display-name: "Document Management Plan"
-description: "Produce a document management plan — DMS choice, folder taxonomy, retention rules, access control."
+display-name: "Family Office · Document Management Plan"
+description: "Family office: Produce a document management plan — DMS choice, folder taxonomy, retention rules, access control."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Document Management Plan

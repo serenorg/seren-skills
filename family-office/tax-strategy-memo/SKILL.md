@@ -1,7 +1,8 @@
 ---
 name: tax-strategy-memo
-display-name: "Tax Strategy Memo"
-description: "Produce a tax strategy memo for the family. Captures current year tax posture, elections, harvesting opportunities, and planning moves."
+display-name: "Family Office · Tax Strategy Memo"
+description: "Family office: Produce a tax strategy memo for the family. Captures current year tax posture, elections, harvesting opportunities, and planning moves."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Tax Strategy Memo

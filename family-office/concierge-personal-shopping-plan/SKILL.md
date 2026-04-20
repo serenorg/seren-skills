@@ -1,7 +1,8 @@
 ---
 name: concierge-personal-shopping-plan
-display-name: "Personal Shopping Plan"
-description: "Produce a personal shopping plan — occasion, budget, brand preferences, sizing, delivery, returns."
+display-name: "Family Office · Personal Shopping Plan"
+description: "Family office: Produce a personal shopping plan — occasion, budget, brand preferences, sizing, delivery, returns."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Personal Shopping Plan

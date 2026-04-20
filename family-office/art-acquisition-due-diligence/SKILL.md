@@ -1,7 +1,8 @@
 ---
 name: art-acquisition-due-diligence
-display-name: "Art Acquisition Due-Diligence Memo"
-description: "Produce a due diligence memo for an art acquisition — provenance, authentication, condition, insurance, storage, sale consideration."
+display-name: "Family Office · Art Acquisition Due-Diligence Memo"
+description: "Family office: Produce a due diligence memo for an art acquisition — provenance, authentication, condition, insurance, storage, sale consideration."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Art Acquisition Due-Diligence Memo

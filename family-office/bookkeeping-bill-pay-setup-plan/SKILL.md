@@ -1,7 +1,8 @@
 ---
 name: bookkeeping-bill-pay-setup-plan
-display-name: "Bookkeeping & Bill Pay Setup Plan"
-description: "Produce a setup plan for family-office bookkeeping and bill pay operations — software, approvers, reconciliation, internal controls."
+display-name: "Family Office · Bookkeeping & Bill Pay Setup Plan"
+description: "Family office: Produce a setup plan for family-office bookkeeping and bill pay operations — software, approvers, reconciliation, internal controls."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Bookkeeping & Bill Pay Setup Plan

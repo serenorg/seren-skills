@@ -1,7 +1,8 @@
 ---
 name: concierge-travel-coordination-plan
-display-name: "Travel Coordination Plan"
-description: "Produce a travel coordination plan — itinerary, hotels, transfers, dining, contingency plans."
+display-name: "Family Office · Travel Coordination Plan"
+description: "Family office: Produce a travel coordination plan — itinerary, hotels, transfers, dining, contingency plans."
+tags: [family-office, pillar:complexity-management]
 ---
 
 # Travel Coordination Plan

@@ -1,7 +1,8 @@
 ---
 name: esg-impact-investing-mandate
-display-name: "ESG / Impact Investing Mandate"
-description: "Produce an ESG / impact investing mandate for the family office. Captures themes, exclusions, measurement framework, and blended-return tolerance."
+display-name: "Family Office · ESG / Impact Investing Mandate"
+description: "Family office: Produce an ESG / impact investing mandate for the family office. Captures themes, exclusions, measurement framework, and blended-return tolerance."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # ESG / Impact Investing Mandate

@@ -1,7 +1,8 @@
 ---
 name: next-generation-education-curriculum
-display-name: "Next-Generation Education Curriculum"
-description: "Produce a curriculum for educating the next generation on family history, wealth, responsibility, and values. Includes modules, readings, and milestones."
+display-name: "Family Office · Next-Generation Education Curriculum"
+description: "Family office: Produce a curriculum for educating the next generation on family history, wealth, responsibility, and values. Includes modules, readings, and milestones."
+tags: [family-office, pillar:legacy-preservation]
 ---
 
 # Next-Generation Education Curriculum

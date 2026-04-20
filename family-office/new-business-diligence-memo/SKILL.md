@@ -1,7 +1,8 @@
 ---
 name: new-business-diligence-memo
-display-name: "New Business Diligence Memo"
-description: "Produce a diligence memo for a new business the principal is considering acquiring or starting. Captures thesis, unit economics, key risks, and recommended next steps."
+display-name: "Family Office · New Business Diligence Memo"
+description: "Family office: Produce a diligence memo for a new business the principal is considering acquiring or starting. Captures thesis, unit economics, key risks, and recommended next steps."
+tags: [family-office, pillar:capital-allocation]
 ---
 
 # New Business Diligence Memo

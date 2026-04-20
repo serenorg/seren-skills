@@ -1,7 +1,8 @@
 ---
 name: charitable-trust-selection-memo
-display-name: "Charitable Trust Selection Memo"
-description: "Produce a memo comparing charitable trust options — CRUT, CRAT, CLT, CLAT — for the family's giving goals."
+display-name: "Family Office · Charitable Trust Selection Memo"
+description: "Family office: Produce a memo comparing charitable trust options — CRUT, CRAT, CLT, CLAT — for the family's giving goals."
+tags: [family-office, pillar:legacy-preservation]
 ---
 
 # Charitable Trust Selection Memo

@@ -1,7 +1,8 @@
 ---
 name: trust-selection-memo
-display-name: "Trust Selection Memo"
-description: "Produce a trust selection memo comparing revocable, irrevocable, marital, asset-protection, special-needs, spendthrift, bypass, generation-skipping, and dynasty trust options."
+display-name: "Family Office · Trust Selection Memo"
+description: "Family office: Produce a trust selection memo comparing revocable, irrevocable, marital, asset-protection, special-needs, spendthrift, bypass, generation-skipping, and dynasty trust options."
+tags: [family-office, pillar:legacy-preservation]
 ---
 
 # Trust Selection Memo

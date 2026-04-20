@@ -1,7 +1,8 @@
 ---
 name: complexity-management-router
-display-name: "Family Office — Complexity Management Router"
-description: "Pillar router for Complexity Management. Classifies a natural-language advisor ask into the matching leaf skill inside the Complexity Management pillar. Catalog rebuild tracked in issue #427."
+display-name: "Family Office · Complexity Management Router"
+description: "Family office: Pillar router for Complexity Management. Classifies a natural-language advisor ask into the matching leaf skill inside the Complexity Management pillar. Catalog rebuild tracked in issue #427."
+tags: [family-office, pillar:complexity-management, type:router]
 ---
 
 # Family Office — Complexity Management Router
