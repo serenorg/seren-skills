@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from email_filter import is_personal_relationship, compute_personal_score_penalty
 
+PUBLISHER_ROUTING = {
+    "gmail_sent": "gmail",
+    "outlook_sent": "outlook",
+    "gmail_contacts": "google-contacts",
+    "outlook_contacts": "outlook-contacts",
+}
 
 SOURCE_CATALOG = {
     "gmail_sent": [
