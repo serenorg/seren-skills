@@ -83,10 +83,15 @@ Before claiming any tool, connector, or publisher exists or does not exist, atte
 
 Use only these sources in v1:
 
-1. Gmail sent folder
-2. Outlook sent folder
-3. Gmail address books
-4. Outlook address books
+1. Gmail sent folder — uses `gmail` publisher
+2. Outlook sent folder — uses `outlook` publisher
+3. Gmail address books — uses `google-contacts` publisher (People API)
+4. Outlook address books — uses `outlook-contacts` publisher
+
+**Publisher scope boundaries:**
+- `gmail` is scoped to email operations only (`/messages`, `/threads`, `/drafts`)
+- `google-contacts` is scoped to People API (`/otherContacts`, `/people:searchContacts`)
+- Do not call `/contacts` on the `gmail` publisher — it will return 403
 
 Do not expand to LinkedIn, Apollo, web scraping, or purchased lists in v1.
 
