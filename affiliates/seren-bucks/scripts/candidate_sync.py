@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from email_filter import is_personal_relationship, compute_personal_score_penalty
+
 
 SOURCE_CATALOG = {
     "gmail_sent": [
@@ -67,6 +69,7 @@ def sync_candidates(config: dict) -> dict:
     source_flags = config["candidate_sources"]
     source_counts: dict[str, int] = {}
     candidates_by_id: dict[str, dict] = {}
+    filtered_out_business: int = 0
 
     for source_name, enabled in source_flags.items():
         if not enabled:
@@ -76,7 +79,19 @@ def sync_candidates(config: dict) -> dict:
         source_items = SOURCE_CATALOG.get(source_name, [])
         source_counts[source_name] = len(source_items)
         for item in source_items:
-            candidates_by_id[item["candidate_id"]] = item
+            email = item.get("email", "")
+            context = {"thread_content": item.get("thread_content", "")}
+
+            if not is_personal_relationship(email, context):
+                filtered_out_business += 1
+                continue
+
+            penalty = compute_personal_score_penalty(email, context)
+            adjusted_score = max(0, item["candidate_score"] - penalty)
+            item_copy = dict(item)
+            item_copy["candidate_score"] = adjusted_score
+            item_copy["personal_filter_applied"] = True
+            candidates_by_id[item["candidate_id"]] = item_copy
 
     candidates = sorted(
         candidates_by_id.values(),
@@ -90,5 +105,6 @@ def sync_candidates(config: dict) -> dict:
         "crm_source_of_truth": "skill_owned_serendb",
         "source_counts": source_counts,
         "discovered_count": len(candidates),
+        "filtered_out_business_emails": filtered_out_business,
         "candidates": candidates,
     }

@@ -90,6 +90,35 @@ Use only these sources in v1:
 
 Do not expand to LinkedIn, Apollo, web scraping, or purchased lists in v1.
 
+## Personal-Only Targeting Rule
+
+This skill targets **personal relationships only**. Business and company emails are automatically excluded from the candidate pool because affiliate marketing outreach to generic business addresses is inappropriate and ineffective.
+
+### Email Address Pattern Filter
+
+The following email prefixes are automatically rejected:
+
+- Generic: `info@`, `hello@`, `contact@`, `support@`, `sales@`, `partnerships@`, `team@`, `admin@`, `affiliates@`, `press@`, `media@`, `hr@`, `careers@`, `jobs@`, `billing@`, `legal@`
+- Role-based: `marketing@`, `engineering@`, `product@`, `design@`, `ops@`, `finance@`
+- Noreply: `noreply@`, `no-reply@`, `donotreply@`
+
+### Email Content Analysis
+
+When syncing from sent mail history, conversation context is analyzed:
+
+- Transactional threads (invoices, receipts, support tickets) are excluded
+- B2B sales/partnership inquiry threads are excluded
+- Personal/friendly exchanges are prioritized
+
+### Ranking Adjustments
+
+Borderline cases receive score penalties:
+- Business email pattern match: -100 points (effectively excluded)
+- Transactional content detected: -30 points
+- B2B content detected: -50 points
+
+The top-10 proposal set only includes candidates that pass the personal relationship filter.
+
 ## Persistence Rule
 
 Whenever a candidate is discovered or updated:
