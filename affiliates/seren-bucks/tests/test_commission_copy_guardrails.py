@@ -55,7 +55,7 @@ def test_default_tracked_link_uses_serendb_domain() -> None:
 
     config = json.loads(CONFIG_EXAMPLE.read_text(encoding="utf-8"))
     for link in (
-        config["campaign"]["tracked_link"],
+        config["program"]["tracked_link"],
         config["inputs"]["tracked_link"],
     ):
         assert link.startswith("https://serendb.com"), (

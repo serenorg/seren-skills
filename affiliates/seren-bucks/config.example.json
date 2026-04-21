@@ -1,9 +1,9 @@
 {
   "dry_run": true,
   "skill": "seren-bucks",
-  "campaign": {
-    "campaign_id": "seren-bucks-default",
-    "campaign_name": "Seren Bucks Default Affiliate Campaign",
+  "program": {
+    "program_id": "seren-bucks-default",
+    "program_name": "SerenBucks Affiliate Program",
     "tracked_link": "https://serendb.com?ref=default",
     "affiliate_source_of_truth": "seren-affiliates"
   },

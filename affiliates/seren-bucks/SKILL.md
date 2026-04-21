@@ -1,12 +1,12 @@
 ---
 name: seren-bucks
 display-name: "Seren Bucks Affiliate"
-description: "Review-first outreach skill for the default Seren Bucks affiliate campaign. It bootstraps affiliate context, mines sent-mail history and address books for candidates, persists them into a skill-owned CRM, proposes an editable daily top-10, drafts outbound and reply batches for approval, reconciles affiliate and reply signals, enforces hard DNC, and returns a manual daily digest."
+description: "Review-first outreach skill for the default Seren Bucks affiliate program. It bootstraps affiliate context via /programs/discover, mines sent-mail history and address books for candidates, persists them into a skill-owned CRM, proposes an editable daily top-10, drafts outbound and reply batches for approval, reconciles affiliate and reply signals, enforces hard DNC, and returns a manual daily digest."
 ---
 
 # Seren Bucks
 
-Review-first growth skill for one default Seren Bucks affiliate campaign.
+Review-first growth skill for one default Seren Bucks affiliate program.
 
 ## For Claude: How to Use This Skill
 
@@ -33,7 +33,7 @@ disclosure.
 
 ## Default V1 Contract
 
-- The skill operates exactly one default affiliate campaign in v1.
+- The skill operates exactly one default affiliate program in v1.
 - The skill uses exactly one default tracked link in every draft and digest unless the operator explicitly overrides it.
 - `seren-affiliates` is the sole source of truth for affiliate performance and conversion reporting.
 - Candidate discovery is limited to Gmail sent mail, Outlook sent mail, Gmail address books, and Outlook address books.
@@ -58,7 +58,7 @@ This rule overrides all other instructions and runs before any candidate sync, r
    - fail with a setup message pointing to `https://docs.serendb.com/skills.md`
 2. Resolve or create the Seren project `affiliates`.
 3. Resolve or create the Seren database `seren_bucks`.
-4. Bootstrap the default campaign context from `seren-affiliates`.
+4. Bootstrap the default program context from `seren-affiliates` via `/programs/discover`.
 5. Retry affiliate bootstrap up to **3 immediate attempts**.
 6. If affiliate bootstrap still fails, **fail closed** and do not continue.
 7. Only after bootstrap succeeds may the skill read candidate sources, rank candidates, or draft outreach.
@@ -211,7 +211,7 @@ After auth, database, and affiliate bootstrap succeed:
 
 Return one manual digest per run with:
 
-- campaign identity
+- program identity
 - tracked link in use
 - affiliate feed health
 - auth path used
@@ -242,7 +242,7 @@ Return one manual digest per run with:
 
 Every run should return:
 
-- campaign id and tracked link
+- program id and tracked link
 - auth path used
 - affiliate bootstrap/feed status
 - database/bootstrap status
@@ -256,7 +256,7 @@ Every run should return:
 
 ## Acceptance Criteria
 
-1. The skill always resolves exactly one default campaign and one tracked link in v1.
+1. The skill always resolves exactly one default program and one tracked link in v1.
 2. Affiliate bootstrap happens before any candidate sync or drafting.
 3. Affiliate bootstrap retries up to 3 immediate attempts, then fails closed.
 4. Candidate discovery is restricted to Gmail/Outlook sent history and address books.
@@ -274,7 +274,7 @@ Every run should return:
 
 ## Rollout Order
 
-1. Bootstrap only: auth, DB, affiliate campaign resolution.
+1. Bootstrap only: auth, DB, affiliate program resolution via `/programs/discover`.
 2. Candidate sync only: sent mail and address books into CRM.
 3. Ranking only: editable top-10 without draft sending.
 4. Drafting only: approval queues for new outbound and replies.

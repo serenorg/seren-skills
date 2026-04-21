@@ -1,11 +1,11 @@
 # Seren Bucks
 
-Review-first skill bundle for operating a single Seren Bucks affiliate campaign.
+Review-first skill bundle for operating a single Seren Bucks affiliate program.
 
 ## What this package includes
 
 - `SKILL.md` with the v1 operating contract
-- `config.example.json` with one campaign, one tracked link, and manual-review defaults
+- `config.example.json` with one program, one tracked link, and manual-review defaults
 - `serendb_schema.sql` with CRM, approval, DNC, and digest tables
 - `scripts/` runtime stubs for bootstrap, sync, ranking, drafting, send-approval, reconciliation, and digest assembly
 - `references/` docs for the state machine, provider mapping, schema summary, and output contract

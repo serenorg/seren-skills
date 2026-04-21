@@ -7,7 +7,7 @@ Required payload fields:
 - `run_status`
 - `mode`
 - `generated_at`
-- `campaign`
+- `program`
 - `tracked_link`
 - `auth_path`
 - `affiliate_feed_status`

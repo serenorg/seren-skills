@@ -1,5 +1,5 @@
 skill: seren-bucks
-description: Review-first outreach skill for the default Seren Bucks affiliate campaign. It bootstraps affiliate context, mines sent-mail history and address books for candidates, persists them into a skill-owned CRM, proposes an editable daily top-10, drafts outbound and reply batches for approval, reconciles affiliate and reply signals, enforces hard DNC, and returns a manual daily digest.
+description: Review-first outreach skill for the default Seren Bucks affiliate program. It bootstraps affiliate context, mines sent-mail history and address books for candidates, persists them into a skill-owned CRM, proposes an editable daily top-10, drafts outbound and reply batches for approval, reconciles affiliate and reply signals, enforces hard DNC, and returns a manual daily digest.
 triggers:
   - grow Seren Bucks affiliate signups
   - draft Seren Bucks affiliate outreach
@@ -40,11 +40,11 @@ inputs:
     default: 10
   strict_mode:
     type: boolean
-    description: Fail closed when bootstrap or required campaign context fails.
+    description: Fail closed when bootstrap or required program context fails.
     default: true
   tracked_link:
     type: string
-    description: Canonical tracked link for the default Seren Bucks affiliate campaign.
+    description: Canonical tracked link for the default Seren Bucks affiliate program.
     default: https://serendb.com?ref=default
 secrets:
   - SEREN_API_KEY

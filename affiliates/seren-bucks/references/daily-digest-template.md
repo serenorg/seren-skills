@@ -1,8 +1,8 @@
 # Seren Bucks V1 Daily Digest Template
 
-## Campaign
+## Program
 
-- Campaign:
+- Program:
 - Tracked link:
 - Affiliate feed health:
 - Auth path:

@@ -2,8 +2,8 @@
 
 The v1 schema is split into five responsibilities:
 
-1. Campaign and run control
-   - `campaign_state`
+1. Program and run control
+   - `program_state`
    - `affiliate_runs`
 2. Candidate CRM memory
    - `candidate_profiles`

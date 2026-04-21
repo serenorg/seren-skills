@@ -2,7 +2,7 @@
 
 | Capability | Provider | Role in v1 |
 | --- | --- | --- |
-| Affiliate attribution and performance | `seren-affiliates` | Source of truth for campaign metrics |
+| Affiliate attribution and performance | `seren-affiliates` | Source of truth for program metrics |
 | Gmail sent mail history | `gmail` | Candidate discovery from sent emails |
 | Gmail address books | `google-contacts` | Candidate discovery from contacts (People API) |
 | Outlook sent mail history | `outlook` | Candidate discovery from sent emails |
