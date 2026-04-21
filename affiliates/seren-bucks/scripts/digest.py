@@ -26,8 +26,8 @@ def build_daily_digest(
         [
             "# Seren Bucks",
             "",
-            "## Campaign",
-            f"- Campaign: {affiliate['campaign']['campaign_name']}",
+            "## Program",
+            f"- Program: {affiliate['program']['program_name']}",
             f"- Tracked link: {tracked_link(config)}",
             f"- Affiliate feed health: {affiliate['affiliate_feed_status']}",
             f"- Auth path: {auth_db['auth_path']}",

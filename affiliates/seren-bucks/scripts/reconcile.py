@@ -21,7 +21,7 @@ def reconcile_signals(config: dict, sync_result: dict, drafts: dict) -> dict:
     return {
         "status": "ok",
         "affiliate_summary": {
-            "source_of_truth": config["campaign"]["affiliate_source_of_truth"],
+            "source_of_truth": config["program"]["affiliate_source_of_truth"],
             "clicks_today": 27,
             "signups_today": 4,
         },

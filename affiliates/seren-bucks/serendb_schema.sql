@@ -1,6 +1,6 @@
-CREATE TABLE IF NOT EXISTS campaign_state (
-  campaign_id TEXT PRIMARY KEY,
-  campaign_name TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS program_state (
+  program_id TEXT PRIMARY KEY,
+  program_name TEXT NOT NULL,
   tracked_link TEXT NOT NULL,
   affiliate_source_of_truth TEXT NOT NULL DEFAULT 'seren-affiliates',
   crm_source_of_truth TEXT NOT NULL DEFAULT 'skill_owned_serendb',

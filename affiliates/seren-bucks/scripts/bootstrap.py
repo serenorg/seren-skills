@@ -30,18 +30,18 @@ def bootstrap_affiliate_context(config: dict) -> dict:
             "affiliate_feed_status": "unavailable",
             "retry_count": 3,
             "fail_closed": True,
-            "message": "Default affiliate campaign context failed three immediate bootstrap attempts.",
+            "message": "Default affiliate program context failed three immediate bootstrap attempts.",
         }
 
-    campaign = {
-        "campaign_id": config["campaign"]["campaign_id"],
-        "campaign_name": config["campaign"]["campaign_name"],
+    program = {
+        "program_id": config["program"]["program_id"],
+        "program_name": config["program"]["program_name"],
         "tracked_link": tracked_link(config),
-        "source_of_truth": config["campaign"]["affiliate_source_of_truth"],
+        "source_of_truth": config["program"]["affiliate_source_of_truth"],
     }
     return {
         "status": "ok",
         "retry_count": 1,
         "affiliate_feed_status": "ready",
-        "campaign": campaign,
+        "program": program,
     }

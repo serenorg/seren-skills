@@ -5,5 +5,5 @@
   "connector": "affiliates",
   "retry_count": 3,
   "fail_closed": true,
-  "message": "Default affiliate campaign context could not be bootstrapped after three immediate attempts."
+  "message": "Default affiliate program context could not be bootstrapped after three immediate attempts."
 }

@@ -1,7 +1,7 @@
 # Seren Bucks V1 Outreach Email Templates
 
 Canonical copy for outreach drafts. Claude MUST pull from these templates
-when drafting new-outbound messages for the default SerenBucks campaign,
+when drafting new-outbound messages for the default SerenBucks program,
 rather than synthesizing commission language from scratch.
 
 ## Program structure to disclose (non-negotiable)

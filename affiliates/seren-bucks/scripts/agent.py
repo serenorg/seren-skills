@@ -58,7 +58,7 @@ def _bootstrap_only(config: dict) -> dict:
         "generated_at": utc_now(),
         "auth_path": auth_db["auth_path"],
         "database_status": auth_db["database_status"],
-        "campaign": affiliate["campaign"],
+        "program": affiliate["program"],
         "affiliate_feed_status": affiliate["affiliate_feed_status"],
     }
 
@@ -68,7 +68,7 @@ def _status(config: dict) -> dict:
         "run_status": "ok",
         "mode": "status",
         "generated_at": utc_now(),
-        "campaign": config["campaign"],
+        "program": config["program"],
         "database": config["database"],
         "limits": config["limits"],
         "approval": config["approval"],
@@ -127,7 +127,7 @@ def _run_pipeline(config: dict, *, mode: str) -> dict:
         payload = {"daily_digest": digest}
     else:
         payload = {
-            "campaign": affiliate["campaign"],
+            "program": affiliate["program"],
             "affiliate_feed_status": affiliate["affiliate_feed_status"],
             "database_status": auth_db["database_status"],
             "provider_health": reconciliation["provider_health"],

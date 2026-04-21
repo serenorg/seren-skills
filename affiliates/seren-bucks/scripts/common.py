@@ -10,9 +10,9 @@ from typing import Any
 DEFAULT_CONFIG: dict[str, Any] = {
     "dry_run": True,
     "skill": "seren-bucks",
-    "campaign": {
-        "campaign_id": "seren-bucks-default",
-        "campaign_name": "Seren Bucks Default Affiliate Campaign",
+    "program": {
+        "program_id": "seren-bucks-default",
+        "program_name": "SerenBucks Affiliate Program",
         "tracked_link": "https://serendb.com?ref=default",
         "affiliate_source_of_truth": "seren-affiliates",
     },
@@ -87,7 +87,7 @@ def load_config(config_path: str) -> dict[str, Any]:
 
 
 def tracked_link(config: dict[str, Any]) -> str:
-    return str(config["inputs"].get("tracked_link") or config["campaign"]["tracked_link"])
+    return str(config["inputs"].get("tracked_link") or config["program"]["tracked_link"])
 
 
 def proposal_size(config: dict[str, Any]) -> int:
