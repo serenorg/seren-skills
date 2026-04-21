@@ -94,7 +94,14 @@ Do not expand to LinkedIn, Apollo, web scraping, or purchased lists in v1.
 
 This skill targets **personal relationships only**. Business and company emails are automatically excluded from the candidate pool because affiliate marketing outreach to generic business addresses is inappropriate and ineffective.
 
-### Email Address Pattern Filter
+**This rule has TWO mandatory filters that MUST both complete before any proposal is generated:**
+
+1. **Email Address Pattern Filter** (fast, prefix-based)
+2. **Email Content Analysis** (requires fetching sent mail history)
+
+Skipping either filter is a P0 defect. The proposal step MUST NOT proceed until both filters have run on every candidate.
+
+### Email Address Pattern Filter (Filter 1 of 2)
 
 The following email prefixes are automatically rejected:
 
@@ -102,22 +109,32 @@ The following email prefixes are automatically rejected:
 - Role-based: `marketing@`, `engineering@`, `product@`, `design@`, `ops@`, `finance@`
 - Noreply: `noreply@`, `no-reply@`, `donotreply@`
 
-### Email Content Analysis
+### Email Content Analysis (Filter 2 of 2 — MANDATORY)
 
-When syncing from sent mail history, conversation context is analyzed:
+**This filter is NOT optional.** For every candidate that passes the prefix filter, the skill MUST:
 
-- Transactional threads (invoices, receipts, support tickets) are excluded
-- B2B sales/partnership inquiry threads are excluded
-- Personal/friendly exchanges are prioritized
+1. Fetch the candidate's sent mail history from Gmail/Outlook publisher
+2. Analyze the conversation content to classify the relationship type:
+   - `personal_friendly` — casual, warm, relationship-based exchanges → **QUALIFY**
+   - `b2b_sales_partnership` — business development, sales, vendor discussions → **DNC**
+   - `transactional_support` — invoices, receipts, support tickets, creditor updates → **DNC**
+3. Mark candidates with `b2b_sales_partnership` or `transactional_support` classification as DNC with `dnc_reason = 'content_filter_b2b'` or `'content_filter_transactional'`
+4. Only candidates classified as `personal_friendly` may appear in the proposal
+
+**Blocking checkpoint:** If content analysis has not been performed on a candidate, that candidate MUST NOT appear in the proposal. The skill must either:
+- Complete content analysis before generating the proposal, OR
+- Explicitly fail with error `content_analysis_incomplete` if the Gmail/Outlook publisher is unavailable
+
+Presenting a proposal with candidates that have not been content-analyzed is a P0 defect equivalent to skipping the Schema Guard.
 
 ### Ranking Adjustments
 
-Borderline cases receive score penalties:
+After both filters pass, borderline cases receive score penalties:
 - Business email pattern match: -100 points (effectively excluded)
 - Transactional content detected: -30 points
 - B2B content detected: -50 points
 
-The top-10 proposal set only includes candidates that pass the personal relationship filter.
+The top-10 proposal set only includes candidates that pass BOTH the prefix filter AND content analysis.
 
 ## Persistence Rule
 
@@ -131,13 +148,36 @@ Whenever a candidate is discovered or updated:
 
 Failure to persist newly discovered candidates before ranking is a P0 defect.
 
+## Quota Enforcement Rule (Mandatory)
+
+The skill MUST produce a proposal with **at least 10 qualified personal candidates** before presenting results to the operator. This is NOT a soft target — it is a hard requirement.
+
+**Sourcing loop:**
+
+1. Run both filters (prefix + content analysis) on the initial candidate pool from sent mail history
+2. Count candidates that passed both filters and are not DNC
+3. If `qualified_count < 10`:
+   - Expand sourcing to address books (Gmail contacts, Outlook contacts)
+   - Fetch additional sent mail history with broader date ranges
+   - Search for personal email domains (gmail.com, hotmail.com, icloud.com, yahoo.com, etc.)
+   - Run both filters on newly discovered candidates
+   - Repeat until `qualified_count >= 10` OR all sources are exhausted
+4. Only after the sourcing loop completes may the proposal be generated
+
+**If all sources are exhausted and `qualified_count < 10`:**
+- Generate proposal with available candidates
+- Include explicit warning: `"quota_shortfall": true, "qualified_count": N, "target": 10, "sources_exhausted": ["gmail_sent", "outlook_sent", "gmail_contacts", "outlook_contacts"]`
+- Explain which sources were tried and why they did not yield more candidates
+
+**Stopping at `qualified_count < 10` without exhausting all sources is a P0 defect.** The operator should never see a proposal with only 3 candidates when 50+ potential candidates exist in other sources.
+
 ## Proposal and Drafting Loop
 
-After bootstrap passes:
+After bootstrap passes AND quota enforcement completes:
 
 1. Load active non-DNC candidates from the skill-owned CRM.
 2. Score and rank the candidate universe.
-3. Produce an editable top-10 proposal set.
+3. Produce an editable top-10 proposal set (or fewer if quota_shortfall).
 4. Draft:
    - a batch of **new outbound** messages capped at `10` per day
    - a batch of **reply drafts** for candidates who responded
@@ -224,6 +264,8 @@ Every run should return:
 11. Replies do not count against the new-outbound cap.
 12. DNC is a hard stop on unsubscribe, do-not-contact, and hostile-negative signals.
 13. Partial source failure degrades gracefully after prerequisites pass.
+14. **Content analysis MUST run on every candidate before proposal generation.** A proposal with candidates that have not been content-analyzed is a P0 defect.
+15. **Sourcing MUST continue until 10 qualified candidates exist OR all sources are exhausted.** Stopping at fewer than 10 candidates without trying all sources is a P0 defect.
 
 ## Rollout Order
 
