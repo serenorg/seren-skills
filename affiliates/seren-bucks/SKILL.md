@@ -35,11 +35,12 @@ disclosure.
 
 SerenBucks runs a weekly "Largest Purchase" contest:
 
-- **Prize**: $250 per winner (up to 2 winners per week)
+- **Prize**: $250 per winner, paid as bounty earnings through the seren-bounty pipeline
 - **Period**: Monday 00:00 UTC to Sunday 23:59:59 UTC
-- **Eligibility**: Any SerenDB purchase during the contest week
-- **Settlement**: Contest settles automatically after week ends
-- **Hold period**: 90 days before prize is released
+- **Winner rule**: The single largest SerenBucks purchase wins. A 2nd winner is awarded ONLY on an exact tie at the max purchase amount. Capped at 2 winners.
+- **Eligibility**: Only purchases attributed through an `SRN_` referral code count
+- **Settlement**: Contest settles automatically after week ends via the existing bounty event pipeline (contest_win event → affiliate_events → event_verifier → bounty_earnings)
+- **Hold period**: 90 days before prize is released (governed by bounty hold_days)
 
 This is a key growth hook for outreach. Lead with the contest when drafting recruitment emails.
 

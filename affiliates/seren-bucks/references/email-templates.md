@@ -46,8 +46,9 @@ Hi {{recipient_first_name}},
 {{personal_hook}}
 
 We're opening up the SerenBucks Affiliate Program and I'd like to sponsor
-you in. Plus, every week SerenDB runs a $250 "Largest Purchase" contest —
-make a purchase and you could win.
+you in. Plus, every week SerenDB runs a "Largest Purchase" contest — the
+biggest SerenBucks buyer wins a $250 bounty prize (paid through the bounty
+pipeline after a 90-day hold).
 
 Here's how it works:
 
@@ -91,9 +92,12 @@ Body:
 ```
 Hi {{winner_first_name}},
 
-Congratulations! Your purchase of {{purchase_amount}} this week made you one of the top 2 buyers in the SerenBucks Weekly Contest.
+Congratulations! Your SerenBucks purchase of {{purchase_amount}} was the
+largest this week in the SerenBucks Weekly Contest.
 
-You've won $250 in SerenBucks, which will be released after the 90-day hold period.
+You've won a $250 bounty prize, which will be released after the 90-day
+hold period. The prize is paid through the bounty earnings pipeline —
+not as SerenBucks credit.
 
 Keep using SerenDB and sharing your referral code to maximize your earnings!
 
