@@ -46,7 +46,10 @@ Hi {{recipient_first_name}},
 {{personal_hook}}
 
 We're opening up the SerenBucks Affiliate Program and I'd like to sponsor
-you in. Here's how it works:
+you in. Plus, every week SerenDB runs a $250 "Largest Purchase" contest —
+make a purchase and you could win.
+
+Here's how it works:
 
 1. Join via my sponsor link below. You'll get your own unique SerenBucks
    referral code (an SRN_ link of your very own).
@@ -58,8 +61,8 @@ you in. Here's how it works:
 Join here (this enrolls you under me as sponsor):
 {{sender_link}}
 
-After signup you'll see your own code in the SerenBucks dashboard —
-that's the one you send to friends.
+After signup you'll get your own code — that's the one you send to
+friends.
 
 Cheers,
 {{sender_full_name}}
@@ -78,3 +81,22 @@ Cheers,
 - Body discloses both the recipient's 20% and the sender's 5% override.
 - Subject and body do not claim the recipient earns from forwarding the
   sender's link.
+
+## Template: Contest winner notification (new)
+
+Subject: You won $250 in the SerenBucks Weekly Contest!
+
+Body:
+
+```
+Hi {{winner_first_name}},
+
+Congratulations! Your purchase of {{purchase_amount}} this week made you one of the top 2 buyers in the SerenBucks Weekly Contest.
+
+You've won $250 in SerenBucks, which will be released after the 90-day hold period.
+
+Keep using SerenDB and sharing your referral code to maximize your earnings!
+
+Cheers,
+The SerenDB Team
+```

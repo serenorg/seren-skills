@@ -31,6 +31,18 @@ Pull all outreach copy from `references/email-templates.md`, which documents the
 three-step recruitment flow (join → get own code → share own code) and the full tier
 disclosure.
 
+## Weekly Contest ($250 Prize)
+
+SerenBucks runs a weekly "Largest Purchase" contest:
+
+- **Prize**: $250 per winner (up to 2 winners per week)
+- **Period**: Monday 00:00 UTC to Sunday 23:59:59 UTC
+- **Eligibility**: Any SerenDB purchase during the contest week
+- **Settlement**: Contest settles automatically after week ends
+- **Hold period**: 90 days before prize is released
+
+This is a key growth hook for outreach. Lead with the contest when drafting recruitment emails.
+
 ## Default V1 Contract
 
 - The skill operates exactly one default affiliate program in v1.
