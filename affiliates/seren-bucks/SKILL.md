@@ -16,9 +16,9 @@ Skill instructions are preloaded in context when this skill is active. Do not pe
 
 SerenBucks is a **3-tier unilevel** program. Outreach copy MUST reflect this:
 
-- **Tier 0** — the affiliate earns **20%** direct commission on their own referrals.
-- **Tier 1 override** — the affiliate's sponsor earns **5%** when a direct child refers.
-- **Tier 2 override** — the sponsor's sponsor earns **5%** when a grandchild refers.
+- **Tier 0** — the affiliate earns **20%** direct commission on verified paid SerenBucks purchases attributed through their own `SRN_` referral code.
+- **Tier 1 override** — the affiliate's sponsor earns **5%** when a direct child's `SRN_` code produces a verified paid purchase.
+- **Tier 2 override** — the sponsor's sponsor earns **5%** when a grandchild's `SRN_` code produces a verified paid purchase.
 
 The bootstrapped `tracked_link` is the **operator's own `SRN_` recruitment link**. When
 a recipient signs up through that link, they become a Tier 1 downstream of the operator
@@ -39,7 +39,7 @@ SerenBucks runs a weekly "Largest Purchase" contest:
 - **Period**: Monday 00:00 UTC to Sunday 23:59:59 UTC
 - **Winner rule**: The single largest SerenBucks purchase wins. A 2nd winner is awarded ONLY on an exact tie at the max purchase amount. Capped at 2 winners.
 - **Eligibility**: Only purchases attributed through an `SRN_` referral code count
-- **Settlement**: Contest settles automatically after week ends via the existing bounty event pipeline (contest_win event → affiliate_events → event_verifier → bounty_earnings)
+- **Settlement**: Manual weekly settlement via `POST /contests/largest-purchase/settle?week=YYYY-Www`. The endpoint emits a `contest_win` event into the bounty pipeline (affiliate_events → event_verifier → bounty_earnings). Settlement is blocked until the week is complete.
 - **Hold period**: 90 days before prize is released (governed by bounty hold_days)
 
 This is a key growth hook for outreach. Lead with the contest when drafting recruitment emails.

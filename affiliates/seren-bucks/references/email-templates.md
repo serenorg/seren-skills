@@ -55,7 +55,7 @@ Here's how it works:
 1. Join via my sponsor link below. You'll get your own unique SerenBucks
    referral code (an SRN_ link of your very own).
 2. Share YOUR code with your network. You earn 20% commission on every
-   SerenDB signup and usage that comes through YOUR link.
+   verified paid SerenBucks purchase that comes through YOUR link.
 3. As your sponsor, I earn a 5% network override from your activity —
    that's why I'm happy to bring you in. No cost to you.
 
