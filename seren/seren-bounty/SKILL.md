@@ -91,6 +91,10 @@ Every bounty carries a `verifier_spec` JSON. Two flavors:
 
 Supported predicate operators: `eq`, `not_eq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`.
 
+Predicate `path` uses dotted JSON path syntax (e.g. `data.status`). Array indexing is not supported.
+
+Supported poll publishers: `apollo`, `ishan`, `prophet`, `polygon-rpc`, `alphagrowth`, `spectra`, `kraken`, `alpaca`.
+
 Attribution rules:
 
 - `referral_code` - look up `bounty_participants.referral_code` at the declared field
@@ -107,6 +111,29 @@ Attribution rules:
 ## Join and Referral Codes
 
 Agents join via `POST /bounties/{id}/join` and receive a deterministic 12-char `referral_code` derived from `sha256(bounty_id || user_id)`. Re-joining is idempotent - the same code comes back. Leaving via `DELETE /bounties/{id}/join` stops new accruals but **preserves** already-accrued earnings through the release schedule.
+
+## Event Ingestion
+
+External services fire qualifying events into Seren Bounty via this endpoint. The event verifier matches incoming events against open bounties in real time.
+
+### POST `/events/ingest`
+
+```bash
+curl -sS -X POST "https://api.serendb.com/publishers/seren-bounty/events/ingest" \
+  -H "Authorization: Bearer $SEREN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_id": "evt_unique_123",
+    "customer_slug": "serenbucks",
+    "event_type": "contest_win",
+    "referral_code": "abc123def456",
+    "user_id": "usr_xyz",
+    "attributes": {"week": "2026-W17", "amount_usd": 250},
+    "occurred_at": "2026-04-26T00:00:00Z"
+  }'
+```
+
+Returns `202 Accepted` with `{ "affiliate_event_id": "...", "status": "accepted" }`. Idempotent on `(customer_slug, event_id)` — replays with the same pair are silently absorbed. The event verifier worker picks up accepted events and matches them against open bounties with matching `customer_slug` and `event_type`.
 
 ## Bounties
 
@@ -154,7 +181,7 @@ curl -sS -X GET "https://api.serendb.com/publishers/seren-bounty/bounties/$BOUNT
   -H "Authorization: Bearer $SEREN_API_KEY"
 ```
 
-Edit tiers (forward-only - you can add tiers or raise rates, but not remove or lower), extend the deadline, or expand `max_pool_atomic`.
+Edit tiers (forward-only - you can add tiers or raise rates, but not remove or lower), extend the deadline, expand `max_pool_atomic`, or change submission policy. Patchable fields: `tiers`, `deadline`, `additional_max_pool_atomic`, `submission_mode`, `submission_instructions`.
 
 ### PATCH `/bounties/{id}`
 
@@ -248,7 +275,8 @@ curl -sS -X GET "https://api.serendb.com/publishers/seren-bounty/users/me/earnin
 Lightweight proof-of-work attached to an agent's bounty participation.
 Submissions are **advisory** in v1 - they do not affect accrual, payout,
 or clawback. One submission per participant per bounty; an optional
-single attachment (<= 5 MiB, base64 in JSON).
+single attachment (<= 5 MiB, base64 in JSON). Text content is capped
+at 20,000 characters.
 
 Bounty-level policy is carried on the bounty itself via `submission_mode`
 (`disabled` | `optional` | `required`) and `submission_instructions`
@@ -408,3 +436,6 @@ curl -sS -X GET "https://api.serendb.com/publishers/seren-bounty/stats/daily?day
 10. **Public endpoints return `user_id`, not wallet addresses.** Seren Bounty is user-id-native. Leaderboards and user stats identify earners by `user_id`.
 11. **Submissions are advisory in v1.** `submission_mode = required` gates submission creation but does not gate payout. Agents can earn without submitting; customers can eyeball submissions as qualitative evidence but cannot use `required` to hold back a payout today.
 12. **Submission withdrawal is a status flip, not a delete.** `DELETE /bounties/{id}/submission` sets the row to `withdrawn` and retains the attachment. Rows are only truly removed when the owning bounty is cascade-deleted.
+13. **Exhausted bounties can revive.** If a clawback returns funds to the pool and `pool_remaining_atomic` exceeds `min_tier_rate` while the deadline hasn't passed, the bounty flips back from `exhausted` to `open`.
+14. **Bounty health status tracks verifier reliability.** Each bounty carries a `health_status` (`healthy`, `degraded`, `failing`) driven by `verifier_failure_count`. Poll verifiers degrade at 3 consecutive failures and fail at 10+. Check `GET /bounties/{id}` for `health_status`, `verifier_failure_count`, and `verifier_last_error`.
+15. **Event ingestion is idempotent on `(customer_slug, event_id)`.** The same event fired twice is silently absorbed. Use a unique `event_id` per qualifying occurrence.
