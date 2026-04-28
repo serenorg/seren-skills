@@ -128,11 +128,11 @@ def test_check_oauth_detects_token() -> None:
     assert ms.authenticated is True
 
 
-# --- New: SKILL.md documents first-run bootstrap ---
+# --- New: SKILL.md documents Schema Guard bootstrap ---
 
-def test_skill_md_documents_first_run_setup() -> None:
+def test_skill_md_documents_schema_guard_bootstrap() -> None:
     content = SKILL_PATH.read_text(encoding="utf-8")
-    assert "## First-Run Setup" in content
+    assert "## Schema Guard (Mandatory — runs every invoke)" in content
     assert "bat-sales-coach" in content
     assert "bat_sales_coach" in content
 
@@ -157,11 +157,11 @@ def test_guardrail_g1_distress_escalation_rule() -> None:
     assert "Stop the coaching loop" in content
 
 
-def test_guardrail_g2_attitude_loop_opt_in() -> None:
-    """G2: Attitude check-in must be opt-in, not forced."""
+def test_guardrail_g2_mandatory_sequence_after_behavior() -> None:
+    """G2: After Behavior Readiness Check passes, the loop must transition Behavior → Attitude → Technique with no skip prompt."""
     content = SKILL_PATH.read_text(encoding="utf-8")
-    assert "Would you like to do the attitude check-in" in content
-    assert "skip the attitude loop" in content
+    assert "**MANDATORY SEQUENCE RULE**" in content
+    assert "Do not offer to skip or end the session between Behavior and Attitude" in content
 
 
 def test_guardrail_g3_future_loop_capped() -> None:
