@@ -10,6 +10,16 @@ description: "Supportive sales-executive coaching skill that runs a Behavior-Att
 
 Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
 
+## Canonical Pipeline Stages
+
+`prospects.pipeline_stage` and `behavior_tasks.pipeline_stage` are restricted to exactly seven values:
+
+```
+lead | prospecting | discovery | demo_completed | proposal | closed_won | closed_lost
+```
+
+Any other spelling or casing is invalid and must be normalized. Read paths and write paths both rely on this canonical set — never invent new variants, never mix casing, never use hyphens (`closed-lost` is wrong; `closed_lost` is correct).
+
 ## Schema Guard (Mandatory — runs every invoke)
 
 This rule overrides all other instructions and applies before ANY read or write to SerenDB. No data may be read from or written to the database until this guard passes.
@@ -28,13 +38,22 @@ This rule overrides all other instructions and applies before ANY read or write 
    ```sql
    CREATE TABLE IF NOT EXISTS prospects (
      id SERIAL PRIMARY KEY, name TEXT NOT NULL, organization TEXT, email TEXT,
-     phone TEXT, pipeline_stage TEXT, opportunity_value NUMERIC,
+     phone TEXT,
+     pipeline_stage TEXT CHECK (pipeline_stage IS NULL OR pipeline_stage IN (
+       'lead','prospecting','discovery','demo_completed',
+       'proposal','closed_won','closed_lost'
+     )),
+     opportunity_value NUMERIC,
      expected_close_date TEXT, notes TEXT,
      created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now()
    );
    CREATE TABLE IF NOT EXISTS behavior_tasks (
      id SERIAL PRIMARY KEY, prospect_name TEXT, organization TEXT,
-     pipeline_stage TEXT, title TEXT NOT NULL, status TEXT DEFAULT 'planned',
+     pipeline_stage TEXT CHECK (pipeline_stage IS NULL OR pipeline_stage IN (
+       'lead','prospecting','discovery','demo_completed',
+       'proposal','closed_won','closed_lost'
+     )),
+     title TEXT NOT NULL, status TEXT DEFAULT 'planned',
      due_date TEXT, start_time TIMESTAMPTZ, completion_time TIMESTAMPTZ,
      opportunity_value NUMERIC, expected_close_date TEXT,
      prospect_response TEXT, next_behavior TEXT,
@@ -71,7 +90,38 @@ This rule overrides all other instructions and applies before ANY read or write 
      created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now()
    );
    ```
-5. Only after the schema guard passes, proceed to the Returning-User Behavior Check.
+5. Run the canonical-stage migration (idempotent — runs in one transaction every invoke). This normalizes any legacy variant rows and installs the CHECK constraint on databases provisioned before this guard existed. Execute via `run_sql_transaction`:
+   ```sql
+   BEGIN;
+
+   UPDATE prospects SET pipeline_stage = 'prospecting' WHERE pipeline_stage = 'Prospecting';
+   UPDATE prospects SET pipeline_stage = 'closed_lost' WHERE pipeline_stage = 'closed-lost';
+   UPDATE prospects SET pipeline_stage = 'discovery'   WHERE pipeline_stage IN ('Intro Pending','Discovery / Demo');
+   UPDATE prospects SET pipeline_stage = 'proposal'    WHERE pipeline_stage = 'Proposal / Pricing';
+
+   UPDATE behavior_tasks SET pipeline_stage = 'prospecting' WHERE pipeline_stage = 'Prospecting';
+   UPDATE behavior_tasks SET pipeline_stage = 'closed_lost' WHERE pipeline_stage = 'closed-lost';
+   UPDATE behavior_tasks SET pipeline_stage = 'discovery'   WHERE pipeline_stage IN ('Intro Pending','Discovery / Demo');
+   UPDATE behavior_tasks SET pipeline_stage = 'proposal'    WHERE pipeline_stage = 'Proposal / Pricing';
+
+   ALTER TABLE prospects DROP CONSTRAINT IF EXISTS prospects_pipeline_stage_check;
+   ALTER TABLE prospects ADD CONSTRAINT prospects_pipeline_stage_check
+     CHECK (pipeline_stage IS NULL OR pipeline_stage IN (
+       'lead','prospecting','discovery','demo_completed',
+       'proposal','closed_won','closed_lost'
+     ));
+
+   ALTER TABLE behavior_tasks DROP CONSTRAINT IF EXISTS behavior_tasks_pipeline_stage_check;
+   ALTER TABLE behavior_tasks ADD CONSTRAINT behavior_tasks_pipeline_stage_check
+     CHECK (pipeline_stage IS NULL OR pipeline_stage IN (
+       'lead','prospecting','discovery','demo_completed',
+       'proposal','closed_won','closed_lost'
+     ));
+
+   COMMIT;
+   ```
+   If `ALTER TABLE ... ADD CONSTRAINT` raises because a row still violates the canonical set, abort, surface the offending values to the operator, and do not proceed with reads or writes. The migration is one transaction — partial application is not allowed.
+6. Only after the schema guard and migration pass, proceed to the Returning-User Behavior Check.
 
 **Do not skip this guard.** Do not assume tables exist from a prior session. Do not proceed to any read or write if the check has not run. Violations of this rule are P0 data-loss defects.
 
