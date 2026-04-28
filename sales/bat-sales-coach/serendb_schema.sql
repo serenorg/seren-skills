@@ -1,5 +1,9 @@
 -- BAT Sales Coach schema for SerenDB
 -- Tables: prospects, behavior_tasks, behavior_journals, attitude_journals, technique_plans, coaching_sessions
+--
+-- pipeline_stage is restricted to a canonical 7-value set:
+--   lead | prospecting | discovery | demo_completed | proposal | closed_won | closed_lost
+-- See SKILL.md "Canonical Pipeline Stages" for the contract.
 
 CREATE SCHEMA IF NOT EXISTS {{schema_name}};
 
@@ -7,7 +11,11 @@ CREATE TABLE IF NOT EXISTS {{schema_name}}.prospects (
     id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     name            TEXT NOT NULL,
     organization    TEXT,
-    pipeline_stage  TEXT DEFAULT 'new_lead',
+    pipeline_stage  TEXT DEFAULT 'lead'
+        CHECK (pipeline_stage IS NULL OR pipeline_stage IN (
+            'lead','prospecting','discovery','demo_completed',
+            'proposal','closed_won','closed_lost'
+        )),
     opportunity_value_usd NUMERIC(12,2) DEFAULT 0,
     expected_close_date TEXT,
     notes           TEXT,
@@ -21,7 +29,11 @@ CREATE TABLE IF NOT EXISTS {{schema_name}}.behavior_tasks (
     prospect_id     TEXT REFERENCES {{schema_name}}.prospects(id),
     prospect_name   TEXT,
     organization    TEXT,
-    pipeline_stage  TEXT,
+    pipeline_stage  TEXT
+        CHECK (pipeline_stage IS NULL OR pipeline_stage IN (
+            'lead','prospecting','discovery','demo_completed',
+            'proposal','closed_won','closed_lost'
+        )),
     title           TEXT NOT NULL,
     behavior_type   TEXT DEFAULT 'outreach',
     status          TEXT DEFAULT 'planned',
@@ -90,3 +102,32 @@ CREATE INDEX IF NOT EXISTS idx_behavior_tasks_prospect
 
 CREATE INDEX IF NOT EXISTS idx_coaching_sessions_date
     ON {{schema_name}}.coaching_sessions (session_date);
+
+-- Canonical pipeline_stage migration. Idempotent on every bootstrap:
+-- normalize legacy variants (Title Case, hyphenated, space/slash forms),
+-- then re-install the CHECK constraint so databases provisioned before
+-- this guard existed converge on the canonical 7-value set.
+
+UPDATE {{schema_name}}.prospects SET pipeline_stage = 'prospecting' WHERE pipeline_stage = 'Prospecting';
+UPDATE {{schema_name}}.prospects SET pipeline_stage = 'closed_lost' WHERE pipeline_stage = 'closed-lost';
+UPDATE {{schema_name}}.prospects SET pipeline_stage = 'discovery'   WHERE pipeline_stage IN ('Intro Pending','Discovery / Demo');
+UPDATE {{schema_name}}.prospects SET pipeline_stage = 'proposal'    WHERE pipeline_stage = 'Proposal / Pricing';
+
+UPDATE {{schema_name}}.behavior_tasks SET pipeline_stage = 'prospecting' WHERE pipeline_stage = 'Prospecting';
+UPDATE {{schema_name}}.behavior_tasks SET pipeline_stage = 'closed_lost' WHERE pipeline_stage = 'closed-lost';
+UPDATE {{schema_name}}.behavior_tasks SET pipeline_stage = 'discovery'   WHERE pipeline_stage IN ('Intro Pending','Discovery / Demo');
+UPDATE {{schema_name}}.behavior_tasks SET pipeline_stage = 'proposal'    WHERE pipeline_stage = 'Proposal / Pricing';
+
+ALTER TABLE {{schema_name}}.prospects DROP CONSTRAINT IF EXISTS prospects_pipeline_stage_check;
+ALTER TABLE {{schema_name}}.prospects ADD CONSTRAINT prospects_pipeline_stage_check
+    CHECK (pipeline_stage IS NULL OR pipeline_stage IN (
+        'lead','prospecting','discovery','demo_completed',
+        'proposal','closed_won','closed_lost'
+    ));
+
+ALTER TABLE {{schema_name}}.behavior_tasks DROP CONSTRAINT IF EXISTS behavior_tasks_pipeline_stage_check;
+ALTER TABLE {{schema_name}}.behavior_tasks ADD CONSTRAINT behavior_tasks_pipeline_stage_check
+    CHECK (pipeline_stage IS NULL OR pipeline_stage IN (
+        'lead','prospecting','discovery','demo_completed',
+        'proposal','closed_won','closed_lost'
+    ));

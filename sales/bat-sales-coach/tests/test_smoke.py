@@ -198,3 +198,45 @@ def test_guardrail_g7_attitude_trend_monitoring() -> None:
     content = SKILL_PATH.read_text(encoding="utf-8")
     assert "## Attitude Trend Monitoring" in content
     assert "3 or more consecutive sessions" in content
+
+
+# --- Canonical pipeline_stage contract (issue #446) ---
+
+CANONICAL_STAGES = (
+    "lead", "prospecting", "discovery", "demo_completed",
+    "proposal", "closed_won", "closed_lost",
+)
+
+
+def test_canonical_pipeline_stages_documented_in_skill_md() -> None:
+    """SKILL.md must declare the canonical 7-value pipeline_stage set."""
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "## Canonical Pipeline Stages" in content
+    for stage in CANONICAL_STAGES:
+        assert stage in content, f"Canonical stage missing from SKILL.md: {stage}"
+
+
+def test_skill_md_schema_guard_enforces_canonical_stages() -> None:
+    """SKILL.md Schema Guard must contain CHECK constraint and migration mappings for all known legacy variants."""
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "prospects_pipeline_stage_check" in content
+    assert "behavior_tasks_pipeline_stage_check" in content
+    for variant, canonical in [
+        ("'Prospecting'", "'prospecting'"),
+        ("'closed-lost'", "'closed_lost'"),
+        ("'Intro Pending','Discovery / Demo'", "'discovery'"),
+        ("'Proposal / Pricing'", "'proposal'"),
+    ]:
+        assert variant in content, f"SKILL.md missing legacy variant: {variant}"
+        assert canonical in content, f"SKILL.md missing canonical target: {canonical}"
+
+
+def test_serendb_schema_enforces_canonical_stages() -> None:
+    """serendb_schema.sql must apply the same CHECK constraint and idempotent migration."""
+    content = SCHEMA_PATH.read_text(encoding="utf-8")
+    assert content.count("CHECK (pipeline_stage IS NULL OR pipeline_stage IN") >= 4
+    assert "prospects_pipeline_stage_check" in content
+    assert "behavior_tasks_pipeline_stage_check" in content
+    for variant in ("'Prospecting'", "'closed-lost'", "'Intro Pending'",
+                    "'Discovery / Demo'", "'Proposal / Pricing'"):
+        assert variant in content, f"Schema migration missing variant: {variant}"
