@@ -101,8 +101,8 @@ This rule overrides all other instructions and applies before ANY read or write 
 
    UPDATE behavior_tasks SET pipeline_stage = 'prospecting' WHERE pipeline_stage = 'Prospecting';
    UPDATE behavior_tasks SET pipeline_stage = 'closed_lost' WHERE pipeline_stage = 'closed-lost';
-   UPDATE behavior_tasks SET pipeline_stage = 'discovery'   WHERE pipeline_stage IN ('Intro Pending','Discovery / Demo');
-   UPDATE behavior_tasks SET pipeline_stage = 'proposal'    WHERE pipeline_stage = 'Proposal / Pricing';
+   UPDATE behavior_tasks SET pipeline_stage = 'discovery'   WHERE pipeline_stage IN ('Intro Pending','Discovery / Demo','Meeting/Discovery');
+   UPDATE behavior_tasks SET pipeline_stage = 'proposal'    WHERE pipeline_stage IN ('Proposal / Pricing','Grant Application');
 
    ALTER TABLE prospects DROP CONSTRAINT IF EXISTS prospects_pipeline_stage_check;
    ALTER TABLE prospects ADD CONSTRAINT prospects_pipeline_stage_check

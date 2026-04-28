@@ -224,8 +224,8 @@ def test_skill_md_schema_guard_enforces_canonical_stages() -> None:
     for variant, canonical in [
         ("'Prospecting'", "'prospecting'"),
         ("'closed-lost'", "'closed_lost'"),
-        ("'Intro Pending','Discovery / Demo'", "'discovery'"),
-        ("'Proposal / Pricing'", "'proposal'"),
+        ("'Intro Pending','Discovery / Demo','Meeting/Discovery'", "'discovery'"),
+        ("'Proposal / Pricing','Grant Application'", "'proposal'"),
     ]:
         assert variant in content, f"SKILL.md missing legacy variant: {variant}"
         assert canonical in content, f"SKILL.md missing canonical target: {canonical}"
@@ -238,5 +238,6 @@ def test_serendb_schema_enforces_canonical_stages() -> None:
     assert "prospects_pipeline_stage_check" in content
     assert "behavior_tasks_pipeline_stage_check" in content
     for variant in ("'Prospecting'", "'closed-lost'", "'Intro Pending'",
-                    "'Discovery / Demo'", "'Proposal / Pricing'"):
+                    "'Discovery / Demo'", "'Proposal / Pricing'",
+                    "'Meeting/Discovery'", "'Grant Application'"):
         assert variant in content, f"Schema migration missing variant: {variant}"
