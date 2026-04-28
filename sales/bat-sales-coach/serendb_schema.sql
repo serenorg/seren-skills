@@ -115,8 +115,8 @@ UPDATE {{schema_name}}.prospects SET pipeline_stage = 'proposal'    WHERE pipeli
 
 UPDATE {{schema_name}}.behavior_tasks SET pipeline_stage = 'prospecting' WHERE pipeline_stage = 'Prospecting';
 UPDATE {{schema_name}}.behavior_tasks SET pipeline_stage = 'closed_lost' WHERE pipeline_stage = 'closed-lost';
-UPDATE {{schema_name}}.behavior_tasks SET pipeline_stage = 'discovery'   WHERE pipeline_stage IN ('Intro Pending','Discovery / Demo');
-UPDATE {{schema_name}}.behavior_tasks SET pipeline_stage = 'proposal'    WHERE pipeline_stage = 'Proposal / Pricing';
+UPDATE {{schema_name}}.behavior_tasks SET pipeline_stage = 'discovery'   WHERE pipeline_stage IN ('Intro Pending','Discovery / Demo','Meeting/Discovery');
+UPDATE {{schema_name}}.behavior_tasks SET pipeline_stage = 'proposal'    WHERE pipeline_stage IN ('Proposal / Pricing','Grant Application');
 
 ALTER TABLE {{schema_name}}.prospects DROP CONSTRAINT IF EXISTS prospects_pipeline_stage_check;
 ALTER TABLE {{schema_name}}.prospects ADD CONSTRAINT prospects_pipeline_stage_check
