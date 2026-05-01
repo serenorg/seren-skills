@@ -1,4 +1,17 @@
 {
   "classification_overrides": {},
-  "waivers": {}
+  "waivers": {
+    "prophet/prophet-polymarket-edge": {
+      "rules": [
+        "skill_trade_execution_contract",
+        "skill_pre_trade_checklist",
+        "skill_dependency_validation",
+        "skill_clob_orderbook_rules",
+        "runtime_default_safe_mode",
+        "runtime_marketable_exit",
+        "tests_guardrail_coverage"
+      ],
+      "reason": "Read-only at v1 by design (SKILL.md launch contract; design doc §13.10 / §15). `--yes-live` always exits non-zero. The runtime never places orders, holds inventory, or interacts with the CLOB. `scripts/trading_safety.py` exists ONLY to encode the three preconditions any future trading-enable PR must satisfy — its docstrings mirror trading-domain language from sibling Polymarket skills, which causes the pattern-based detector to classify this skill as trading. The order-book / marketability / pre-trade checklist rules apply only when execution is wired; at v1 they have nothing to validate. Issue #454 tracks the gate contract; revisit waivers when a future PR re-enables execution."
+    }
+  }
 }

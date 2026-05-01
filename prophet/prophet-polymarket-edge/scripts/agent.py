@@ -1065,10 +1065,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
 
     if args.yes_live:
+        # Surface the trading-safety gate checklist so any future
+        # trading-enable PR has a concrete remediation list. The skill
+        # remains read-only at v1 — every gate trips closed today.
+        # Load trading_safety.py by absolute path so the test loader (which
+        # imports agent.py via spec_from_file_location and does NOT add the
+        # scripts/ dir to sys.path) still resolves the sibling module.
+        import importlib.util as _ts_util
+        _ts_path = Path(__file__).resolve().parent / "trading_safety.py"
+        _ts_spec = _ts_util.spec_from_file_location("trading_safety", _ts_path)
+        assert _ts_spec is not None and _ts_spec.loader is not None
+        _ts_mod = _ts_util.module_from_spec(_ts_spec)
+        # Register before exec so @dataclass can resolve cls.__module__ via sys.modules.
+        sys.modules["trading_safety"] = _ts_mod
+        _ts_spec.loader.exec_module(_ts_mod)
+        config_for_gates = load_config(args.config)
+        payload = _ts_mod.evaluate_trading_safety_gates(config_for_gates)
         sys.stderr.write(
             "ERROR: --yes-live is rejected at v1 launch. Surface C is read-only "
             "and Polymarket execution is out of scope at v1.\n"
         )
+        sys.stderr.write(json.dumps(payload, sort_keys=True) + "\n")
         return 2
 
     config = load_config(args.config)
