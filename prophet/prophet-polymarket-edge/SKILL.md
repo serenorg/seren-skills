@@ -127,7 +127,18 @@ Markets with no `consensus_direction`, no `polymarket_token_id`, or non-positive
 
 ### Emergency exit
 
-There is no `--unwind-all` or stop-trading subcommand wired into this skill. The Kelly + per-market notional caps bound single-trade exposure, but if you need to liquidate held positions before resolution, use the maker-rebate-bot emergency-exit path or close manually on Polymarket.
+```bash
+python3 scripts/agent.py --config config.json --unwind-all --yes-live
+```
+
+`--unwind-all` requires `--yes-live`. The path:
+
+1. Cancels all open Polymarket orders for the wallet (`cancel_all`).
+2. Fetches held positions from the Polymarket data API.
+3. For every position with size > 0, fetches the live order book, snaps to the market's current `tick_size`, and submits a marketable-limit SELL at min-tick.
+4. Returns a JSON payload with the cancel result and one `sell_results` row per token (price, best bid, visible-book recovery estimate, partial-fill remainder).
+
+The position-cap and Kelly-fraction gates that bound single-trade exposure on entry remain in place; this is the operator-triggered exit path for any positions already opened.
 
 ## How the read-only run works (for Claude / Codex)
 
@@ -154,4 +165,5 @@ The following are intentionally not in the runtime today. Each one is its own fo
 - a personalized Prophet handoff with deep links anchored to your prior trades
 - a pricing-divergence observation feed gated on AI House quote history
 - the Polymarket recommendation engine endpoint
-- automated unwind / cancel-all / position monitoring on the live path
+- automated drawdown-triggered unwind on the live path (operator-triggered `--unwind-all` is supported; see *Emergency exit*)
+- continuous position monitoring on the live path

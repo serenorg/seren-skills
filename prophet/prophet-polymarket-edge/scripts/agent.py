@@ -20,11 +20,12 @@ Live trading (`--yes-live`):
 - Submit via `DirectClobTrader` (lifted from
   `polymarket/maker-rebate-bot/scripts/polymarket_live.py:2049-2187`).
 
-Emergency exit: no unwind / flatten / cancel-all path is wired in v1 of
-the trading wiring. The position-cap and Kelly-fraction gates bound
-single-trade exposure, but operators must use the maker-rebate-bot
-emergency-exit path or close manually if a position needs to unwind
-before resolution.
+Emergency exit (`--unwind-all --yes-live`):
+
+- Cancel all open Polymarket orders for the wallet (`trader.cancel_all()`).
+- Fetch held positions, snap to each market's current tick size, and
+  submit marketable min-tick SELL orders sized to the position.
+- Returns a JSON payload summarizing cancels and per-position sell results.
 """
 
 from __future__ import annotations
@@ -174,6 +175,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
             "Enable live Polymarket execution. Both trading-safety gates "
             "(risk framework, execution path) must pass; otherwise the "
             "process exits 2 with a structured trading_safety_blocked payload."
+        ),
+    )
+    parser.add_argument(
+        "--unwind-all",
+        action="store_true",
+        dest="unwind_all",
+        help=(
+            "Emergency liquidation: cancel all open Polymarket orders for this "
+            "wallet and submit marketable min-tick SELLs for every held "
+            "position. Requires --yes-live."
         ),
     )
     return parser.parse_args(argv)
@@ -1085,6 +1096,7 @@ def _consensus_to_dict(r: ConsensusContextRow) -> dict:
 
 DEFAULT_POLY_CHAIN_ID = 137
 DEFAULT_POLY_CLOB_HOST = "https://clob.polymarket.com"
+POLYMARKET_DATA_API_BASE_URL = "https://data-api.polymarket.com"
 
 
 class DirectClobTrader:
@@ -1122,6 +1134,10 @@ class DirectClobTrader:
             chain_id=chain_id,
             creds=creds,
         )
+        try:
+            self.address = (self._client.get_address() or "").lower()
+        except Exception:
+            self.address = ""
 
     def create_order(self, *, token_id: str, side: str, price: float, size: float) -> Any:
         from py_clob_client.clob_types import OrderArgs, OrderType
@@ -1131,6 +1147,30 @@ class DirectClobTrader:
         order_args = OrderArgs(price=price, size=size, side=clob_side, token_id=token_id)
         signed_order = self._client.create_order(order_args)
         return self._client.post_order(signed_order, OrderType.GTC)
+
+    def cancel_all(self) -> Any:
+        return self._client.cancel_all()
+
+    def get_positions(self) -> Any:
+        if not self.address:
+            return []
+        try:
+            query = urllib.parse.urlencode({"user": self.address})
+            request = urllib.request.Request(
+                f"{POLYMARKET_DATA_API_BASE_URL}/positions?{query}",
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "prophet-polymarket-edge/1.0",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=30.0) as response:
+                text = response.read().decode("utf-8")
+            if not text:
+                return []
+            payload = json.loads(text)
+            return payload if isinstance(payload, (dict, list)) else []
+        except Exception:
+            return []
 
     def get_cash_balance(self) -> float:
         from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
@@ -1143,6 +1183,218 @@ class DirectClobTrader:
         if raw > 1_000_000:
             return raw / 1_000_000.0
         return raw
+
+
+# ---------------------------------------------------------------------------
+# Unwind-all helpers (lifted from polymarket/maker-rebate-bot/scripts/polymarket_live.py)
+# ---------------------------------------------------------------------------
+
+
+def _book_levels(payload: Any, side: str) -> List[Tuple[float, float]]:
+    if isinstance(payload, dict):
+        key = "asks" if side.upper() == "BUY" else "bids"
+        payload = payload.get(key)
+    if not isinstance(payload, list):
+        return []
+    levels: List[Tuple[float, float]] = []
+    for level in payload:
+        if isinstance(level, dict):
+            price = _safe_float_local(level.get("price"))
+            size = _safe_float_local(
+                level.get(
+                    "size",
+                    level.get("quantity", level.get("amount", level.get("shares", 0.0))),
+                )
+            )
+        elif isinstance(level, (list, tuple)) and len(level) >= 2:
+            price = _safe_float_local(level[0])
+            size = _safe_float_local(level[1])
+        else:
+            price = 0.0
+            size = 0.0
+        if price > 0.0 and size > 0.0:
+            levels.append((price, size))
+    return levels
+
+
+def estimate_book_fill_value(payload: Any, *, side: str, size: float) -> Dict[str, float]:
+    requested = max(0.0, size)
+    remaining = requested
+    gross = 0.0
+    filled = 0.0
+    for price, level_size in _book_levels(payload, side):
+        take = min(remaining, level_size)
+        gross += take * price
+        filled += take
+        remaining -= take
+        if remaining <= 1e-9:
+            break
+    avg = gross / filled if filled > 0.0 else 0.0
+    return {
+        "requested_size": round(requested, 6),
+        "fillable_size": round(filled, 6),
+        "unfilled_size": round(max(0.0, remaining), 6),
+        "gross_value": round(gross, 6),
+        "average_price": round(avg, 6),
+    }
+
+
+def _best_bid_price(levels: Any) -> float:
+    if not isinstance(levels, list) or not levels:
+        return 0.0
+    prices: List[float] = []
+    for level in levels:
+        if isinstance(level, dict):
+            prices.append(_safe_float_local(level.get("price")))
+        elif isinstance(level, (list, tuple)) and level:
+            prices.append(_safe_float_local(level[0]))
+    return max(prices, default=0.0)
+
+
+def _snap_sell_to_min_tick(tick_size_str: str) -> float:
+    """Return the minimum-tick price (the sell-floor) for this market."""
+    tick = _safe_float_local(tick_size_str)
+    if tick <= 0:
+        tick = 0.01
+    decimals = max(0, len(tick_size_str.split(".")[1]) if "." in tick_size_str else 0)
+    return round(tick, decimals)
+
+
+def fetch_book(token_id: str) -> Dict[str, Any]:
+    """Fetch the current order book for a token from the Polymarket CLOB."""
+    try:
+        query = urllib.parse.urlencode({"token_id": token_id})
+        request = urllib.request.Request(
+            f"{DEFAULT_POLY_CLOB_HOST}/book?{query}",
+            headers={"Accept": "application/json", "User-Agent": "prophet-polymarket-edge/1.0"},
+        )
+        with urllib.request.urlopen(request, timeout=30.0) as response:
+            text = response.read().decode("utf-8")
+        payload = json.loads(text) if text else {}
+    except Exception as exc:
+        raise RuntimeError(f"book_fetch_failed: {exc}") from exc
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "best_bid": _best_bid_price(payload.get("bids")),
+        "tick_size": str(payload.get("tick_size", payload.get("minimum_tick_size", "0.01"))),
+        "raw": payload,
+    }
+
+
+def build_marketable_sell_order(token_id: str, shares: float) -> Dict[str, Any]:
+    """Build a marketable-min-tick SELL plan for an immediate exit."""
+    book = fetch_book(token_id)
+    tick_size = book["tick_size"]
+    tick_price = _snap_sell_to_min_tick(tick_size)
+    best_bid = _safe_float_local(book.get("best_bid"))
+    estimate = estimate_book_fill_value(book.get("raw"), side="SELL", size=shares)
+    if best_bid <= 0.0 or estimate["fillable_size"] <= 0.0:
+        raise RuntimeError(
+            "no_bid_liquidity: order book has no executable bids for an immediate exit."
+        )
+    return {
+        "token_id": token_id,
+        "shares": round(max(0.0, shares), 6),
+        "price": tick_price,
+        "tick_size": tick_size,
+        "best_bid": best_bid,
+        "estimated_exit_value_usd": estimate["gross_value"],
+        "estimated_fill_size": estimate["fillable_size"],
+        "estimated_unfilled_size": estimate["unfilled_size"],
+        "estimated_average_price": estimate["average_price"],
+        "execution_style": "marketable-limit-min-tick",
+    }
+
+
+def _infer_position_size(position: Dict[str, Any]) -> float:
+    for key in ("size", "amount", "quantity", "position", "balance", "shares", "outcomeTokens", "token_balance"):
+        value = position.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    nested = position.get("available")
+    if isinstance(nested, dict):
+        for key in ("amount", "balance", "position", "shares"):
+            value = nested.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+
+def positions_by_key(raw_positions: Any) -> Dict[str, float]:
+    """Flatten a positions payload into {token_id: shares}."""
+    rows: List[Dict[str, Any]] = []
+    if isinstance(raw_positions, list):
+        rows = [r for r in raw_positions if isinstance(r, dict)]
+    elif isinstance(raw_positions, dict):
+        data = raw_positions.get("data")
+        if isinstance(data, list):
+            rows = [r for r in data if isinstance(r, dict)]
+    out: Dict[str, float] = {}
+    for row in rows:
+        size = _infer_position_size(row)
+        for key in ("asset_id", "token_id", "market", "market_id"):
+            raw = row.get(key)
+            if raw:
+                out[str(raw)] = size
+    return out
+
+
+def run_unwind_all(config: dict) -> Dict[str, Any]:
+    """Emergency liquidation: cancel all orders, market-sell every held position."""
+    del config  # config currently unused; reserved for timeout / per-skill overrides
+    try:
+        trader = DirectClobTrader()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "skill": SKILL_NAME,
+            "mode": "unwind-all",
+            "error_code": "trader_init_failed",
+            "message": str(exc),
+        }
+
+    results: Dict[str, Any] = {"status": "ok", "skill": SKILL_NAME, "mode": "unwind-all"}
+
+    try:
+        results["cancel_all"] = trader.cancel_all()
+    except Exception as exc:
+        results["cancel_error"] = str(exc)
+
+    try:
+        raw = trader.get_positions()
+        sizes = positions_by_key(raw)
+        sell_results: List[Dict[str, Any]] = []
+        for token_id, shares in sizes.items():
+            if shares <= 0:
+                continue
+            try:
+                plan = build_marketable_sell_order(token_id, shares)
+                response = trader.create_order(
+                    token_id=token_id,
+                    side="SELL",
+                    price=plan["price"],
+                    size=shares,
+                )
+                sell_results.append({**plan, "shares": round(shares, 6), "response": response})
+            except Exception as sell_exc:
+                sell_results.append(
+                    {"token_id": token_id, "shares": shares, "error": str(sell_exc)}
+                )
+        results["sell_results"] = sell_results
+        results["positions_unwound"] = len(sell_results)
+    except Exception as exc:
+        results["position_error"] = str(exc)
+
+    return results
 
 
 def _kelly_fraction_yes(*, market_price: float, win_prob: float) -> float:
@@ -1340,6 +1592,22 @@ def _yes_live_main(args: argparse.Namespace) -> int:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
+
+    if args.unwind_all:
+        if not args.yes_live:
+            payload = {
+                "status": "error",
+                "skill": SKILL_NAME,
+                "mode": "unwind-all",
+                "error_code": "unwind_confirmation_required",
+                "message": "Emergency unwind requires --yes-live confirmation.",
+            }
+            print(json.dumps(payload, sort_keys=True))
+            return 1
+        config = load_config(args.config)
+        result = run_unwind_all(config)
+        print(json.dumps(result, sort_keys=True, default=str))
+        return 0 if result.get("status") == "ok" else 1
 
     if args.yes_live:
         return _yes_live_main(args)
