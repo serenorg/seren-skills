@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
-"""Runtime for prophet-polymarket-edge — Surface B watchlist + Surface C consensus context.
+"""Runtime for prophet-polymarket-edge — Surface B watchlist + Surface C consensus context + live trading.
 
-V1 scope (May 1, 2026 launch contingency from design doc §11 / §13.9):
+Read-only default (no `--yes-live`):
 
-- Surface B (read-only Tranche 1 watchlist): pull Prophet open markets via
-  Prophet GraphQL, pull Polymarket consensus + divergence via
-  seren-polymarket-intelligence, compute the set difference, render the top
-  N candidates with the verbatim §6.1 consensus-context block.
-- Surface C (read-only Polymarket consensus context): for each divergent
-  market, render Polymarket URL, current Polymarket price, consensus
-  probability, consensus direction (verbatim labels), divergence in bps,
-  and a freshness note.
+- Surface B (Tranche 1 watchlist): pull Prophet open markets via Prophet
+  GraphQL, pull Polymarket consensus + divergence via
+  seren-polymarket-intelligence, compute the set difference, render the
+  top N candidates with the verbatim §6.1 consensus-context block.
+- Surface C (Polymarket consensus context): for each divergent market,
+  render Polymarket URL, current Polymarket price, consensus probability,
+  consensus direction (verbatim labels), divergence in bps, freshness.
 
-Surface A (loss audit) is post-v1 and intentionally not implemented here.
-Polymarket execution is disabled: --yes-live is rejected and POLY_* env
-vars are never solicited.
+Live trading (`--yes-live`):
 
-Emergency-exit path: there is no unwind, flatten, close-all, cancel_all,
-or stop-trading code path because this runtime never holds inventory,
-never places orders, and has no positions to liquidate. There is nothing
-to cancel. --yes-live is rejected with exit code 2 in main() before any
-execution path runs; see scripts/trading_safety.py for the gate contract
-that guards any future trading-enable PR.
+- Both trading-safety gates must pass (`scripts/trading_safety.py`).
+- For each Surface C row with `consensus_direction` and `divergence_bps`
+  >= the configured floor, plan a Kelly-bounded BUY at the consensus
+  side, capped per-market by `risk.max_position_notional_usd`.
+- Submit via `DirectClobTrader` (lifted from
+  `polymarket/maker-rebate-bot/scripts/polymarket_live.py:2049-2187`).
+
+Emergency exit: no unwind / flatten / cancel-all path is wired in v1 of
+the trading wiring. The position-cap and Kelly-fraction gates bound
+single-trade exposure, but operators must use the maker-rebate-bot
+emergency-exit path or close manually if a position needs to unwind
+before resolution.
 """
 
 from __future__ import annotations
@@ -167,7 +170,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--yes-live",
         action="store_true",
-        help="REJECTED in v1. Surface C is read-only; this flag is rejected with an error.",
+        help=(
+            "Enable live Polymarket execution. Both trading-safety gates "
+            "(risk framework, execution path) must pass; otherwise the "
+            "process exits 2 with a structured trading_safety_blocked payload."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -1068,32 +1075,274 @@ def _consensus_to_dict(r: ConsensusContextRow) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Live execution path (--yes-live)
+#
+# Lifted from polymarket/maker-rebate-bot/scripts/polymarket_live.py:2049-2187.
+# `py_clob_client` is imported lazily so the read-only path does not require it.
+# ---------------------------------------------------------------------------
+
+
+DEFAULT_POLY_CHAIN_ID = 137
+DEFAULT_POLY_CLOB_HOST = "https://clob.polymarket.com"
+
+
+class DirectClobTrader:
+    """Direct Polymarket CLOB client for local py-clob-client execution."""
+
+    def __init__(self) -> None:
+        try:
+            from py_clob_client.client import ClobClient
+            from py_clob_client.clob_types import ApiCreds
+        except ImportError as exc:
+            raise RuntimeError(
+                "Direct CLOB trading requires `py-clob-client`. "
+                "Install with `python -m pip install -r requirements.txt`."
+            ) from exc
+
+        private_key = (os.getenv("POLY_PRIVATE_KEY") or os.getenv("WALLET_PRIVATE_KEY") or "").strip()
+        api_key = (os.getenv("POLY_API_KEY") or "").strip()
+        api_passphrase = (os.getenv("POLY_PASSPHRASE") or "").strip()
+        api_secret = (os.getenv("POLY_SECRET") or "").strip()
+        if not private_key:
+            raise RuntimeError(
+                "Direct CLOB trading requires `POLY_PRIVATE_KEY` or `WALLET_PRIVATE_KEY`."
+            )
+        if not api_key or not api_passphrase or not api_secret:
+            raise RuntimeError(
+                "Missing required Polymarket L2 credentials. Set "
+                "`POLY_API_KEY`, `POLY_PASSPHRASE`, and `POLY_SECRET`."
+            )
+
+        chain_id = _as_int(os.getenv("POLY_CHAIN_ID")) or DEFAULT_POLY_CHAIN_ID
+        creds = ApiCreds(api_key=api_key, api_secret=api_secret, api_passphrase=api_passphrase)
+        self._client = ClobClient(
+            host=DEFAULT_POLY_CLOB_HOST,
+            key=private_key,
+            chain_id=chain_id,
+            creds=creds,
+        )
+
+    def create_order(self, *, token_id: str, side: str, price: float, size: float) -> Any:
+        from py_clob_client.clob_types import OrderArgs, OrderType
+        from py_clob_client.order_builder.constants import BUY, SELL
+
+        clob_side = BUY if side.upper() == "BUY" else SELL
+        order_args = OrderArgs(price=price, size=size, side=clob_side, token_id=token_id)
+        signed_order = self._client.create_order(order_args)
+        return self._client.post_order(signed_order, OrderType.GTC)
+
+    def get_cash_balance(self) -> float:
+        from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+
+        payload = self._client.get_balance_allowance(
+            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+        )
+        # USDC has 6 decimals on Polymarket; collapse to dollar units.
+        raw = float(payload.get("balance") or payload.get("amount") or 0.0)
+        if raw > 1_000_000:
+            return raw / 1_000_000.0
+        return raw
+
+
+def _kelly_fraction_yes(*, market_price: float, win_prob: float) -> float:
+    """Standard Kelly for a binary contract priced at `market_price` with
+    estimated win probability `win_prob`. Returns 0 when there is no edge.
+    """
+    if not (0.0 < market_price < 1.0):
+        return 0.0
+    b = (1.0 - market_price) / market_price
+    if b <= 0.0:
+        return 0.0
+    q = 1.0 - win_prob
+    f_star = (b * win_prob - q) / b
+    return max(0.0, f_star)
+
+
+def compute_live_executions(
+    *,
+    surface_c: List[Dict[str, Any]],
+    risk: Dict[str, Any],
+    bankroll_usd: float,
+    min_divergence_bps: int,
+) -> List[Dict[str, Any]]:
+    """Plan BUY orders on the consensus side for divergent Surface C rows.
+
+    Returns one plan per tradable row. Skips silently when:
+      - `consensus_direction` is missing
+      - `polymarket_token_id` is missing
+      - `divergence_bps` is below the configured floor
+      - Kelly edge is non-positive
+    """
+    plans: List[Dict[str, Any]] = []
+    kelly_cap = max(0.0, _safe_float_local(risk.get("max_kelly_fraction"))) if risk else 0.0
+    per_market_cap_usd = max(0.0, _safe_float_local(risk.get("max_position_notional_usd"))) if risk else 0.0
+    if kelly_cap <= 0.0 or per_market_cap_usd <= 0.0 or bankroll_usd <= 0.0:
+        return plans
+
+    for row in surface_c or []:
+        if not isinstance(row, dict):
+            continue
+        token_id = row.get("polymarket_token_id")
+        if not token_id:
+            continue
+        direction = row.get("consensus_direction")
+        if direction not in ("yes", "no"):
+            continue
+        divergence_bps = _safe_float_local(row.get("divergence_bps"))
+        if divergence_bps < float(min_divergence_bps):
+            continue
+        polymarket_price = _safe_float_local(row.get("polymarket_price"))
+        consensus_prob = _safe_float_local(row.get("consensus_probability"))
+        if not (0.0 < polymarket_price < 1.0) or not (0.0 < consensus_prob < 1.0):
+            continue
+
+        # The token's effective entry price + win probability depend on
+        # which side we're buying. `polymarket_token_id` is the consensus
+        # side: YES side carries `polymarket_price`/`consensus_probability`;
+        # NO side carries the complements.
+        if direction == "yes":
+            entry_price = polymarket_price
+            win_prob = consensus_prob
+        else:
+            entry_price = 1.0 - polymarket_price
+            win_prob = 1.0 - consensus_prob
+
+        f_star = _kelly_fraction_yes(market_price=entry_price, win_prob=win_prob)
+        if f_star <= 0.0:
+            continue
+        fraction = min(f_star, kelly_cap)
+        notional_usd = min(bankroll_usd * fraction, per_market_cap_usd)
+        if notional_usd <= 0.0 or entry_price <= 0.0:
+            continue
+        size_shares = round(notional_usd / entry_price, 4)
+        plans.append(
+            {
+                "canonical_id": str(row.get("canonical_id") or ""),
+                "token_id": str(token_id),
+                "side": "BUY",
+                "consensus_direction": direction,
+                "limit_price": round(entry_price, 4),
+                "size_shares": size_shares,
+                "notional_usd": round(notional_usd, 4),
+                "kelly_fraction": round(fraction, 6),
+                "divergence_bps": int(divergence_bps),
+            }
+        )
+    return plans
+
+
+def _safe_float_local(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def fetch_surface_c_for_live_execution(config: dict) -> List[Dict[str, Any]]:
+    """Fetch the Surface C divergence + consensus rows the live path trades on.
+
+    Mirrors the read-only `execute_run` Surface C step but does not persist.
+    Returns dicts shaped like `_consensus_to_dict` plus `polymarket_token_id`
+    when the divergence row carries it.
+    """
+    inputs = config.get("inputs") if isinstance(config.get("inputs"), dict) else {}
+    min_platforms = int(inputs.get("min_platforms") or 3)
+    min_liquidity_usd = int(inputs.get("min_liquidity_usd") or 10000)
+    consensus_context_limit = int(inputs.get("consensus_context_limit") or 10)
+    api_key = resolve_secret(config, "SEREN_API_KEY")
+    if not api_key:
+        return []
+    intel = PolymarketIntelligence(api_key=api_key)
+    divergence_rows = intel.divergence(min_platforms=min_platforms, min_liquidity_usd=min_liquidity_usd)
+    canonical_ids = [str(r.get("canonical_id") or r.get("id") or "") for r in divergence_rows if isinstance(r, dict)]
+    canonical_ids = [c for c in canonical_ids if c]
+    consensus_by_id = intel.consensus_batch(canonical_ids)
+    rows = compute_consensus_context_rows(
+        divergence_rows=divergence_rows,
+        consensus_by_id=consensus_by_id,
+        consensus_context_limit=consensus_context_limit,
+    )
+    out: List[Dict[str, Any]] = []
+    for row, raw in zip(rows, divergence_rows[: len(rows)]):
+        d = _consensus_to_dict(row)
+        token_id = (
+            (raw.get("polymarket_token_id") if isinstance(raw, dict) else None)
+            or (consensus_by_id.get(d["canonical_id"], {}).get("polymarket_token_id"))
+        )
+        d["polymarket_token_id"] = token_id
+        out.append(d)
+    return out
+
+
+def _yes_live_main(args: argparse.Namespace) -> int:
+    """Live execution path. Run gates → fetch Surface C → submit orders."""
+    import importlib.util as _ts_util
+
+    _ts_path = Path(__file__).resolve().parent / "trading_safety.py"
+    _ts_spec = _ts_util.spec_from_file_location("trading_safety", _ts_path)
+    assert _ts_spec is not None and _ts_spec.loader is not None
+    _ts_mod = _ts_util.module_from_spec(_ts_spec)
+    sys.modules["trading_safety"] = _ts_mod
+    _ts_spec.loader.exec_module(_ts_mod)
+
+    config = load_config(args.config)
+    payload = _ts_mod.evaluate_trading_safety_gates(config)
+    if not payload.get("passed"):
+        sys.stderr.write(
+            "ERROR: --yes-live is blocked by the trading-safety gates. "
+            "See `trading_safety_blocked` payload below for the remediation list.\n"
+        )
+        sys.stderr.write(json.dumps(payload, sort_keys=True) + "\n")
+        return 2
+
+    live_cfg = config.get("live") if isinstance(config.get("live"), dict) else {}
+    risk = config.get("risk") if isinstance(config.get("risk"), dict) else {}
+    bankroll_usd = _safe_float_local(live_cfg.get("bankroll_usd"))
+    min_divergence_bps = int(live_cfg.get("min_divergence_bps") or 500)
+
+    surface_c = fetch_surface_c_for_live_execution(config)
+    plans = compute_live_executions(
+        surface_c=surface_c,
+        risk=risk,
+        bankroll_usd=bankroll_usd,
+        min_divergence_bps=min_divergence_bps,
+    )
+
+    executions: List[Dict[str, Any]] = []
+    if plans:
+        trader = DirectClobTrader()
+        for plan in plans:
+            try:
+                response = trader.create_order(
+                    token_id=plan["token_id"],
+                    side=plan["side"],
+                    price=plan["limit_price"],
+                    size=plan["size_shares"],
+                )
+                executions.append({**plan, "status": "submitted", "broker_response": response})
+            except Exception as exc:
+                executions.append({**plan, "status": "error", "error": str(exc)})
+
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "trading_safety": payload,
+                "plans": plans,
+                "live_executions": executions,
+            },
+            default=str,
+        )
+    )
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
 
     if args.yes_live:
-        # Surface the trading-safety gate checklist so any future
-        # trading-enable PR has a concrete remediation list. The skill
-        # remains read-only at v1 — every gate trips closed today.
-        # Load trading_safety.py by absolute path so the test loader (which
-        # imports agent.py via spec_from_file_location and does NOT add the
-        # scripts/ dir to sys.path) still resolves the sibling module.
-        import importlib.util as _ts_util
-        _ts_path = Path(__file__).resolve().parent / "trading_safety.py"
-        _ts_spec = _ts_util.spec_from_file_location("trading_safety", _ts_path)
-        assert _ts_spec is not None and _ts_spec.loader is not None
-        _ts_mod = _ts_util.module_from_spec(_ts_spec)
-        # Register before exec so @dataclass can resolve cls.__module__ via sys.modules.
-        sys.modules["trading_safety"] = _ts_mod
-        _ts_spec.loader.exec_module(_ts_mod)
-        config_for_gates = load_config(args.config)
-        payload = _ts_mod.evaluate_trading_safety_gates(config_for_gates)
-        sys.stderr.write(
-            "ERROR: --yes-live is rejected at v1 launch. Surface C is read-only "
-            "and Polymarket execution is out of scope at v1.\n"
-        )
-        sys.stderr.write(json.dumps(payload, sort_keys=True) + "\n")
-        return 2
+        return _yes_live_main(args)
 
     config = load_config(args.config)
     command = args.command or (config.get("inputs") or {}).get("command") or "run"

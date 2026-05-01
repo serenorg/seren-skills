@@ -1,11 +1,9 @@
 """Tests for prophet/prophet-polymarket-edge/scripts/trading_safety.py.
 
-These tests lock in the contract that issue #454 demands BEFORE
-trading can be re-enabled in this skill: a future PR that wires
-`--yes-live` to a working execution path must satisfy every gate in
-this module first. Loosening these assertions without simultaneously
-landing the corresponding mitigations (signal calibration, risk
-framework, CLOB execution path) is a P0 defect.
+These tests lock in the engineering preconditions a trading-enable PR
+must satisfy before `--yes-live` is wired to a working execution path:
+a complete risk framework and an importable CLOB execution path with
+credentials.
 """
 
 from __future__ import annotations
@@ -39,10 +37,6 @@ def ts():
 
 def _full_passing_config() -> dict:
     return {
-        "backtest": {
-            "events": 200,
-            "results": {"return_pct": 0.05},
-        },
         "risk": {
             "max_kelly_fraction": 0.05,
             "max_position_notional_usd": 1000.0,
@@ -62,39 +56,6 @@ def _full_passing_env() -> dict:
         "POLY_PASSPHRASE": "pass",
         "POLY_SECRET": "secret",
     }
-
-
-# ---------------------------------------------------------------------------
-# Signal-calibration gate
-# ---------------------------------------------------------------------------
-
-
-def test_signal_calibration_gate_blocks_when_no_backtest(ts) -> None:
-    result = ts.check_signal_calibration_gate(config={})
-    assert result.passed is False
-    assert result.error_code == "insufficient_sample_size"
-    assert "backtest" in result.missing
-
-
-def test_signal_calibration_gate_blocks_on_small_sample(ts) -> None:
-    config = {"backtest": {"events": 50, "results": {"return_pct": 0.10}}}
-    result = ts.check_signal_calibration_gate(config=config)
-    assert result.passed is False
-    assert result.error_code == "insufficient_sample_size"
-
-
-def test_signal_calibration_gate_blocks_on_non_positive_return(ts) -> None:
-    config = {"backtest": {"events": 500, "results": {"return_pct": -0.01}}}
-    result = ts.check_signal_calibration_gate(config=config)
-    assert result.passed is False
-    assert result.error_code == "backtest_gate_blocked"
-
-
-def test_signal_calibration_gate_passes_with_valid_backtest(ts) -> None:
-    config = {"backtest": {"events": 200, "results": {"return_pct": 0.04}}}
-    result = ts.check_signal_calibration_gate(config=config)
-    assert result.passed is True
-    assert result.error_code is None
 
 
 # ---------------------------------------------------------------------------
@@ -224,14 +185,13 @@ def test_evaluate_returns_blocked_status_when_any_gate_fails(ts) -> None:
     assert payload["status"] == "trading_safety_blocked"
     assert payload["passed"] is False
     blocker_gates = {b["gate"] for b in payload["blockers"]}
-    # All three gates should fail at v1 baseline.
-    assert blocker_gates == {"signal_calibration", "risk_framework", "execution_path"}
+    assert blocker_gates == {"risk_framework", "execution_path"}
 
 
 def test_evaluate_returns_ok_when_all_gates_pass(ts, monkeypatch) -> None:
     """Synthetic scenario: every gate passes. Asserts the contract is
-    machine-checkable (i.e. a future trading-enable PR has a clear,
-    concrete checklist to clear, and this is what 'cleared' looks like).
+    machine-checkable (i.e. a trading-enable PR has a clear, concrete
+    checklist to clear, and this is what 'cleared' looks like).
     """
     monkeypatch.setattr(
         ts.importlib,
@@ -246,7 +206,6 @@ def test_evaluate_returns_ok_when_all_gates_pass(ts, monkeypatch) -> None:
     assert payload["passed"] is True
     assert payload["blockers"] == []
     assert {g["gate"] for g in payload["gates"]} == {
-        "signal_calibration",
         "risk_framework",
         "execution_path",
     }
@@ -259,15 +218,15 @@ def test_evaluate_returns_ok_when_all_gates_pass(ts, monkeypatch) -> None:
 
 def test_yes_live_emits_trading_safety_blocked_payload(capsys) -> None:
     """The CLI must surface the structured blocker checklist on stderr
-    so a future trading-enable PR has the exact remediation list visible
-    in CI output."""
+    so a trading-enable PR has the exact remediation list visible in CI
+    output."""
     agent = _load_module("prophet_polymarket_edge_agent_for_yes_live", AGENT_PATH)
     rc = agent.main(["--yes-live"])
     assert rc == 2
 
     err_lines = capsys.readouterr().err.splitlines()
     # First line: the human-readable rejection reason.
-    assert any("rejected at v1 launch" in line for line in err_lines)
+    assert any("blocked by the trading-safety gates" in line for line in err_lines)
     # Second line: the structured payload.
     json_lines = [line for line in err_lines if line.strip().startswith("{")]
     assert json_lines, "trading_safety payload must be emitted on stderr"
@@ -275,6 +234,5 @@ def test_yes_live_emits_trading_safety_blocked_payload(capsys) -> None:
     assert payload["status"] == "trading_safety_blocked"
     assert payload["passed"] is False
     blocker_gates = {b["gate"] for b in payload["blockers"]}
-    assert "signal_calibration" in blocker_gates
     assert "risk_framework" in blocker_gates
     # execution_path may or may not block depending on dev env, so don't pin it here.

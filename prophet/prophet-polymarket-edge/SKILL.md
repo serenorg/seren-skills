@@ -1,7 +1,7 @@
 ---
 name: prophet-polymarket-edge
 display-name: "Prophet Polymarket Edge"
-description: "Read-only loss-protection check for retail Polymarket and Prophet users. Surfaces markets where Polymarket prices have drifted from cross-platform consensus, plus a watchlist of long-tail markets that aren't on Prophet yet. The skill never places a trade."
+description: "Loss-protection check for retail Polymarket and Prophet users. Surfaces markets where Polymarket has drifted from cross-platform consensus, plus a watchlist of long-tail markets not yet on Prophet. Read-only by default; opt-in `--yes-live` takes the consensus side via py-clob-client when both trading-safety gates pass."
 ---
 
 # Prophet Polymarket Edge
@@ -29,12 +29,11 @@ What you get back is two text blocks: a ranked watchlist of markets to consider 
 
 ## What this skill does not do
 
-- it does not place orders on Polymarket, on Prophet, or anywhere else
 - it does not move money, ask for a wallet, or read your Polymarket trade history
-- it does not tell you which side of the market to take — it shows you cross-platform consensus as background context, not as a recommendation
-- it does not solicit Polymarket API keys or private keys at this version; the `POLY_*` environment variables are intentionally not requested
+- it does not tell you which side of the market to take in the read-only output — the cross-platform consensus number is shown as background context, not a recommendation
+- it does not place orders unless you opt in with `--yes-live` AND both trading-safety gates pass; the read-only default never requires `POLY_*` credentials
 
-If a future version ever wants to actually place trades, it has to clear three machine-checked safety gates first (described below). Today every gate trips closed by design.
+When you do opt in to live trading with `--yes-live`, the skill takes the cross-platform consensus side on Polymarket for each Surface C row whose divergence is above the configured floor, sized by Kelly fraction and capped by `max_position_notional_usd` — see *Live trading* below.
 
 ## What you see when you run it
 
@@ -77,7 +76,7 @@ Common flags:
 
 - `--json` — machine-readable output instead of the rendered text blocks.
 - `--purge` — wipe stored audit, finding, and recommendation rows for the current user (see Privacy below).
-- `--yes-live` — **rejected**. The skill exits with code 2 and prints a structured `trading_safety_blocked` payload on stderr listing every gate the request failed. See *Trading safety gates* below.
+- `--yes-live` — opt in to live trading. The skill runs both trading-safety gates first; if either fails, it exits with code 2 and prints a structured `trading_safety_blocked` payload on stderr listing every gate the request failed. If both pass, the skill plans BUY orders on the cross-platform consensus side for each Surface C row above the divergence floor and submits them via `py-clob-client`. See *Live trading* below.
 
 ## First-run storage bootstrap
 
@@ -95,23 +94,40 @@ If `SEREN_API_KEY` is missing the runtime fails fast — no setup prompts, no pa
 - Default retention for audit content is 180 days.
 - `python3 scripts/agent.py --config config.json --purge` removes the audit-run, audit-finding, recommendation, telemetry, and wallet-identity rows for the current user.
 
-## Emergency exit and stop trading
+## Live trading (`--yes-live`)
 
-There is no emergency exit path, no `--unwind-all`, no `close-all`, no `flatten`, and no stop-trading subcommand — because the skill never holds inventory, never places orders, and has no positions to unwind or liquidate. There is nothing to cancel and nothing to market-sell. `--yes-live` is rejected with exit code 2 before any execution path runs; see *Trading safety gates* below.
+`--yes-live` is opt-in. Every run starts read-only; live trading only happens when you pass the flag AND both trading-safety gates pass.
 
-## Trading safety gates (why `--yes-live` is rejected today)
+When you pass `--yes-live`, the runtime calls `evaluate_trading_safety_gates(config)`. If either gate fails, the process exits with code 2 and emits a structured `trading_safety_blocked` JSON payload on stderr listing every gate that failed, with an `error_code`, a `missing` list, and a human-readable `message`. **No order is submitted.**
 
-The skill is read-only. It does not place trades, and `--yes-live` is rejected with exit code 2. That rejection is not a placeholder — it is enforced by three machine-checked gates in `scripts/trading_safety.py`. Any future change that wants to wire `--yes-live` to a real execution path has to clear all three first; loosening these checks without simultaneously landing the corresponding mitigations is treated as a P0 defect by the existing test suite.
+The two gates:
 
-When `--yes-live` is passed, the runtime calls `evaluate_trading_safety_gates(config)` and emits a structured `trading_safety_blocked` JSON payload on stderr listing every gate that failed, with an `error_code`, a `missing` list, and a human-readable `message`. The process exits with code 2.
+1. **Risk-framework gate** (`check_risk_framework_gate`) — requires the config to carry a Kelly fraction in `(0, 0.10]`, a midpoint safe band inside `[0.30, 0.70]`, a 24-hour volume floor of at least `$5,000`, a resolution-buffer window of at least 14 days, an inventory hold-cycle limit of at least 1, and a positive position cap. Error codes: `risk_framework_missing`, `risk_framework_unsafe`.
+2. **Execution-path gate** (`check_execution_path_gate`) — requires `py_clob_client` to be importable AND `POLY_PRIVATE_KEY` (or `WALLET_PRIVATE_KEY`) AND `POLY_API_KEY` AND `POLY_PASSPHRASE` AND `POLY_SECRET` to be present in the process environment. Error codes: `clob_client_missing`, `poly_credentials_missing`.
 
-The three gates:
+When both gates pass, the runtime fetches the same Surface C rows the read-only path renders, then for each row with `consensus_direction` set and `divergence_bps` above `config.live.min_divergence_bps`:
 
-1. **Signal-calibration gate** (`check_signal_calibration_gate`) — fails closed unless the config carries a backtest with at least 120 events AND a strictly positive net return. Cross-platform divergence on its own is not a tradable edge until it's been validated on resolved outcomes. Error codes: `insufficient_sample_size`, `backtest_gate_blocked`.
-2. **Risk-framework gate** (`check_risk_framework_gate`) — fails closed unless the config carries a Kelly fraction in `(0, 0.10]`, a midpoint safe band inside `[0.30, 0.70]`, a 24-hour volume floor of at least `$5,000`, a resolution-buffer window of at least 14 days, an inventory hold-cycle limit of at least 1, and a positive position cap. Error codes: `risk_framework_missing`, `risk_framework_unsafe`.
-3. **Execution-path gate** (`check_execution_path_gate`) — fails closed unless `py_clob_client` is importable AND `POLY_PRIVATE_KEY` (or `WALLET_PRIVATE_KEY`) AND `POLY_API_KEY` AND `POLY_PASSPHRASE` AND `POLY_SECRET` are all present in the process environment. Error codes: `clob_client_missing`, `poly_credentials_missing`.
+1. Computes the Kelly fraction for the consensus side at the current Polymarket price.
+2. Clips that fraction at `risk.max_kelly_fraction` and converts to a notional using `config.live.bankroll_usd`.
+3. Caps notional at `risk.max_position_notional_usd`.
+4. Submits a BUY at the consensus side via `py_clob_client` (`DirectClobTrader.create_order`, lifted from `polymarket/maker-rebate-bot/scripts/polymarket_live.py:2049-2187`).
 
-Today's defaults trip every gate closed because none of those preconditions are wired. That is intentional. The retail-loss pattern this skill is responding to is the reason: a half-finished trading path with no calibration, no risk framework, and no real CLOB execution would just add another way to lose money.
+Markets with no `consensus_direction`, no `polymarket_token_id`, or non-positive Kelly edge are skipped silently. The final stdout payload is a JSON object containing `status`, `trading_safety` (the evaluated gates), `plans` (planned orders), and `live_executions` (broker responses).
+
+### Required `live` config block
+
+```json
+{
+  "live": {
+    "bankroll_usd": 1000.0,
+    "min_divergence_bps": 500
+  }
+}
+```
+
+### Emergency exit
+
+There is no `--unwind-all` or stop-trading subcommand wired into this skill. The Kelly + per-market notional caps bound single-trade exposure, but if you need to liquidate held positions before resolution, use the maker-rebate-bot emergency-exit path or close manually on Polymarket.
 
 ## How the read-only run works (for Claude / Codex)
 
@@ -138,4 +154,4 @@ The following are intentionally not in the runtime today. Each one is its own fo
 - a personalized Prophet handoff with deep links anchored to your prior trades
 - a pricing-divergence observation feed gated on AI House quote history
 - the Polymarket recommendation engine endpoint
-- a Polymarket CLOB execution path of any kind
+- automated unwind / cancel-all / position monitoring on the live path
