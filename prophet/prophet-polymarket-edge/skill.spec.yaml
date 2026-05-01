@@ -76,14 +76,10 @@ workflow:
   steps:
     - id: bootstrap_storage
       use: connector.storage.bootstrap
-    - id: disclosure_gate
-      use: transform.run_disclosure_gate
-      with:
-        from_step: bootstrap_storage
     - id: fetch_prophet_open_markets
       use: transform.fetch_prophet_open_markets
       with:
-        from_step: disclosure_gate
+        from_step: bootstrap_storage
     - id: fetch_polymarket_divergence
       use: connector.polymarket_intelligence.get
       with:
@@ -91,7 +87,7 @@ workflow:
         query:
           min_platforms: "{min_platforms}"
           min_liquidity_usd: "{min_liquidity_usd}"
-        from_step: disclosure_gate
+        from_step: bootstrap_storage
     - id: fetch_polymarket_consensus_batch
       use: connector.polymarket_intelligence.get
       with:
@@ -102,16 +98,10 @@ workflow:
       with:
         watchlist_limit: "{watchlist_limit}"
         from_step: fetch_polymarket_consensus_batch
-    - id: persist_surface_b_disclosure
-      use: connector.storage.upsert
-      with:
-        tables:
-          - surface_b_benefit_disclosures
-        from_step: compute_watchlist_candidates
     - id: render_watchlist
       use: transform.render_watchlist
       with:
-        from_step: persist_surface_b_disclosure
+        from_step: compute_watchlist_candidates
     - id: render_consensus_context
       use: transform.render_consensus_context
       with:
@@ -137,13 +127,11 @@ tests:
     - bounds_consensus_context_limit
   smoke:
     - schema_ddl_is_idempotent
-    - disclosure_gate_blocks_on_decline
     - watchlist_excludes_prophet_open_markets
-    - watchlist_renders_surface_b_disclosure_above_list
-    - watchlist_suppresses_deep_links_when_disclosure_row_missing
+    - watchlist_renders_consensus_context_block
+    - watchlist_suppresses_deep_links_when_unauthenticated
     - consensus_context_uses_verbatim_labels
     - consensus_context_does_not_call_actionable
-    - purge_preserves_disclosure_acknowledgements
 publish:
   org: prophet
   slug: prophet-polymarket-edge

@@ -6,31 +6,23 @@ would only re-cover already-covered behavior are intentionally omitted.
 Coverage map (issue #452 -> test):
 
 - AC #2 (schema idempotent)               -> test_schema_ddl_is_idempotent
-- AC #3 (disclosure gate blocks decline)  -> test_disclosure_gate_blocks_on_decline
-- AC #4/#11 (Surface B disclosure render) -> test_watchlist_renders_surface_b_disclosure_above_list
-                                             test_watchlist_suppresses_deep_links_when_disclosure_row_missing
 - AC #5 (set difference excludes Prophet) -> test_watchlist_excludes_prophet_open_markets
 - AC #6 (auth split deep links)           -> test_watchlist_suppresses_deep_links_when_unauthenticated
 - AC #7 (no /api/oracle/actionable)       -> test_intelligence_client_does_not_expose_actionable
 - AC #7 (verbatim labels)                 -> test_consensus_context_uses_verbatim_labels
                                              test_consensus_context_never_says_recommended_side
 - AC #8 (--yes-live rejected)             -> test_yes_live_is_rejected_at_v1
-- AC #9 (renderer invariants)             -> test_disclosure_blocks_are_frozen_verbatim
-- AC #11 (purge preserves ledger)         -> test_purge_preserves_disclosure_ledger
+- AC #9 (consensus context block frozen)  -> test_consensus_context_block_is_frozen_verbatim
 """
 
 from __future__ import annotations
 
 import importlib.util
-import io
 import re
 import sqlite3
 import sys
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List
-
-import pytest
+from typing import List
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "agent.py"
@@ -48,9 +40,10 @@ def _load_agent_module():
 
 # ---------------------------------------------------------------------------
 # Schema idempotency uses an in-memory SQLite shim. We only assert that the
-# DDL is parseable, idempotent, and creates the 8 tables — not Postgres-only
-# behavior. The Postgres `BIGSERIAL`/`SERIAL`/`TIMESTAMPTZ`/`JSONB`/`TEXT[]`
-# types are translated to SQLite-compatible equivalents for this test only.
+# DDL is parseable, idempotent, and creates the expected tables — not
+# Postgres-only behavior. The Postgres `BIGSERIAL`/`SERIAL`/`TIMESTAMPTZ`/
+# `JSONB`/`TEXT[]` types are translated to SQLite-compatible equivalents
+# for this test only.
 # ---------------------------------------------------------------------------
 
 
@@ -80,9 +73,7 @@ def _expected_tables() -> List[str]:
         "audit_runs",
         "audit_findings",
         "recommendations",
-        "disclosure_acknowledgements",
         "cost_estimate_gates",
-        "surface_b_benefit_disclosures",
         "telemetry_events",
     ]
 
@@ -106,117 +97,6 @@ def test_schema_ddl_is_idempotent() -> None:
     expected = set(_expected_tables())
     missing = expected - names
     assert not missing, f"missing tables: {missing}"
-
-
-# ---------------------------------------------------------------------------
-# Disclosure-gate behavior. We mock psycopg_connect so the gate's DB writes
-# go to an in-memory recorder. The verbatim copy is asserted below in a
-# dedicated test.
-# ---------------------------------------------------------------------------
-
-
-class FakeCursor:
-    def __init__(self, store: Dict[str, List[tuple]]):
-        self._store = store
-        self._last_query = ""
-
-    def execute(self, query: str, params: Any = None):
-        self._last_query = query
-        ql = " ".join(query.split()).lower()
-        if ql.startswith("insert into") and "telemetry_events" in ql:
-            self._store.setdefault("telemetry_events", []).append(params)
-        elif ql.startswith("insert into") and "disclosure_acknowledgements" in ql:
-            self._store.setdefault("disclosure_acknowledgements", []).append(params)
-        elif ql.startswith("insert into") and "audit_runs" in ql and "returning" in ql:
-            run_id = len(self._store.setdefault("audit_runs", [])) + 1
-            self._store["audit_runs"].append((run_id, params))
-            self._returning_value = (run_id,)
-        elif ql.startswith("insert into") and "surface_b_benefit_disclosures" in ql:
-            self._store.setdefault("surface_b_benefit_disclosures", []).append(params)
-        elif ql.startswith("insert into") and "recommendations" in ql:
-            self._store.setdefault("recommendations", []).append(params)
-        elif ql.startswith("select 1 from"):
-            self._store["acknowledged_check_count"] = self._store.get("acknowledged_check_count", 0) + 1
-        else:
-            self._store.setdefault("other", []).append((query, params))
-
-    def fetchone(self):
-        if hasattr(self, "_returning_value"):
-            v = self._returning_value
-            del self._returning_value
-            return v
-        return None
-
-    def fetchall(self):
-        return []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-class FakeConnection:
-    def __init__(self, store: Dict[str, List[tuple]]):
-        self._store = store
-
-    def cursor(self):
-        return FakeCursor(self._store)
-
-    def commit(self):
-        self._store["commits"] = self._store.get("commits", 0) + 1
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-@contextmanager
-def patched_connect(monkeypatch, agent, store: Dict[str, List[tuple]]):
-    def fake(dsn: str):
-        return FakeConnection(store)
-
-    monkeypatch.setattr(agent, "psycopg_connect", fake)
-    yield
-
-
-def test_disclosure_gate_blocks_on_decline(monkeypatch) -> None:
-    agent = _load_agent_module()
-    store: Dict[str, List[tuple]] = {}
-
-    storage_result = {
-        "schema_name": "prophet_polymarket_edge",
-        "connection_string": "postgresql://example/prophet_polymarket_edge",
-    }
-    config = {
-        "inputs": {"watchlist_limit": 5, "consensus_context_limit": 5, "min_platforms": 3, "min_liquidity_usd": 0},
-        "secrets": {"SEREN_API_KEY": "test"},
-    }
-
-    class Args:
-        json_output = False
-        purge = False
-
-    with patched_connect(monkeypatch, agent, store):
-        result = agent.execute_run(
-            config=config,
-            args=Args(),
-            storage_result=storage_result,
-            user_id="user-1",
-            disclosure_response_fn=lambda _text: False,
-        )
-
-    assert result["status"] == "disclosure_declined"
-    # Exactly one telemetry event of type disclosure_declined was emitted,
-    # and no Polymarket intelligence calls were made (no recommendations).
-    telemetry = store.get("telemetry_events", [])
-    assert len(telemetry) == 1
-    assert telemetry[0][2] == "disclosure_declined"
-    assert "recommendations" not in store
-    assert "surface_b_benefit_disclosures" not in store
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +136,7 @@ def _sample_divergence_rows() -> List[dict]:
     ]
 
 
-def _sample_consensus_by_id() -> Dict[str, dict]:
+def _sample_consensus_by_id() -> dict:
     return {
         "open-on-prophet": {"consensus_probability": 0.27, "consensus_direction": "no", "freshness_note": "fresh <30m"},
         "long-tail-1": {"consensus_probability": 0.18, "consensus_direction": "no", "freshness_note": "fresh <2h"},
@@ -283,7 +163,7 @@ def test_watchlist_excludes_prophet_open_markets() -> None:
     assert "long-tail-2" in ids
 
 
-def test_watchlist_renders_surface_b_disclosure_above_list() -> None:
+def test_watchlist_renders_consensus_context_block() -> None:
     agent = _load_agent_module()
     candidates = agent.compute_watchlist_candidates(
         divergence_rows=_sample_divergence_rows(),
@@ -295,34 +175,11 @@ def test_watchlist_renders_surface_b_disclosure_above_list() -> None:
     )
     rendered = agent.render_watchlist(
         candidates=candidates,
-        surface_b_disclosure_persisted=True,
         prophet_authenticated=True,
     )
-    # Disclosure must precede the watchlist body.
-    disclosure_idx = rendered.index(agent.SURFACE_B_BENEFIT_DISCLOSURE)
-    list_marker_idx = rendered.index("Tranche 1 watchlist")
-    assert disclosure_idx < list_marker_idx
     # The verbatim consensus-context block is rendered for each entry.
     assert agent.CONSENSUS_CONTEXT_BLOCK.split("\n")[0] in rendered
-
-
-def test_watchlist_suppresses_deep_links_when_disclosure_row_missing() -> None:
-    agent = _load_agent_module()
-    candidates = agent.compute_watchlist_candidates(
-        divergence_rows=_sample_divergence_rows(),
-        consensus_by_id=_sample_consensus_by_id(),
-        prophet_open_titles=[],
-        watchlist_limit=5,
-        min_platforms=3,
-        min_liquidity_usd=10000,
-    )
-    rendered = agent.render_watchlist(
-        candidates=candidates,
-        surface_b_disclosure_persisted=False,
-        prophet_authenticated=True,
-    )
-    assert "[Create this market on Prophet]" not in rendered
-    assert "deep link suppressed" in rendered
+    assert "Tranche 1 watchlist" in rendered
 
 
 def test_watchlist_suppresses_deep_links_when_unauthenticated() -> None:
@@ -337,7 +194,6 @@ def test_watchlist_suppresses_deep_links_when_unauthenticated() -> None:
     )
     rendered = agent.render_watchlist(
         candidates=candidates,
-        surface_b_disclosure_persisted=True,
         prophet_authenticated=False,
     )
     assert "[Create this market on Prophet]" not in rendered
@@ -437,52 +293,15 @@ def test_yes_live_is_rejected_at_v1(monkeypatch, capsys) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Renderer-invariant freeze for verbatim disclosure text
+# Renderer-invariant freeze for the §6.1 consensus context block
 # ---------------------------------------------------------------------------
 
 
-def test_disclosure_blocks_are_frozen_verbatim() -> None:
+def test_consensus_context_block_is_frozen_verbatim() -> None:
     agent = _load_agent_module()
-    # The exact strings live in the source as constants; this test pins the
-    # text and fails loudly if anyone edits them without an audit revision.
-    assert agent.SURFACE_B_BENEFIT_DISCLOSURE == (
-        "Launch-week note: Prophet benefits if you create markets from this\n"
-        "watchlist because it helps populate Prophet's market book during\n"
-        "Tranche 1. This list is sponsored content. You can read it without\n"
-        "creating a market."
-    )
     assert agent.CONSENSUS_CONTEXT_BLOCK == (
         "Cross-platform consensus context, where available.\n"
         "This is not Prophet's quote, not a trading signal, and not a claim\n"
         "that the AI House will price above or below it. Use it only as\n"
         "background context when deciding whether the market is worth creating."
     )
-    assert "[Paid Prophet recommendation]" in agent.PAID_RECOMMENDATION_DISCLOSURE
-    assert "Continue? y/n" in agent.PAID_RECOMMENDATION_DISCLOSURE
-
-
-# ---------------------------------------------------------------------------
-# --purge preserves the disclosure ledger (acceptance criterion #11)
-# ---------------------------------------------------------------------------
-
-
-def test_purge_preserves_disclosure_ledger() -> None:
-    """--purge deletes audit content but never touches disclosure_acknowledgements.
-
-    The table is the legal ledger required for 3-year retention (§13.20).
-    We assert that no DELETE statement targets the table within the purge
-    function body. The function may still mention the table name in a
-    docstring/comment (that documents the intent).
-    """
-    src = SCRIPT_PATH.read_text(encoding="utf-8")
-    start = src.index("def purge_user_audit_content(")
-    end = src.index("\ndef ", start + 1)
-    body = src[start:end]
-    code_only = _strip_comments_and_docstrings(body)
-    assert "disclosure_acknowledgements" not in code_only, (
-        "purge_user_audit_content must NOT touch disclosure_acknowledgements in code; "
-        "the legal ledger is preserved per design doc §13.20"
-    )
-    # Sanity: the purge body does delete the audit-content tables.
-    for tbl in ("audit_runs", "audit_findings", "recommendations", "surface_b_benefit_disclosures"):
-        assert "DELETE FROM" in body and tbl in body

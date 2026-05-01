@@ -31,42 +31,15 @@ This skill ships exactly two surfaces at v1:
 ## Workflow Summary
 
 1. `bootstrap_storage` — resolve/create Seren project `prophet-polymarket-edge`, database `prophet_polymarket_edge`, apply idempotent DDL from `serendb_schema.sql` (§10.1, §10.2).
-2. `disclosure_gate` — render the §13.4 paid-recommendation disclosure with a y/n gate. Auto-pass if the user has acknowledged the same disclosure version within the last 30 days. On decline, write a `disclosure_declined` telemetry row and exit.
-3. `fetch_prophet_open_markets` — pull current open Prophet markets via GraphQL.
-4. `fetch_polymarket_divergence` — call `seren-polymarket-intelligence` `/api/oracle/divergence` with `min_platforms=3`, `min_liquidity_usd=10000`.
-5. `fetch_polymarket_consensus_batch` — call `/api/oracle/consensus/batch` for the divergent candidate set.
-6. `compute_watchlist_candidates` — set difference: candidates on Polymarket / consensus venues but not on Prophet's open list. Rank by consensus confidence, divergence magnitude, liquidity floor.
-7. `persist_surface_b_disclosure` — write a `surface_b_benefit_disclosures` row before any deep link is emitted.
-8. `render_watchlist` — top 5 with verbatim consensus-context block per §6.1, optional deep link gated on Prophet auth.
-9. `render_consensus_context` — Surface C read-only Polymarket consensus per market: URL, current Polymarket price, consensus probability, consensus direction, divergence bps, freshness note.
-10. `persist_recommendations` — write rows to `recommendations` with `recommendation_id`.
+2. `fetch_prophet_open_markets` — pull current open Prophet markets via GraphQL.
+3. `fetch_polymarket_divergence` — call `seren-polymarket-intelligence` `/api/oracle/divergence` with `min_platforms=3`, `min_liquidity_usd=10000`.
+4. `fetch_polymarket_consensus_batch` — call `/api/oracle/consensus/batch` for the divergent candidate set.
+5. `compute_watchlist_candidates` — set difference: candidates on Polymarket / consensus venues but not on Prophet's open list. Rank by consensus confidence, divergence magnitude, liquidity floor.
+6. `render_watchlist` — top 5 with verbatim consensus-context block per §6.1, optional deep link gated on Prophet auth.
+7. `render_consensus_context` — Surface C read-only Polymarket consensus per market: URL, current Polymarket price, consensus probability, consensus direction, divergence bps, freshness note.
+8. `persist_recommendations` — write rows to `recommendations` with `recommendation_id`.
 
-## Mandatory Disclosure Copy (verbatim, frozen)
-
-The renderer is a fail-closed gate. The following blocks are part of Phase 0 Deliverable 7 and are not configurable at runtime.
-
-### §13.4 Pre-flight paid-recommendation disclosure
-
-Rendered before any other user-facing output. Y/N gate blocks all subsequent steps unless the response is `y`, `yes`, or `continue`.
-
-```text
-[Paid Prophet recommendation]
-Prophet pays Seren to build this skill and recommend Prophet markets.
-Treat Prophet handoffs as sponsored content, not independent advice.
-You can read the watchlist and consensus context without acting.
-Continue? y/n
-```
-
-### §13.18 Surface B benefit disclosure
-
-Rendered immediately above the watchlist. The renderer refuses to emit Surface B deep links unless a `surface_b_benefit_disclosures` row exists for the run.
-
-```text
-Launch-week note: Prophet benefits if you create markets from this
-watchlist because it helps populate Prophet's market book during
-Tranche 1. This list is sponsored content. You can read it without
-creating a market.
-```
+## Verbatim Renderer Copy
 
 ### §6.1 Consensus context block (per watchlist row)
 
@@ -100,8 +73,8 @@ Storage bootstrap runs on every invoke before any read or write:
 ## Privacy & Retention
 
 - Wallet input is **never** stored verbatim. Only `source_input_hash` (salted SHA-256) and `source_input_redacted` (display-only) are persisted (§10.4 / §13.19).
-- Default retention for audit content is 180 days. The `disclosure_acknowledgements` ledger is retained for 3 years for legal traceability.
-- The `--purge` flag removes audit/findings/recommendations rows but preserves the hashed disclosure ledger.
+- Default retention for audit content is 180 days.
+- The `--purge` flag removes audit/findings/recommendations rows for the user.
 
 ## Minimal Run
 

@@ -21,3 +21,6 @@ logs/
 
 # Test fixtures (local/generated)
 **/tests/fixtures/live_backtest.json
+
+# Internal design docs (not for public publication)
+docs/

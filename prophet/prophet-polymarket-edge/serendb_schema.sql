@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS {{schema_name}}.audit_runs (
     premium_recovered_usd NUMERIC,
     premium_lost_usd NUMERIC,
     surfaces_invoked TEXT[],
-    status TEXT CHECK (status IN ('running','completed','failed','blocked','disclosure_declined')),
+    status TEXT CHECK (status IN ('running','completed','failed','blocked')),
     failure_reason TEXT
 );
 
@@ -82,18 +82,6 @@ CREATE TABLE IF NOT EXISTS {{schema_name}}.recommendations (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- §13.4 paid-recommendation disclosure ledger. Retained for 3 years
--- minimum (legal traceability). `--purge` preserves this table.
-CREATE TABLE IF NOT EXISTS {{schema_name}}.disclosure_acknowledgements (
-    id SERIAL PRIMARY KEY,
-    user_id_hash TEXT NOT NULL,
-    disclosure_version TEXT NOT NULL,
-    acknowledgement_text_hash TEXT NOT NULL,
-    channel_surface TEXT NOT NULL,
-    acknowledged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id_hash, acknowledgement_text_hash)
-);
-
 -- §13.19 cost-estimate gate. v1 ships the table for forward-compatibility
 -- with Surface A; Surface B/C runs do not write rows here.
 CREATE TABLE IF NOT EXISTS {{schema_name}}.cost_estimate_gates (
@@ -105,16 +93,6 @@ CREATE TABLE IF NOT EXISTS {{schema_name}}.cost_estimate_gates (
     trades_in_estimate INTEGER,
     user_response TEXT CHECK (user_response IN ('accepted','declined','default_top50','full_history')),
     responded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- §13.18 Surface B benefit disclosure. The renderer refuses to emit
--- watchlist deep links unless a row exists for the audit run.
-CREATE TABLE IF NOT EXISTS {{schema_name}}.surface_b_benefit_disclosures (
-    id SERIAL PRIMARY KEY,
-    audit_run_id INTEGER REFERENCES {{schema_name}}.audit_runs(id),
-    disclosure_text_hash TEXT NOT NULL,
-    disclosed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (audit_run_id, disclosure_text_hash)
 );
 
 -- Telemetry events for evals and conversion measurement.

@@ -6,8 +6,7 @@ V1 scope (May 1, 2026 launch contingency from design doc §11 / §13.9):
 - Surface B (read-only Tranche 1 watchlist): pull Prophet open markets via
   Prophet GraphQL, pull Polymarket consensus + divergence via
   seren-polymarket-intelligence, compute the set difference, render the top
-  N candidates with the verbatim §6.1 consensus-context block and §13.18
-  Surface B benefit disclosure.
+  N candidates with the verbatim §6.1 consensus-context block.
 - Surface C (read-only Polymarket consensus context): for each divergent
   market, render Polymarket URL, current Polymarket price, consensus
   probability, consensus direction (verbatim labels), divergence in bps,
@@ -21,7 +20,6 @@ vars are never solicited.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -51,22 +49,6 @@ DEFAULT_INTEL_BASE_URL = "https://api.serendb.com/publishers/seren-polymarket-in
 DEFAULT_SEREN_DB_BASE_URL = "https://api.serendb.com/publishers/seren-db"
 SEREN_SKILLS_DOCS_URL = "https://docs.serendb.com/skills.md"
 
-# Frozen verbatim copy. These strings are part of Phase 0 Deliverable 7
-# and are enforced by tests; do not edit without an audit revision.
-DISCLOSURE_VERSION = "v3-paid-prophet-recommendation"
-PAID_RECOMMENDATION_DISCLOSURE = (
-    "[Paid Prophet recommendation]\n"
-    "Prophet pays Seren to build this skill and recommend Prophet markets.\n"
-    "Treat Prophet handoffs as sponsored content, not independent advice.\n"
-    "You can read the watchlist and consensus context without acting.\n"
-    "Continue? y/n"
-)
-SURFACE_B_BENEFIT_DISCLOSURE = (
-    "Launch-week note: Prophet benefits if you create markets from this\n"
-    "watchlist because it helps populate Prophet's market book during\n"
-    "Tranche 1. This list is sponsored content. You can read it without\n"
-    "creating a market."
-)
 CONSENSUS_CONTEXT_BLOCK = (
     "Cross-platform consensus context, where available.\n"
     "This is not Prophet's quote, not a trading signal, and not a claim\n"
@@ -690,16 +672,6 @@ def _as_int(value: Any) -> Optional[int]:
 # ---------------------------------------------------------------------------
 
 
-def render_paid_recommendation_disclosure() -> str:
-    """Return the verbatim §13.4 paid-recommendation disclosure block."""
-    return PAID_RECOMMENDATION_DISCLOSURE
-
-
-def render_surface_b_disclosure_text() -> str:
-    """Return the verbatim §13.18 Surface B benefit disclosure block."""
-    return SURFACE_B_BENEFIT_DISCLOSURE
-
-
 def render_consensus_context_label() -> str:
     """Return the verbatim §6.1 consensus-context block."""
     return CONSENSUS_CONTEXT_BLOCK
@@ -708,25 +680,16 @@ def render_consensus_context_label() -> str:
 def render_watchlist(
     *,
     candidates: List[WatchlistCandidate],
-    surface_b_disclosure_persisted: bool,
     prophet_authenticated: bool,
 ) -> str:
     """Render the Surface B watchlist.
 
-    The surface_b_disclosure_persisted flag is the renderer invariant from
-    §13.18. If False, the renderer refuses to emit deep links.
-
     The prophet_authenticated flag controls deep-link rendering per the
-    Surface B auth split (§13.18 / final v3 audit P1-3).
+    Surface B auth split (final v3 audit P1-3): the watchlist itself
+    renders unauthenticated, but the "Create this market on Prophet"
+    deep link requires Prophet auth.
     """
-    if not surface_b_disclosure_persisted:
-        deep_links_allowed = False
-    else:
-        deep_links_allowed = prophet_authenticated
-
     lines: List[str] = []
-    lines.append(SURFACE_B_BENEFIT_DISCLOSURE)
-    lines.append("")
     lines.append("Tranche 1 watchlist — Prophet markets not yet open")
     lines.append("=" * 60)
     if not candidates:
@@ -746,15 +709,10 @@ def render_watchlist(
             lines.append(f"   consensus direction: {c.consensus_direction}")
         if c.divergence_bps is not None:
             lines.append(f"   divergence: {c.divergence_bps} bps")
-        if deep_links_allowed:
+        if prophet_authenticated:
             lines.append(f"   [Create this market on Prophet]  (canonical id: {c.canonical_id})")
         else:
-            reason = (
-                "Surface B benefit disclosure not persisted"
-                if not surface_b_disclosure_persisted
-                else "Prophet auth not provided; sign in to create the market"
-            )
-            lines.append(f"   (deep link suppressed — {reason})")
+            lines.append("   (deep link suppressed — Prophet auth not provided; sign in to create the market)")
     return "\n".join(lines)
 
 
@@ -789,87 +747,8 @@ def render_consensus_context(rows: List[ConsensusContextRow]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Disclosure gate (§13.4 verbatim) and Surface B disclosure persistence (§13.18)
+# Telemetry + audit-run + recommendation persistence
 # ---------------------------------------------------------------------------
-
-
-def hash_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def hash_user(user_id: str, salt: str = "prophet-polymarket-edge-v1") -> str:
-    return hashlib.sha256(f"{salt}:{user_id}".encode("utf-8")).hexdigest()
-
-
-def disclosure_acknowledged_recently(
-    *,
-    connection_string: str,
-    schema_name: str,
-    user_id: str,
-    disclosure_text: str,
-    days: int = 30,
-) -> bool:
-    """Return True if the same user has acknowledged the same disclosure
-    text within the lookback window. Used by §5.1 step 1's auto-pass rule.
-    """
-    try:
-        with psycopg_connect(connection_string) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    SELECT 1 FROM {schema_name}.disclosure_acknowledgements
-                    WHERE user_id_hash = %s
-                      AND acknowledgement_text_hash = %s
-                      AND acknowledged_at > NOW() - INTERVAL '%s days'
-                    LIMIT 1
-                    """,
-                    (hash_user(user_id), hash_text(disclosure_text), int(days)),
-                )
-                return cur.fetchone() is not None
-    except Exception:
-        return False
-
-
-def write_disclosure_acknowledgement(
-    *,
-    connection_string: str,
-    schema_name: str,
-    user_id: str,
-    disclosure_text: str,
-    channel_surface: str = "cli",
-) -> None:
-    with psycopg_connect(connection_string) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                INSERT INTO {schema_name}.disclosure_acknowledgements
-                  (user_id_hash, disclosure_version, acknowledgement_text_hash, channel_surface)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (user_id_hash, acknowledgement_text_hash) DO NOTHING
-                """,
-                (hash_user(user_id), DISCLOSURE_VERSION, hash_text(disclosure_text), channel_surface),
-            )
-        conn.commit()
-
-
-def write_surface_b_disclosure(
-    *,
-    connection_string: str,
-    schema_name: str,
-    audit_run_id: int,
-) -> None:
-    with psycopg_connect(connection_string) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                INSERT INTO {schema_name}.surface_b_benefit_disclosures
-                  (audit_run_id, disclosure_text_hash)
-                VALUES (%s, %s)
-                ON CONFLICT (audit_run_id, disclosure_text_hash) DO NOTHING
-                """,
-                (audit_run_id, hash_text(SURFACE_B_BENEFIT_DISCLOSURE)),
-            )
-        conn.commit()
 
 
 def write_telemetry_event(
@@ -989,19 +868,16 @@ def purge_user_audit_content(
     schema_name: str,
     user_id: str,
 ) -> dict:
-    """Delete audit content for a user but preserve the disclosure ledger.
+    """Delete all audit content for a user.
 
-    Per §10.4: `--purge` deletes audit_runs, audit_findings, recommendations,
-    cost_estimate_gates, surface_b_benefit_disclosures, telemetry_events,
-    and wallet_identities. It does NOT delete disclosure_acknowledgements,
-    which is retained for legal traceability for 3 years (§13.20).
+    Removes audit_runs, audit_findings, recommendations,
+    cost_estimate_gates, telemetry_events, and wallet_identities.
     """
     deleted = {
         "audit_runs": 0,
         "audit_findings": 0,
         "recommendations": 0,
         "cost_estimate_gates": 0,
-        "surface_b_benefit_disclosures": 0,
         "telemetry_events": 0,
         "wallet_identities": 0,
     }
@@ -1029,11 +905,6 @@ def purge_user_audit_content(
                 )
                 deleted["cost_estimate_gates"] = cur.rowcount
                 cur.execute(
-                    f"DELETE FROM {schema_name}.surface_b_benefit_disclosures WHERE audit_run_id = ANY(%s)",
-                    (run_ids,),
-                )
-                deleted["surface_b_benefit_disclosures"] = cur.rowcount
-                cur.execute(
                     f"DELETE FROM {schema_name}.telemetry_events WHERE audit_run_id = ANY(%s)",
                     (run_ids,),
                 )
@@ -1057,29 +928,14 @@ def purge_user_audit_content(
 # ---------------------------------------------------------------------------
 
 
-def _read_disclosure_response(prompt_text: str) -> bool:
-    """Render the disclosure to stderr and read y/n from stdin."""
-    print(prompt_text, file=sys.stderr, flush=True)
-    try:
-        line = input().strip().lower()
-    except EOFError:
-        return False
-    return line in {"y", "yes", "continue"}
-
-
 def execute_run(
     *,
     config: dict,
     args: argparse.Namespace,
     storage_result: dict,
     user_id: str,
-    disclosure_response_fn=None,
 ) -> dict:
-    """Run the Surface B + Surface C pipeline.
-
-    `disclosure_response_fn` is injectable for tests. When None, the prompt
-    is read from stdin.
-    """
+    """Run the Surface B + Surface C pipeline."""
     inputs = config.get("inputs") if isinstance(config.get("inputs"), dict) else {}
     watchlist_limit = int(inputs.get("watchlist_limit") or 5)
     consensus_context_limit = int(inputs.get("consensus_context_limit") or 10)
@@ -1097,55 +953,6 @@ def execute_run(
     schema_name = storage_result["schema_name"]
     connection_string = storage_result["connection_string"]
 
-    # Pre-flight disclosure gate (§5.1 step 1, §13.4).
-    if disclosure_response_fn is None:
-        # Auto-pass via 30-day cache
-        if disclosure_acknowledged_recently(
-            connection_string=connection_string,
-            schema_name=schema_name,
-            user_id=user_id,
-            disclosure_text=PAID_RECOMMENDATION_DISCLOSURE,
-        ):
-            response = True
-            reused = True
-        else:
-            response = _read_disclosure_response(PAID_RECOMMENDATION_DISCLOSURE)
-            reused = False
-    else:
-        response = disclosure_response_fn(PAID_RECOMMENDATION_DISCLOSURE)
-        reused = False
-
-    if not response:
-        run_id = insert_audit_run(
-            connection_string=connection_string,
-            schema_name=schema_name,
-            user_id=user_id,
-            surfaces=[],
-            status="disclosure_declined",
-        )
-        write_telemetry_event(
-            connection_string=connection_string,
-            schema_name=schema_name,
-            user_id=user_id,
-            audit_run_id=run_id,
-            event_type="disclosure_declined",
-            payload={"disclosure_version": DISCLOSURE_VERSION},
-        )
-        return {
-            "status": "disclosure_declined",
-            "audit_run_id": run_id,
-            "json_output": json_output,
-        }
-
-    if not reused:
-        write_disclosure_acknowledgement(
-            connection_string=connection_string,
-            schema_name=schema_name,
-            user_id=user_id,
-            disclosure_text=PAID_RECOMMENDATION_DISCLOSURE,
-        )
-
-    # Audit run row (this is a Surface B/C run; Surface A fields stay null).
     audit_run_id = insert_audit_run(
         connection_string=connection_string,
         schema_name=schema_name,
@@ -1153,15 +960,6 @@ def execute_run(
         surfaces=["B_tranche1", "C_polymarket"],
         status="running",
     )
-    if reused:
-        write_telemetry_event(
-            connection_string=connection_string,
-            schema_name=schema_name,
-            user_id=user_id,
-            audit_run_id=audit_run_id,
-            event_type="disclosure_reused",
-            payload={"disclosure_version": DISCLOSURE_VERSION},
-        )
 
     # Pull data
     intel = PolymarketIntelligence(api_key=api_key)
@@ -1187,14 +985,8 @@ def execute_run(
         min_liquidity_usd=min_liquidity_usd,
     )
 
-    write_surface_b_disclosure(
-        connection_string=connection_string,
-        schema_name=schema_name,
-        audit_run_id=audit_run_id,
-    )
     surface_b_text = render_watchlist(
         candidates=surface_b,
-        surface_b_disclosure_persisted=True,
         prophet_authenticated=bool(prophet_token),
     )
 
