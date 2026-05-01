@@ -1,0 +1,25 @@
+{
+  "inputs": {
+    "command": "run",
+    "json_output": false,
+    "watchlist_limit": 5,
+    "consensus_context_limit": 10,
+    "min_platforms": 3,
+    "min_liquidity_usd": 10000
+  },
+  "storage": {
+    "auto_bootstrap": true,
+    "project_name": "prophet-polymarket-edge",
+    "database_name": "prophet_polymarket_edge",
+    "schema_name": "prophet_polymarket_edge",
+    "region": "aws-us-east-2"
+  },
+  "secrets": {
+    "SEREN_API_KEY": "${SEREN_API_KEY}",
+    "PROPHET_SESSION_TOKEN": "${PROPHET_SESSION_TOKEN}"
+  },
+  "policies": {
+    "dry_run_default": true,
+    "execution_disabled": true
+  }
+}
