@@ -289,7 +289,7 @@ def test_yes_live_is_rejected_at_v1(monkeypatch, capsys) -> None:
     rc = agent.main(["--yes-live"])
     assert rc == 2
     err = capsys.readouterr().err
-    assert "rejected at v1 launch" in err
+    assert "blocked by the trading-safety gates" in err
 
 
 # ---------------------------------------------------------------------------

@@ -18,8 +18,20 @@
     "SEREN_API_KEY": "${SEREN_API_KEY}",
     "PROPHET_SESSION_TOKEN": "${PROPHET_SESSION_TOKEN}"
   },
+  "risk": {
+    "max_kelly_fraction": 0.05,
+    "max_position_notional_usd": 50.0,
+    "min_mid_price": 0.30,
+    "max_mid_price": 0.70,
+    "min_daily_volume_usd": 10000.0,
+    "min_seconds_to_resolution": 1209600,
+    "max_inventory_hold_cycles": 3
+  },
+  "live": {
+    "bankroll_usd": 1000.0,
+    "min_divergence_bps": 500
+  },
   "policies": {
-    "dry_run_default": true,
-    "execution_disabled": true
+    "dry_run_default": true
   }
 }

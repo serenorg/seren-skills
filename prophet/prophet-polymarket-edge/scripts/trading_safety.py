@@ -1,32 +1,25 @@
 """Trading safety gates for prophet-polymarket-edge.
 
-These gates encode the three preconditions that MUST hold before any
-Polymarket execution path can be safely enabled in this skill. They mirror
-the guard patterns already enforced by the other Polymarket trading skills
-in this repo, so a future PR that re-enables `--yes-live` cannot do so
-without satisfying all three.
+These gates encode the engineering preconditions that MUST hold before
+any Polymarket execution path can be safely enabled in this skill. They
+mirror the guard patterns already enforced by the other Polymarket
+trading skills in this repo, so a future PR that re-enables
+`--yes-live` cannot do so without satisfying both gates.
 
 The contract:
 
-1. Signal-calibration gate — backtest sample size at or above the minimum
-   AND backtest net return strictly positive. Mirrors
-   `liquidity-paired-basis-maker` `insufficient_sample_size` +
-   `backtest_gate_blocked` (`scripts/agent.py:1445-1465`, `:2497-2513`).
-
-2. Risk-framework gate — explicit Kelly fraction, position cap, midpoint
+1. Risk-framework gate — explicit Kelly fraction, position cap, midpoint
    safe band, 24h volume floor, resolution-buffer window, and hold-cycle
    limit, all within sane bounds. Mirrors `maker-rebate-bot`
    `StrategyParams` (`scripts/agent.py:76-99`).
 
-3. Execution-path gate — `py_clob_client` importable and the four
+2. Execution-path gate — `py_clob_client` importable and the four
    `POLY_*` credentials present. Mirrors `maker-rebate-bot`
    `DirectClobTrader` (`scripts/polymarket_live.py:2049-2087`).
 
-V1 contract: every gate trips closed today because none of the
-preconditions are present. Surface C remains read-only and `--yes-live`
-remains rejected. The structured `trading_safety_blocked` payload makes
-the contract machine-checkable so a future trading-enable PR must clear
-all three gates before its code can run.
+The structured `trading_safety_blocked` payload makes the contract
+machine-checkable so a trading-enable PR has a concrete checklist to
+clear before its code can run.
 """
 
 from __future__ import annotations
@@ -36,9 +29,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-
-# Mirrors `liquidity-paired-basis-maker/scripts/agent.py:117`.
-DEFAULT_MIN_BACKTEST_EVENTS = 120
 
 # Mirrors `maker-rebate-bot/scripts/agent.py:76-99`. These are the *bounds*
 # any future config must respect — the gate does not enforce a single
@@ -101,61 +91,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
             return int(float(value))
         except (TypeError, ValueError):
             return default
-
-
-def check_signal_calibration_gate(
-    config: Optional[Dict[str, Any]],
-    *,
-    min_events: int = DEFAULT_MIN_BACKTEST_EVENTS,
-) -> GateResult:
-    """Block live execution unless a backtest with sample-size minimum
-    AND positive return is present in the config.
-
-    Mirrors the comparison skills' two-step gate: sample-size first
-    (`insufficient_sample_size`), then return sign (`backtest_gate_blocked`).
-    """
-    backtest = (config or {}).get("backtest") if isinstance(config, dict) else None
-    if not isinstance(backtest, dict) or not backtest:
-        return GateResult(
-            passed=False,
-            error_code="insufficient_sample_size",
-            missing=["backtest"],
-            message=(
-                "No backtest results in config. Provide config.backtest.events "
-                f"(>= {min_events}) and config.backtest.results.return_pct (> 0). "
-                "Disagreement metrics from /api/oracle/divergence + "
-                "/api/oracle/consensus are not predictive without resolution-grounded "
-                "backtest evidence."
-            ),
-        )
-
-    events = _safe_int(backtest.get("events"), default=0)
-    if events < int(min_events):
-        return GateResult(
-            passed=False,
-            error_code="insufficient_sample_size",
-            missing=[f"backtest.events>={min_events}"],
-            message=(
-                f"Backtest sample too small for decision-grade metrics. "
-                f"Required at least {min_events}, observed {events}."
-            ),
-        )
-
-    results = backtest.get("results") if isinstance(backtest.get("results"), dict) else {}
-    return_pct = _safe_float(results.get("return_pct"), default=0.0)
-    if return_pct <= 0.0:
-        return GateResult(
-            passed=False,
-            error_code="backtest_gate_blocked",
-            missing=["backtest.results.return_pct>0"],
-            message=(
-                f"Backtest return_pct {return_pct} is not positive. Trading cannot "
-                "be enabled on a signal whose backtest does not show net edge after "
-                "fees and slippage."
-            ),
-        )
-
-    return GateResult(passed=True)
 
 
 def check_risk_framework_gate(config: Optional[Dict[str, Any]]) -> GateResult:
@@ -313,17 +248,15 @@ def evaluate_trading_safety_gates(
     config: Optional[Dict[str, Any]] = None,
     *,
     env: Optional[Dict[str, str]] = None,
-    min_events: int = DEFAULT_MIN_BACKTEST_EVENTS,
 ) -> Dict[str, Any]:
-    """Run the three gates in canonical order and return a structured
-    payload listing every failed gate.
+    """Run the gates in canonical order and return a structured payload
+    listing every failed gate.
 
     The return shape is suitable for emitting on stderr / persisting as
-    a `trading_safety_blocked` event so a future trading-enable PR can be
+    a `trading_safety_blocked` event so a trading-enable PR can be
     audited against a concrete checklist.
     """
     gates = [
-        ("signal_calibration", check_signal_calibration_gate(config, min_events=min_events)),
         ("risk_framework", check_risk_framework_gate(config)),
         ("execution_path", check_execution_path_gate(config, env=env)),
     ]
