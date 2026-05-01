@@ -21,6 +21,16 @@ This skill ships exactly two surfaces at v1:
 
 **Execution is disabled at v1.** Surface C does not accept `--yes-live`. `POLY_*` credentials are not solicited. The skill prints read-only consensus context and exits.
 
+## Trading Safety Gates
+
+Even though `--yes-live` is rejected at v1, the rejection now carries a machine-checkable contract. Any future PR that wants to re-enable Polymarket execution MUST satisfy all three gates in `scripts/trading_safety.py` before its code path can run. Today every gate trips closed because none of the preconditions are wired.
+
+1. **Signal-calibration gate** (`check_signal_calibration_gate`) — fails closed unless `config.backtest.events >= 120` AND `config.backtest.results.return_pct > 0`. Disagreement metrics from `/api/oracle/divergence` + `/api/oracle/consensus` are not predictive without resolution-grounded backtest evidence. Mirrors `liquidity-paired-basis-maker` `insufficient_sample_size` + `backtest_gate_blocked`.
+2. **Risk-framework gate** (`check_risk_framework_gate`) — fails closed unless `config.risk` carries Kelly fraction (`0 < x ≤ 0.10`), midpoint safe band (`0.30 ≤ min < max ≤ 0.70`), 24h volume floor (`≥ $5,000`), resolution-buffer window (`≥ 14 days`), hold-cycle limit (`≥ 1`), and a positive position cap. Mirrors `maker-rebate-bot` `StrategyParams`.
+3. **Execution-path gate** (`check_execution_path_gate`) — fails closed unless `py_clob_client` is importable AND `POLY_PRIVATE_KEY` (or `WALLET_PRIVATE_KEY`) AND `POLY_API_KEY` AND `POLY_PASSPHRASE` AND `POLY_SECRET` are all present in the process environment. Mirrors `maker-rebate-bot` `DirectClobTrader`.
+
+When `--yes-live` is passed, the runtime calls `evaluate_trading_safety_gates(config)` and emits a structured `trading_safety_blocked` payload on stderr listing every failed gate with its `error_code`, `missing` list, and a human-readable remediation `message`. The process exits with code 2. Error codes: `insufficient_sample_size`, `backtest_gate_blocked`, `risk_framework_missing`, `risk_framework_unsafe`, `clob_client_missing`, `poly_credentials_missing`.
+
 ## When to Use
 
 - run a Prophet Tranche 1 watchlist (May 1–8 launch window)

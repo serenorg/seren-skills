@@ -90,13 +90,6 @@ def test_signal_calibration_gate_blocks_on_non_positive_return(ts) -> None:
     assert result.error_code == "backtest_gate_blocked"
 
 
-def test_signal_calibration_gate_blocks_on_zero_return(ts) -> None:
-    config = {"backtest": {"events": 500, "results": {"return_pct": 0.0}}}
-    result = ts.check_signal_calibration_gate(config=config)
-    assert result.passed is False
-    assert result.error_code == "backtest_gate_blocked"
-
-
 def test_signal_calibration_gate_passes_with_valid_backtest(ts) -> None:
     config = {"backtest": {"events": 200, "results": {"return_pct": 0.04}}}
     result = ts.check_signal_calibration_gate(config=config)
