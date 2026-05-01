@@ -53,6 +53,10 @@ def _full_passing_risk() -> Dict[str, Any]:
 
 
 def _surface_c_rows() -> List[Dict[str, Any]]:
+    # Shape mirrors the post-#462 fail-closed Surface C contract: rows
+    # carry `liquidity_usd` and `end_date_iso` so the runtime gates the
+    # trading-safety check validates in config can actually be enforced
+    # at execution time.
     return [
         {
             "canonical_id": "row-tradable",
@@ -64,6 +68,8 @@ def _surface_c_rows() -> List[Dict[str, Any]]:
             "consensus_direction": "yes",
             "divergence_bps": 1500,
             "freshness_note": "fresh <30m",
+            "liquidity_usd": 50000.0,
+            "end_date_iso": "2099-01-01T00:00:00Z",
         },
     ]
 
@@ -169,6 +175,9 @@ def test_yes_live_emits_live_executions_when_gates_pass(agent, monkeypatch, caps
             submitted.append({"token_id": token_id, "side": side, "price": price, "size": size})
             return {"order_id": f"order-{len(submitted)}", "status": "submitted"}
 
+        def get_positions(self) -> Any:
+            return []
+
     monkeypatch.setattr(agent, "DirectClobTrader", StubTrader)
 
     # Stub the read-only Surface C output that the live path consumes.
@@ -178,6 +187,25 @@ def test_yes_live_emits_live_executions_when_gates_pass(agent, monkeypatch, caps
         lambda config: _surface_c_rows(),
     )
 
+    # Avoid the live CLOB book call. The live-book pricing path is exercised
+    # by `test_skips_when_book_has_no_ask` below; this end-to-end test only
+    # asserts wiring, not the book-pricing math.
+    monkeypatch.setattr(
+        agent,
+        "build_marketable_buy_order",
+        lambda token_id, notional_usd: {
+            "token_id": token_id,
+            "price": 0.42,
+            "tick_size": "0.01",
+            "best_ask": 0.42,
+            "size_shares": round(notional_usd / 0.42, 6),
+            "execution_style": "marketable-limit-best-ask",
+        },
+    )
+
+    # Avoid disk persistence side-effects across test runs.
+    monkeypatch.setattr(agent, "_save_position_cycles", lambda state, path=None: None)
+
     rc = agent.main(["--yes-live", "--config", str(config_path)])
     out = capsys.readouterr().out
     assert rc == 0, f"expected rc=0, got {rc}; stdout={out!r}"
@@ -185,3 +213,5 @@ def test_yes_live_emits_live_executions_when_gates_pass(agent, monkeypatch, caps
     assert len(submitted) == 1
     assert submitted[0]["token_id"] == "0xtoken_tradable"
     assert submitted[0]["side"] == "BUY"
+    # Live price replaces the cached publisher snapshot.
+    assert submitted[0]["price"] == 0.42

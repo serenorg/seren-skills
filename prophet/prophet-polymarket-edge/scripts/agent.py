@@ -1086,6 +1086,36 @@ def _consensus_to_dict(r: ConsensusContextRow) -> dict:
     }
 
 
+def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
+    """Best-effort ISO-8601 parser. Returns None when the value cannot be
+    interpreted as a UTC datetime. The publisher returns a mix of
+    `2026-08-01T00:00:00Z` and `2026-08-01T00:00:00+00:00`; both must work."""
+    if not isinstance(value, str) or not value:
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _seconds_to_resolution(end_iso: Any, *, now: Optional[datetime] = None) -> Optional[int]:
+    """Return seconds until `end_iso`. None when the timestamp is missing or
+    unparseable. Negative values (already-resolved markets) are returned as 0
+    so callers can fail-closed without a separate sentinel."""
+    parsed = _parse_iso_timestamp(end_iso)
+    if parsed is None:
+        return None
+    current = now or datetime.now(timezone.utc)
+    delta = (parsed - current).total_seconds()
+    return max(0, int(delta))
+
+
 # ---------------------------------------------------------------------------
 # Live execution path (--yes-live)
 #
@@ -1417,14 +1447,21 @@ def compute_live_executions(
     risk: Dict[str, Any],
     bankroll_usd: float,
     min_divergence_bps: int,
+    now: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
     """Plan BUY orders on the consensus side for divergent Surface C rows.
 
-    Returns one plan per tradable row. Skips silently when:
-      - `consensus_direction` is missing
-      - `polymarket_token_id` is missing
-      - `divergence_bps` is below the configured floor
-      - Kelly edge is non-positive
+    Enforces every safe-execution gate the trading-safety check validates
+    in config but the live path historically did not honor:
+
+      - safe-band: `min_mid_price <= polymarket_price <= max_mid_price`
+      - liquidity: `liquidity_usd >= min_daily_volume_usd` (publisher proxy)
+      - resolution buffer: `seconds_to_resolution >= min_seconds_to_resolution`
+      - per-run bankroll cap: aggregate `notional_usd` across plans never
+        exceeds `bankroll_usd`
+
+    Returns one plan per tradable row, plus a `skip_reason` field on
+    rejected rows so callers can render a single audit list.
     """
     plans: List[Dict[str, Any]] = []
     kelly_cap = max(0.0, _safe_float_local(risk.get("max_kelly_fraction"))) if risk else 0.0
@@ -1432,6 +1469,12 @@ def compute_live_executions(
     if kelly_cap <= 0.0 or per_market_cap_usd <= 0.0 or bankroll_usd <= 0.0:
         return plans
 
+    min_mid = _safe_float_local((risk or {}).get("min_mid_price"))
+    max_mid = _safe_float_local((risk or {}).get("max_mid_price"))
+    min_volume = _safe_float_local((risk or {}).get("min_daily_volume_usd"))
+    min_seconds = int((risk or {}).get("min_seconds_to_resolution") or 0)
+
+    deployed_total = 0.0
     for row in surface_c or []:
         if not isinstance(row, dict):
             continue
@@ -1441,6 +1484,12 @@ def compute_live_executions(
         direction = row.get("consensus_direction")
         if direction not in ("yes", "no"):
             continue
+        # The publisher returns the YES outcome's CLOB token_id. Buying NO
+        # at `1 - p` against that token would either reject or execute on
+        # the wrong side at an inverted price. Reject NO-direction rows
+        # outright until the publisher carries a separate NO token_id.
+        if direction == "no":
+            continue
         divergence_bps = _safe_float_local(row.get("divergence_bps"))
         if divergence_bps < float(min_divergence_bps):
             continue
@@ -1448,23 +1497,39 @@ def compute_live_executions(
         consensus_prob = _safe_float_local(row.get("consensus_probability"))
         if not (0.0 < polymarket_price < 1.0) or not (0.0 < consensus_prob < 1.0):
             continue
+        # Mid-price safe band. Tail markets are where retail loses.
+        if min_mid > 0.0 and max_mid > 0.0:
+            if not (min_mid <= polymarket_price <= max_mid):
+                continue
+        # 24h volume / liquidity floor. The publisher returns `liquidity_usd`;
+        # we treat it as the practical exit-depth proxy. Fail-closed when
+        # missing so an absent field cannot silently disable the gate.
+        if min_volume > 0.0:
+            liq = row.get("liquidity_usd")
+            if liq is None:
+                continue
+            if _safe_float_local(liq) < min_volume:
+                continue
+        # Resolution buffer. Divergence-based "edge" is meaningless when
+        # a market is about to settle. Fail-closed when missing.
+        if min_seconds > 0:
+            seconds_remaining = _seconds_to_resolution(row.get("end_date_iso"), now=now)
+            if seconds_remaining is None or seconds_remaining < min_seconds:
+                continue
 
-        # The token's effective entry price + win probability depend on
-        # which side we're buying. `polymarket_token_id` is the consensus
-        # side: YES side carries `polymarket_price`/`consensus_probability`;
-        # NO side carries the complements.
-        if direction == "yes":
-            entry_price = polymarket_price
-            win_prob = consensus_prob
-        else:
-            entry_price = 1.0 - polymarket_price
-            win_prob = 1.0 - consensus_prob
+        entry_price = polymarket_price
+        win_prob = consensus_prob
 
         f_star = _kelly_fraction_yes(market_price=entry_price, win_prob=win_prob)
         if f_star <= 0.0:
             continue
         fraction = min(f_star, kelly_cap)
-        notional_usd = min(bankroll_usd * fraction, per_market_cap_usd)
+        # Cap by per-market notional AND by remaining bankroll. The
+        # remaining-bankroll clip is what makes the per-run cap real.
+        remaining_bankroll = max(0.0, bankroll_usd - deployed_total)
+        if remaining_bankroll <= 0.0:
+            break
+        notional_usd = min(bankroll_usd * fraction, per_market_cap_usd, remaining_bankroll)
         if notional_usd <= 0.0 or entry_price <= 0.0:
             continue
         size_shares = round(notional_usd / entry_price, 4)
@@ -1481,6 +1546,7 @@ def compute_live_executions(
                 "divergence_bps": int(divergence_bps),
             }
         )
+        deployed_total += notional_usd
     return plans
 
 
@@ -1518,17 +1584,120 @@ def fetch_surface_c_for_live_execution(config: dict) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for row, raw in zip(rows, divergence_rows[: len(rows)]):
         d = _consensus_to_dict(row)
+        consensus = consensus_by_id.get(d["canonical_id"], {}) if isinstance(consensus_by_id, dict) else {}
         token_id = (
             (raw.get("polymarket_token_id") if isinstance(raw, dict) else None)
-            or (consensus_by_id.get(d["canonical_id"], {}).get("polymarket_token_id"))
+            or consensus.get("polymarket_token_id")
         )
         d["polymarket_token_id"] = token_id
+        # Carry the runtime-gating fields the live path needs. The read-only
+        # renderer ignores them; only `compute_live_executions` consumes them.
+        d["liquidity_usd"] = (
+            (raw.get("liquidity_usd") if isinstance(raw, dict) else None)
+            or consensus.get("liquidity_usd")
+        )
+        d["end_date_iso"] = (
+            (raw.get("end_date_iso") if isinstance(raw, dict) else None)
+            or (raw.get("endDate") if isinstance(raw, dict) else None)
+            or (raw.get("end_date") if isinstance(raw, dict) else None)
+            or consensus.get("end_date_iso")
+            or consensus.get("endDate")
+            or consensus.get("end_date")
+        )
         out.append(d)
     return out
 
 
+POSITION_CYCLES_STATE_PATH = Path(__file__).resolve().parents[1] / "state" / "position_cycles.json"
+
+
+def _best_ask_price(levels: Any) -> float:
+    """Inverse of `_best_bid_price`: the lowest ask in the book. Required
+    for marketable BUY pricing. Returns 0 when the book has no asks."""
+    if not isinstance(levels, list) or not levels:
+        return 0.0
+    prices: List[float] = []
+    for level in levels:
+        if isinstance(level, dict):
+            prices.append(_safe_float_local(level.get("price")))
+        elif isinstance(level, (list, tuple)) and level:
+            prices.append(_safe_float_local(level[0]))
+    positives = [p for p in prices if p > 0.0]
+    return min(positives) if positives else 0.0
+
+
+def build_marketable_buy_order(token_id: str, notional_usd: float) -> Dict[str, Any]:
+    """Build a marketable-best-ask BUY plan. Mirrors the unwind path's
+    `build_marketable_sell_order` so live entries always price against the
+    live book instead of the cached publisher snapshot."""
+    book = fetch_book(token_id)
+    raw = book.get("raw") or {}
+    asks = raw.get("asks") if isinstance(raw, dict) else None
+    best_ask = _best_ask_price(asks)
+    if best_ask <= 0.0:
+        raise RuntimeError(
+            "no_ask_liquidity: order book has no executable asks for an immediate entry."
+        )
+    tick_size_str = str(book.get("tick_size") or "0.01")
+    decimals = max(0, len(tick_size_str.split(".")[1]) if "." in tick_size_str else 0)
+    price = round(best_ask, decimals)
+    if price <= 0.0:
+        raise RuntimeError("no_ask_liquidity: best ask snapped to non-positive tick.")
+    shares = round(max(0.0, notional_usd) / price, 6)
+    return {
+        "token_id": token_id,
+        "price": price,
+        "tick_size": tick_size_str,
+        "best_ask": best_ask,
+        "size_shares": shares,
+        "execution_style": "marketable-limit-best-ask",
+    }
+
+
+def _load_position_cycles(path: Path = POSITION_CYCLES_STATE_PATH) -> Dict[str, Any]:
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _save_position_cycles(state: Dict[str, Any], path: Path = POSITION_CYCLES_STATE_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, sort_keys=True, default=str), encoding="utf-8")
+
+
+def update_position_cycles(
+    *,
+    held_token_ids: List[str],
+    state: Dict[str, Any],
+    now_iso: Optional[str] = None,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Increment cycles_held for every still-held token, drop entries for
+    tokens no longer held, and return (updated_state, expired_token_ids).
+    Expired tokens are those whose cycles_held now exceeds the caller's
+    threshold check (the threshold itself is applied by the caller)."""
+    now = now_iso or datetime.now(timezone.utc).isoformat()
+    out: Dict[str, Any] = {}
+    held = set(str(t) for t in held_token_ids if t)
+    for token_id in held:
+        prev = state.get(token_id) if isinstance(state.get(token_id), dict) else None
+        if prev:
+            cycles = int(prev.get("cycles_held") or 0) + 1
+            first_seen = prev.get("first_seen_iso") or now
+        else:
+            cycles = 1
+            first_seen = now
+        out[token_id] = {"first_seen_iso": first_seen, "cycles_held": cycles}
+    return out, []
+
+
 def _yes_live_main(args: argparse.Namespace) -> int:
-    """Live execution path. Run gates → fetch Surface C → submit orders."""
+    """Live execution path. Run gates → fetch Surface C → enforce dedupe and
+    hold-cycle limits → price each plan against the live book → submit."""
     import importlib.util as _ts_util
 
     _ts_path = Path(__file__).resolve().parent / "trading_safety.py"
@@ -1552,6 +1721,7 @@ def _yes_live_main(args: argparse.Namespace) -> int:
     risk = config.get("risk") if isinstance(config.get("risk"), dict) else {}
     bankroll_usd = _safe_float_local(live_cfg.get("bankroll_usd"))
     min_divergence_bps = int(live_cfg.get("min_divergence_bps") or 500)
+    max_hold_cycles = int((risk or {}).get("max_inventory_hold_cycles") or 0)
 
     surface_c = fetch_surface_c_for_live_execution(config)
     plans = compute_live_executions(
@@ -1561,20 +1731,93 @@ def _yes_live_main(args: argparse.Namespace) -> int:
         min_divergence_bps=min_divergence_bps,
     )
 
+    trader = DirectClobTrader() if (plans or max_hold_cycles > 0) else None
+
+    # Existing-position dedupe and hold-cycle enforcement both need the
+    # current positions snapshot.
+    held_sizes: Dict[str, float] = {}
+    if trader is not None:
+        try:
+            held_sizes = positions_by_key(trader.get_positions())
+        except Exception:
+            held_sizes = {}
+
+    held_token_ids = [t for t, shares in held_sizes.items() if shares > 0]
+
+    # Hold-cycle counter: persists across runs in state/position_cycles.json.
+    cycles_state = _load_position_cycles()
+    new_state, _ = update_position_cycles(
+        held_token_ids=held_token_ids,
+        state=cycles_state,
+    )
+
+    forced_unwinds: List[Dict[str, Any]] = []
+    if trader is not None and max_hold_cycles > 0:
+        for token_id, entry in list(new_state.items()):
+            if int(entry.get("cycles_held") or 0) > max_hold_cycles:
+                shares = float(held_sizes.get(token_id) or 0.0)
+                if shares <= 0.0:
+                    continue
+                try:
+                    sell_plan = build_marketable_sell_order(token_id, shares)
+                    response = trader.create_order(
+                        token_id=token_id,
+                        side="SELL",
+                        price=sell_plan["price"],
+                        size=shares,
+                    )
+                    forced_unwinds.append(
+                        {**sell_plan, "shares": round(shares, 6), "response": response, "reason": "max_hold_cycles_exceeded"}
+                    )
+                    new_state.pop(token_id, None)
+                except Exception as exc:
+                    forced_unwinds.append(
+                        {"token_id": token_id, "shares": shares, "error": str(exc), "reason": "max_hold_cycles_exceeded"}
+                    )
+
+    # Drop planned entries for tokens we already hold. Pyramiding into the
+    # same name across cron runs is a P0 retail-loss path.
+    deduped_plans: List[Dict[str, Any]] = []
+    skipped_dedupe: List[Dict[str, Any]] = []
+    for plan in plans:
+        if plan["token_id"] in held_token_ids:
+            skipped_dedupe.append({**plan, "skip_reason": "already_held"})
+            continue
+        deduped_plans.append(plan)
+
     executions: List[Dict[str, Any]] = []
-    if plans:
-        trader = DirectClobTrader()
-        for plan in plans:
-            try:
-                response = trader.create_order(
-                    token_id=plan["token_id"],
-                    side=plan["side"],
-                    price=plan["limit_price"],
-                    size=plan["size_shares"],
-                )
-                executions.append({**plan, "status": "submitted", "broker_response": response})
-            except Exception as exc:
-                executions.append({**plan, "status": "error", "error": str(exc)})
+    for plan in deduped_plans:
+        try:
+            buy = build_marketable_buy_order(plan["token_id"], plan["notional_usd"])
+        except Exception as exc:
+            executions.append({**plan, "status": "error", "error": str(exc)})
+            continue
+        live_size = buy["size_shares"]
+        live_price = buy["price"]
+        try:
+            response = trader.create_order(
+                token_id=plan["token_id"],
+                side="BUY",
+                price=live_price,
+                size=live_size,
+            )
+            executions.append(
+                {
+                    **plan,
+                    "status": "submitted",
+                    "live_price": live_price,
+                    "live_size_shares": live_size,
+                    "best_ask": buy["best_ask"],
+                    "broker_response": response,
+                }
+            )
+        except Exception as exc:
+            executions.append({**plan, "status": "error", "error": str(exc)})
+
+    try:
+        _save_position_cycles(new_state)
+    except OSError as exc:
+        sys.stderr.write(f"WARN: failed to persist position cycles state: {exc}\n")
 
     print(
         json.dumps(
@@ -1582,7 +1825,10 @@ def _yes_live_main(args: argparse.Namespace) -> int:
                 "status": "ok",
                 "trading_safety": payload,
                 "plans": plans,
+                "skipped_dedupe": skipped_dedupe,
+                "forced_unwinds": forced_unwinds,
                 "live_executions": executions,
+                "position_cycles": new_state,
             },
             default=str,
         )
