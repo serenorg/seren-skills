@@ -233,7 +233,7 @@ def test_consensus_context_never_says_recommended_side() -> None:
 
 
 def test_intelligence_client_does_not_expose_actionable() -> None:
-    """`/api/oracle/actionable` is gated post-v1 (§13.14). The client must
+    """`/api/oracle/actionable` is out of scope at v1. The client must
     not have a method that calls it, and no executable code path in the
     source should reference the route. The route name is allowed to appear
     in comments/docstrings (that documents why it is excluded).

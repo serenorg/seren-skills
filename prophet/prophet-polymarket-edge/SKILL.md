@@ -97,5 +97,5 @@ The following are explicitly deferred. Each is tracked as follow-up work against
 - Wallet/email entry paths.
 - Personalized Prophet handoff with deep links anchored to user trades.
 - Stage v1.1 pricing-divergence observation feed (gated on n≥30/category AND ≥7 days of AI House quotes).
-- `/api/oracle/actionable` (recommendation engine, post-v1 legal review required per §13.14).
-- Polymarket CLOB execution path. Re-enabling requires a documented jurisdictional eligibility attestation, technical CLOB preflight, and legal/advice review.
+- `/api/oracle/actionable` (recommendation engine; not used at v1).
+- Polymarket CLOB execution path (out of scope at v1).

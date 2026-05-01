@@ -465,8 +465,7 @@ class PolymarketIntelligence:
     """Read-only client for the seren-polymarket-intelligence publisher.
 
     This client deliberately does NOT expose `/api/oracle/actionable`.
-    That endpoint is a recommendation engine and is gated post-v1 by
-    design doc §13.14. Adding a method here would be a P0 defect.
+    That endpoint is a recommendation engine and is out of scope at v1.
     """
 
     def __init__(self, api_key: str, base_url: Optional[str] = None):
@@ -1068,7 +1067,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.yes_live:
         sys.stderr.write(
             "ERROR: --yes-live is rejected at v1 launch. Surface C is read-only "
-            "and Polymarket execution is gated post-v1 by design doc §13.14.\n"
+            "and Polymarket execution is out of scope at v1.\n"
         )
         return 2
 
