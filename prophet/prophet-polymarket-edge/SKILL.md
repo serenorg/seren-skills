@@ -95,6 +95,10 @@ If `SEREN_API_KEY` is missing the runtime fails fast — no setup prompts, no pa
 - Default retention for audit content is 180 days.
 - `python3 scripts/agent.py --config config.json --purge` removes the audit-run, audit-finding, recommendation, telemetry, and wallet-identity rows for the current user.
 
+## Emergency exit and stop trading
+
+There is no emergency exit path, no `--unwind-all`, no `close-all`, no `flatten`, and no stop-trading subcommand — because the skill never holds inventory, never places orders, and has no positions to unwind or liquidate. There is nothing to cancel and nothing to market-sell. `--yes-live` is rejected with exit code 2 before any execution path runs; see *Trading safety gates* below.
+
 ## Trading safety gates (why `--yes-live` is rejected today)
 
 The skill is read-only. It does not place trades, and `--yes-live` is rejected with exit code 2. That rejection is not a placeholder — it is enforced by three machine-checked gates in `scripts/trading_safety.py`. Any future change that wants to wire `--yes-live` to a real execution path has to clear all three first; loosening these checks without simultaneously landing the corresponding mitigations is treated as a P0 defect by the existing test suite.

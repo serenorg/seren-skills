@@ -15,6 +15,13 @@ V1 scope (May 1, 2026 launch contingency from design doc §11 / §13.9):
 Surface A (loss audit) is post-v1 and intentionally not implemented here.
 Polymarket execution is disabled: --yes-live is rejected and POLY_* env
 vars are never solicited.
+
+Emergency-exit path: there is no unwind, flatten, close-all, cancel_all,
+or stop-trading code path because this runtime never holds inventory,
+never places orders, and has no positions to liquidate. There is nothing
+to cancel. --yes-live is rejected with exit code 2 in main() before any
+execution path runs; see scripts/trading_safety.py for the gate contract
+that guards any future trading-enable PR.
 """
 
 from __future__ import annotations
