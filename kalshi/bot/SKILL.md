@@ -1,5 +1,5 @@
 ---
-name: kalshi-bot
+name: bot
 display-name: Kalshi Trading Bot
 description: "Autonomous trading agent for Kalshi prediction markets using Seren ecosystem"
 ---

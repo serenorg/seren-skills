@@ -1,5 +1,5 @@
 ---
-name: google-sheets
+name: sheets
 display-name: "Google Sheets"
 description: "Read and write Google Sheets data, create spreadsheets, manage worksheets, and apply formatting. Supports batch reads, cell updates, and formula operations with OAuth authentication."
 ---

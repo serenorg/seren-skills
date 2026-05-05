@@ -1,5 +1,5 @@
 ---
-name: google-calendar
+name: calendar
 display-name: "Google Calendar"
 description: "Create, read, update, and delete Google Calendar events. Supports free/busy queries, recurring events, multi-calendar management, and meeting scheduling with OAuth authentication."
 ---

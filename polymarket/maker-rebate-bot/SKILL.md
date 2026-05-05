@@ -1,5 +1,5 @@
 ---
-name: polymarket-maker-rebate-bot
+name: maker-rebate-bot
 display-name: "Polymarket Maker Rebate Bot"
 description: "Provide two-sided liquidity on Polymarket with rebate-aware quoting, inventory controls, and dry-run-first execution for binary markets."
 ---

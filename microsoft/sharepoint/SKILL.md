@@ -1,5 +1,5 @@
 ---
-name: microsoft-sharepoint
+name: sharepoint
 display-name: "Microsoft SharePoint"
 description: "Manage SharePoint sites, document libraries, files, folders, and lists via Microsoft Graph API. Browse sites, upload and download files, create folders, copy files, and search across sites with OAuth2 authentication."
 ---

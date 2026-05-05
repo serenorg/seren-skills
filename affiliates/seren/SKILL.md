@@ -1,5 +1,5 @@
 ---
-name: seren-affiliate
+name: seren
 display-name: "Seren Affiliate Distributor"
 description: "Lean partner-link distribution skill for the seren-affiliates publisher program portfolio. Operates one publisher program per run. Bootstraps the affiliate profile (registering on first run), caches joined programs in serendb, ingests contacts from a pasted list or from Gmail/Outlook address books, drafts a pitch once per run via seren-models for operator approval, sends approved copy through Gmail (preferred) or Microsoft Outlook, enforces per-program dedupe plus a global unsubscribe list, and reports local plus live conversion and commission stats from seren-affiliates."
 ---
