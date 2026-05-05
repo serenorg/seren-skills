@@ -22,6 +22,15 @@ Invoke when the advisor asks about:
 - year-end tax planning
 - tax posture
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Load a tax return, ChatGPT auto-summarizes form, payer, taxable income** — *[dLoQJfqGgag @ 24:26]*
+- **Multi-entity sprawl: dynastic trusts, LLCs, onshore/offshore, foundations** — *[_URp9ryeUlQ @ 27:27]*
+- **Tax strategy must wrap around the originating wealth-creating asset** — *[dLoQJfqGgag @ 07:10]*
+- **Cross-client tax-trend questions go unasked because manual work is too heavy** — *[dLoQJfqGgag @ 24:54]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

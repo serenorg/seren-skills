@@ -22,6 +22,14 @@ Invoke when the advisor asks about:
 - SPV memo
 - direct co-invest
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Co-invests must let the FO add real operating value** — *[4T0BpwFhRvo @ 09:07]*
+- **FOs prefer co-investing alongside trusted partners, not solo** — *[hb8F0e9tW2Q @ 00:04]*
+- **Co-investment syndication is the default early-stage posture** — *[hb8F0e9tW2Q @ 03:28]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

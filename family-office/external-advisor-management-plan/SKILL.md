@@ -22,6 +22,16 @@ Invoke when the advisor asks about:
 - advisor roster
 - legal and tax management plan
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **67% of family offices are outsourcing or considering it; 87% of all businesses are weighing outsourcing in tax and finance** — *[HV86G3RCPV0 @ 12:30]*
+- **Coordinating the sprawl of outsourced providers is the real challenge, not the outsourcing decision itself** — *[HV86G3RCPV0 @ 13:18]*
+- **Investment, tax, and planning advisors operate in silos and rarely coordinate across the family** — *[HV86G3RCPV0 @ 20:07]*
+- **Sub-billion offices end up as quarterbacks of outsourced services rather than running insourced teams** — *[HV86G3RCPV0 @ 22:54]*
+- **Vendors offer outsourcing on a continuum, so right-sizing scope per function becomes its own decision problem** — *[f4vwiAXPj3s @ 12:50]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

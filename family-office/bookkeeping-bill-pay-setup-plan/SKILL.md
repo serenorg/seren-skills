@@ -22,6 +22,16 @@ Invoke when the advisor asks about:
 - family office accounting
 - internal controls
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Lighter-footprint family offices want to retire in-house bill-pay clerks** — *[HV86G3RCPV0 @ 13:05]*
+- **Principals unsure whether existing op-co bookkeepers can cover FO accounting** — *[HV86G3RCPV0 @ 16:43]*
+- **AP-to-GL touch points need deliberate automation, not ad-hoc glue** — *[_URp9ryeUlQ @ 08:08]*
+- **GL is foundational but the surrounding tech stack must be built with intent** — *[_URp9ryeUlQ @ 08:30]*
+- **Bookkeeping sits inside a wider risk and reporting stack, not standalone** — *[f4vwiAXPj3s @ 08:52]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

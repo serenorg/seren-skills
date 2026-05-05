@@ -22,6 +22,16 @@ Invoke when the advisor asks about:
 - 12-month cash plan
 - rolling cashflow
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Founders facing a 12-18 month liquidity event need pre/during/post cash planning** — *[4T0BpwFhRvo @ 00:30]*
+- **Pre-liquidity-event founders need a different cash posture than post-liquidity wealth** — *[4T0BpwFhRvo @ 10:27]*
+- **Investment universes for waiting-on-liquidity founders differ from typical wealthy clients** — *[4T0BpwFhRvo @ 10:45]*
+- **Estate teams often miss the principal's actual short-term liquidity needs** — *[HV86G3RCPV0 @ 20:24]*
+- **Operators want better liquidity forecasting across many subscription agreements** — *[dLoQJfqGgag @ 29:14]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

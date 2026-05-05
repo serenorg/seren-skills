@@ -22,6 +22,14 @@ Invoke when the advisor asks about:
 - tax documents for CPA
 - CPA document list
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **CPA gatekeeps which advisors the family even meets** — *[3JS4fbhLiRQ @ 06:40]*
+- **CPA conflicted on whether to pay family vs. business bills** — *[HV86G3RCPV0 @ 08:18]*
+- **Tax, trust, and CFA expertise rarely sit in one coordinated team** — *[dLoQJfqGgag @ 00:35]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

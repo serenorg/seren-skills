@@ -22,6 +22,15 @@ Invoke when the advisor asks about:
 - family-office reporting
 - portfolio reporting requirements
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Operators openly ask why consolidated reporting matters at all — buy-in is not a given** — *[_4_z6Rs7350 @ 00:14]*
+- **Insourcing performance reporting only pencils out around the billion-dollar mark; below that, families need a packaged spec** — *[HV86G3RCPV0 @ 22:39]*
+- **Customized dashboards are the visibility-and-transparency surface families actually pay for** — *[_URp9ryeUlQ @ 52:01]*
+- **Dashboards must be built to walk the principal through their day, not just display data** — *[f4vwiAXPj3s @ 21:52]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

@@ -22,6 +22,15 @@ Invoke when the advisor asks about:
 - allocation model
 - portfolio weights
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Operators hold strategic asset allocation through volatility, not reactively** — *[qldW5BOd5TQ @ 01:04]*
+- **The largest, most sophisticated FOs anchor on strategic asset allocation as the default frame** — *[qldW5BOd5TQ @ 01:43]*
+- **"Strategic asset allocation" is the canonical question asked of principals** — *[qldW5BOd5TQ @ 02:49]*
+- **No single tool combines expense-level granularity with slick allocation reporting** — *[_4_z6Rs7350 @ 01:45]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

@@ -22,6 +22,14 @@ Invoke when the advisor asks about:
 - folder taxonomy
 - document retention
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Cybersecurity and the underlying technology stack are now top-of-mind for document handling, not afterthoughts** — *[dLoQJfqGgag @ 13:56]*
+
+Note: VOC depth on this skill is thin — Track-A2 lexicon mining surfaced one direct hit from the family-office interview corpus. v2 will mine DMS RFP corpora and incident-response postmortems directly to fill the gap.
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:
