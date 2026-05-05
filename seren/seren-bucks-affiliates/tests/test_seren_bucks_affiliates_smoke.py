@@ -13,7 +13,7 @@ def _read_fixture(name: str) -> dict:
 def test_happy_path_fixture_is_successful() -> None:
     payload = _read_fixture("happy_path.json")
     assert payload["status"] == "ok"
-    assert payload["skill"] == "seren-bucks"
+    assert payload["skill"] == "seren-bucks-affiliates"
     assert payload["program"]["program_id"] == "seren-bucks-default"
     assert payload["proposal"]["editable"] is True
     assert payload["limits"]["new_outbound_daily_cap"] == 10

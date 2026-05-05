@@ -4,7 +4,7 @@ description: "Lean partner-link distribution skill for the seren-affiliates publ
 ---
 # Seren Affiliate Distributor
 
-Lean, program-agnostic partner-link distribution skill. Complement — not replacement — for the campaign-specific [`affiliates/seren-bucks`](../../affiliates/seren-bucks/SKILL.md) skill.
+Lean, program-agnostic partner-link distribution skill. Complement -- not replacement -- for the campaign-specific [`seren/seren-bucks-affiliates`](../seren-bucks-affiliates/SKILL.md) skill.
 
 ## For Claude: How to Use This Skill
 
@@ -137,5 +137,5 @@ The pipeline filters `ingest.contacts` through the union of persisted `unsubscri
 
 ## Related
 
-- Sibling skill — `affiliates/seren-bucks` — campaign-specific review-first outreach for a single Seren Bucks landing page.
-- `family: affiliate-v1` (shared with seren-bucks).
+- Sibling skill -- `seren/seren-bucks-affiliates` -- campaign-specific review-first outreach for a single Seren Bucks landing page.
+- `family: affiliate-v1` (shared with seren-bucks-affiliates).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime stub for seren-bucks."""
+"""Runtime stub for seren-bucks-affiliates."""
 
 from __future__ import annotations
 
@@ -141,7 +141,7 @@ def _run_pipeline(config: dict, *, mode: str) -> dict:
         }
 
     return {
-        "skill": "seren-bucks",
+        "skill": "seren-bucks-affiliates",
         "run_status": "ok",
         "mode": mode,
         "generated_at": utc_now(),

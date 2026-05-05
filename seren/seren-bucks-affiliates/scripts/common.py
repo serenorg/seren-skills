@@ -9,7 +9,7 @@ from typing import Any
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "dry_run": True,
-    "skill": "seren-bucks",
+    "skill": "seren-bucks-affiliates",
     "program": {
         "program_id": "seren-bucks-default",
         "program_name": "SerenBucks Affiliate Program",

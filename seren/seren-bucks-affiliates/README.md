@@ -1,4 +1,4 @@
-# Seren Bucks
+# Seren Bucks Affiliate
 
 Review-first skill bundle for operating a single Seren Bucks affiliate program.
 

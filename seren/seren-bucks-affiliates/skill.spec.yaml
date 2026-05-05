@@ -1,4 +1,4 @@
-skill: seren-bucks
+skill: seren-bucks-affiliates
 description: Review-first outreach skill for the default Seren Bucks affiliate program. It bootstraps affiliate context, mines sent-mail history and address books for candidates, persists them into a skill-owned CRM, proposes an editable daily top-10, drafts outbound and reply batches for approval, reconciles affiliate and reply signals, enforces hard DNC, and returns a manual daily digest.
 triggers:
   - grow Seren Bucks affiliate signups
@@ -169,8 +169,8 @@ tests:
     - persists_candidates_before_ranking
     - renders_manual_digest_from_fixture
 publish:
-  org: affiliates
-  slug: seren-bucks
+  org: seren
+  slug: seren-bucks-affiliates
 metadata:
   category: growth
   product_role: primary

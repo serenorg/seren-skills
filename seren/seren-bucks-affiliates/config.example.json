@@ -1,6 +1,6 @@
 {
   "dry_run": true,
-  "skill": "seren-bucks",
+  "skill": "seren-bucks-affiliates",
   "program": {
     "program_id": "seren-bucks-default",
     "program_name": "SerenBucks Affiliate Program",

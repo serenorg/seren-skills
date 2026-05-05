@@ -15,7 +15,7 @@ For one publisher program per run, the skill:
 
 ## Placement
 
-Published at `seren-skills/seren/affiliates`. Complement to [`affiliates/seren-bucks`](../../affiliates/seren-bucks/SKILL.md) (campaign-specific review-first outreach). Shared `family: affiliate-v1` metadata.
+Published at `seren-skills/seren/affiliates`. Complement to [`seren/seren-bucks-affiliates`](../seren-bucks-affiliates/SKILL.md) (campaign-specific review-first outreach). Shared `family: affiliate-v1` metadata.
 
 ## Getting started
 

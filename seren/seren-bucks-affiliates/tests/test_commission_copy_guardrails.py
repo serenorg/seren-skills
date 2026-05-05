@@ -63,6 +63,13 @@ def test_default_tracked_link_uses_serendb_domain() -> None:
         )
 
 
+def test_publish_metadata_matches_seren_relocation() -> None:
+    """The release spec must publish back to seren/seren-bucks-affiliates."""
+    body = SKILL_SPEC.read_text(encoding="utf-8")
+    assert "\npublish:\n  org: seren\n  slug: seren-bucks-affiliates\n" in body
+    assert "org: affiliates" not in body
+
+
 def test_signoff_does_not_attribute_sender_to_serendb() -> None:
     """#417: the sender is an affiliate, not a SerenDB employee.
     The sign-off must never carry a company attribution line."""

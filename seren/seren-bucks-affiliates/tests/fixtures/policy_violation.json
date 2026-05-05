@@ -1,6 +1,6 @@
 {
   "status": "error",
-  "skill": "seren-bucks",
+  "skill": "seren-bucks-affiliates",
   "error_code": "dnc_blocked",
   "signal": "unsubscribe",
   "hard_stop": true,
