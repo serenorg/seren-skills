@@ -92,11 +92,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Ensure the indexer sees 55 leaves + 4 routers + 1 knowledge
+      - name: Ensure the indexer sees 56 leaves + 4 routers + 1 knowledge
         run: |
           COUNT=$(node scripts/build-index.mjs \
             | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{console.log(JSON.parse(d).skills.filter(s=>s.slug.startsWith('family-office')).length)})")
-          if [ "$COUNT" != "60" ]; then
-            echo "::error::expected 60 family-office skills indexed, got $COUNT"
+          if [ "$COUNT" != "61" ]; then
+            echo "::error::expected 61 family-office skills indexed, got $COUNT"
             exit 1
           fi

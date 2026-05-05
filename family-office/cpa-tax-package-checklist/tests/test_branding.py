@@ -101,10 +101,10 @@ def _catalog() -> dict[str, Path]:
     return out
 
 
-def test_catalog_has_55_leaves_and_4_routers() -> None:
+def test_catalog_has_56_leaves_and_4_routers() -> None:
     catalog = _catalog()
-    assert len(catalog) == 59, (
-        f"expected 55 leaves + 4 routers = 59 branded skills; got {len(catalog)}"
+    assert len(catalog) == 60, (
+        f"expected 56 leaves + 4 routers = 60 branded skills; got {len(catalog)}"
     )
 
 
