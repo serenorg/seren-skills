@@ -1,9 +1,7 @@
 ---
 name: seren-cloud
-display-name: "Seren Cloud"
 description: "Deploy and operate hosted skills through the first-class seren-cloud publisher."
 ---
-
 # Seren Cloud
 
 ## For Claude: How to Use This Skill

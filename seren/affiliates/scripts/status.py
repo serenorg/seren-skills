@@ -41,7 +41,7 @@ def render_report(
 ) -> dict:
     json_output = bool(config["inputs"].get("json_output"))
     local = {
-        "skill": "seren-affiliate",
+        "skill": "affiliates",
         "run_id": run_id,
         "command": command,
         "generated_at": utc_now(),
@@ -84,7 +84,7 @@ def render_report(
 
 def _format_human(local: dict) -> str:
     lines = [
-        f"seren-affiliate {local['command']} — {local['run_id']}",
+        f"affiliates {local['command']} — {local['run_id']}",
         f"generated_at: {local['generated_at']}",
     ]
     program = local.get("program") or {}

@@ -1,11 +1,8 @@
 ---
 name: collectibles-acquisition-logistics
-display-name: "Family Office · Collectibles Acquisition & Logistics Plan"
 description: "Family office: Produce a plan for acquiring and moving a collectible asset (classic car, rare wine, timepiece, sports memorabilia). Example: antique Ferrari from Pebble Beach to Naples."
-tags: [family-office, pillar:complexity-management]
 ---
-
-# Collectibles Acquisition & Logistics Plan
+# Family Office · Collectibles Acquisition & Logistics Plan
 
 ## For Claude: How to Use This Skill
 

@@ -1,11 +1,8 @@
 ---
 name: insurance-coverage-review-worksheet
-display-name: "Family Office · Insurance Coverage Review Worksheet"
 description: "Family office: Produce a worksheet reviewing all insurance coverage — health, life, property, auto/marine, liability, umbrella, casualty. Captures policies in force, gaps, and renewal dates."
-tags: [family-office, pillar:complexity-management]
 ---
-
-# Insurance Coverage Review Worksheet
+# Family Office · Insurance Coverage Review Worksheet
 
 ## For Claude: How to Use This Skill
 

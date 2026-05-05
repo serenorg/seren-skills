@@ -1,6 +1,6 @@
--- seren-affiliate skill: serendb schema (database: seren_affiliate)
+-- affiliates skill: serendb schema (database: seren_affiliate)
 -- Owned by the skill. All reads and writes route through the serendb connector.
--- Published to seren-skills/affiliates/seren. Family: affiliate-v1.
+-- Published to seren-skills/seren/affiliates. Family: affiliate-v1.
 
 -- Single-row cache of GET /affiliates/me. Upserted by sync_affiliate_profile.
 -- sender_address is required before any send executes; bootstrap fails closed if empty.

@@ -1,11 +1,9 @@
 ---
 name: lender-loan
-display-name: "Egeria Lender Loan"
 description: "Qualify groups for non-recourse stock/crypto loans and institutional block trades based on lender criteria. Maintains provider anonymity during qualification. Notifies Erik @ Volume Finance upon qualification."
 license: Apache-2.0
 ---
-
-# Lender Loan Qualification
+# Egeria Lender Loan
 
 ## For Claude: How to Use This Skill
 

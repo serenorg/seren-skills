@@ -1,11 +1,8 @@
 ---
 name: router
-display-name: "Family Office · Top-Level Router"
 description: "Family office: Top-level natural-language router for the Seren family-office catalog. Classifies an advisor ask into one of three pillars (Capital Allocation, Complexity Management, Legacy Preservation) and delegates to the pillar router, which in turn invokes the matching leaf. Single-family-office tenancy. Catalog rebuild tracked in issue #427."
-tags: [family-office, type:router]
 ---
-
-# Family Office — Top-Level Router
+# Family Office · Top-Level Router
 
 ## For Claude: How to Use This Skill
 

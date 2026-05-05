@@ -1,11 +1,8 @@
 ---
 name: family-board-development-plan
-display-name: "Family Office · Family Board Development Plan"
 description: "Family office: Produce a board development plan for the family enterprise — skills matrix, recruitment, education, evaluation."
-tags: [family-office, pillar:legacy-preservation]
 ---
-
-# Family Board Development Plan
+# Family Office · Family Board Development Plan
 
 ## For Claude: How to Use This Skill
 

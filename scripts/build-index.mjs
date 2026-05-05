@@ -74,6 +74,15 @@ function parseFrontmatter(content) {
   return result;
 }
 
+function firstTopLevelHeading(content) {
+  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  for (const line of body.split(/\r?\n/)) {
+    const match = line.match(/^#\s+(.+)$/);
+    if (match) return match[1].trim();
+  }
+  return undefined;
+}
+
 function parseTags(fm) {
   if (!fm.tags) return [];
   // tags can be comma-separated or YAML array
@@ -114,7 +123,7 @@ for (const skillPath of skillFiles) {
   skills.push({
     slug,
     name: fm.name || skillName,
-    displayName: fm["display-name"] || undefined,
+    displayName: firstTopLevelHeading(content),
     description: fm.description || "",
     source: "serenorg",
     sourceUrl,

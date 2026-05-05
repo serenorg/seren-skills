@@ -7,7 +7,6 @@ metadata:
   npm: "@gdexsdk/gdex-skill"
   version: "2.0.0"
 ---
-
 # GDEX Trading
 
 ## For Claude: How to Use This Skill

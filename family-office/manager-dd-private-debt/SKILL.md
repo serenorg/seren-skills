@@ -1,11 +1,8 @@
 ---
 name: manager-dd-private-debt
-display-name: "Family Office · Private Debt Manager DD Memo"
 description: "Family office: Produce a due diligence memo for a prospective private credit / private debt manager. Captures strategy, loss history, seniority, covenants, and yield profile."
-tags: [family-office, pillar:capital-allocation]
 ---
-
-# Private Debt Manager DD Memo
+# Family Office · Private Debt Manager DD Memo
 
 ## For Claude: How to Use This Skill
 

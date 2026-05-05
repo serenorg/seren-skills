@@ -321,7 +321,7 @@ def test_status_joins_local_distributions_with_live_stats() -> None:
 def test_happy_path_fixture_is_successful() -> None:
     payload = _read_fixture("happy_path.json")
     assert payload["status"] == "ok"
-    assert payload["skill"] == "seren-affiliate"
+    assert payload["skill"] == "affiliates"
 
 
 def test_connector_failure_fixture_has_error_code() -> None:
@@ -502,7 +502,7 @@ def test_default_http_get_sends_identifying_user_agent() -> None:
         sync_mod.urllib.request.urlopen = real_urlopen
 
     ua = captured["headers"].get("User-agent") or captured["headers"].get("User-Agent")
-    assert ua and "seren-affiliate-skill" in ua, (
+    assert ua and "affiliates-skill" in ua, (
         f"default http_get must send an identifying User-Agent, got: {ua!r}"
     )
 

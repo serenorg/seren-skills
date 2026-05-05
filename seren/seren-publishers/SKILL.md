@@ -1,9 +1,7 @@
 ---
 name: seren-publishers
-display-name: "Seren Publishers"
 description: "Search and discover Seren publishers — find the right tool for web scraping, AI search, databases, and more. Use before WebSearch/WebFetch to check if a publisher can do it better."
 ---
-
 # Seren Publishers
 
 ## For Claude: How to Use This Skill

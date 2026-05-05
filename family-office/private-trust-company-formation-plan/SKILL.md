@@ -1,11 +1,8 @@
 ---
 name: private-trust-company-formation-plan
-display-name: "Family Office · Private Trust Company Formation Plan"
 description: "Family office: Produce a formation plan for a private trust company — jurisdiction, capitalization, board, regulatory requirements."
-tags: [family-office, pillar:legacy-preservation]
 ---
-
-# Private Trust Company Formation Plan
+# Family Office · Private Trust Company Formation Plan
 
 ## For Claude: How to Use This Skill
 

@@ -1,11 +1,8 @@
 ---
 name: concierge-private-aviation-plan
-display-name: "Family Office · Private Aviation Coordination Plan"
 description: "Family office: Produce a private aviation coordination plan — operator roster, preferred aircraft, crew preferences, catering, ground transport."
-tags: [family-office, pillar:complexity-management]
 ---
-
-# Private Aviation Coordination Plan
+# Family Office · Private Aviation Coordination Plan
 
 ## For Claude: How to Use This Skill
 

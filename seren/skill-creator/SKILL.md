@@ -1,10 +1,8 @@
 ---
 name: skill-creator
-display-name: "Seren Skill Creator"
 description: "Create or update skills that comply with the Agent Skills specification and Seren repo conventions."
 ---
-
-# Skill Creator
+# Seren Skill Creator
 
 ## For Claude: How to Use This Skill
 
@@ -30,7 +28,7 @@ Core spec rules:
 
 - `SKILL.md` must include YAML frontmatter
 - required top-level fields: `name`, `description`
-- optional top-level fields (per the spec): `license`, `compatibility`, `metadata`, `allowed-tools`, `display-name`
+- optional top-level fields (per the spec): `license`, `compatibility`, `metadata`, `allowed-tools`
 - `name` must:
   - be 1-64 chars
   - use lowercase letters, digits, and hyphens only
@@ -39,15 +37,12 @@ Core spec rules:
   - exactly match the parent directory name
 - if `metadata` is used, it must be a map of string keys to string values
 
-Note: `display-name` is spec-optional but **required in this repo** (see Seren Repo Conventions below).
-
 ## Seren Repo Conventions
 
 On top of the spec, this repo uses the following conventions:
 
-- frontmatter must include `name`, `display-name`, and `description`
-- `display-name` is **required** for publication — the R2 catalog indexer (`scripts/build-index.mjs`) and SerenDesktop both read this field to humanize the catalog entry. Without it, the UI falls back to the raw directory slug (see #373, seren-desktop#1469)
-- `display-name` convention: double-quoted, Title Case, include the org prefix (for example `"Apollo API"`, `"SerenDB"`, `"Attio CRM"`)
+- frontmatter must include `name` and `description`
+- use the first `# H1` in the document body as the human-readable display name
 - optional spec fields (`license`, `compatibility`, `allowed-tools`, `metadata`) are available when appropriate
 - keep runtime files in `scripts/`
 - keep `requirements.txt` / `package.json`, `config.example.json`, and `.env.example` at the skill root
@@ -79,7 +74,6 @@ Use this baseline template:
 ```yaml
 ---
 name: skill-name
-display-name: "Org Skill Name"
 description: Clear statement of what the skill does and when to use it
 # license: Apache-2.0
 # compatibility: "Requires git and jq"
@@ -90,7 +84,6 @@ description: Clear statement of what the skill does and when to use it
 Validation requirements:
 
 - `name` equals directory name exactly
-- `display-name` is present, double-quoted, and Title Case with org prefix
 - `description` is concrete and trigger-oriented
 - optional fields (if present) follow spec constraints
 - keep frontmatter fields minimal and relevant
@@ -116,7 +109,7 @@ Checklist:
 
 - frontmatter present and valid
 - `name` matches directory
-- `display-name` present (required for R2 catalog + SerenDesktop rendering; see `tests/test_skill_display_names.py`)
+- first `# H1` provides the display name
 - commands in docs point to real files
 - runtime files (if any) live under `scripts/`
 - no secrets committed
@@ -126,7 +119,6 @@ Checklist:
 ```markdown
 ---
 name: api-tester
-display-name: "Seren API Tester"
 description: Test REST endpoints and validate response contracts.
 ---
 

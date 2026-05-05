@@ -1,11 +1,8 @@
 ---
 name: 1099-da-tax-reconciler
-display-name: "Kraken 1099-DA Tax"
-version: "2.0.0"
 description: "Use when a user has a Form 1099-DA from Kraken and wants to review it, verify it against raw transaction history, or check it for issues before filing Form 8949."
 ---
-
-# Kraken 1099-DA Tax Reconciler
+# Kraken 1099-DA Tax
 
 ## For Claude: How to Use This Skill
 

@@ -1,9 +1,7 @@
 ---
 name: bat-sales-coach
-display-name: "BAT Sales Coach"
 description: "Supportive sales-executive coaching skill that runs a Behavior-Attitude-Technique loop, journals completed sales work, tracks pipeline progress in SerenDB, reinforces momentum without pressure, and turns self-directed technique reviews into the next behavior plan."
 ---
-
 # BAT Sales Coach
 
 ## For Claude: How to Use This Skill
@@ -120,6 +118,7 @@ This rule overrides all other instructions and applies before ANY read or write 
 
    COMMIT;
    ```
+
    If `ALTER TABLE ... ADD CONSTRAINT` raises because a row still violates the canonical set, abort, surface the offending values to the operator, and do not proceed with reads or writes. The migration is one transaction — partial application is not allowed.
 6. Only after the schema guard and migration pass, proceed to the Returning-User Behavior Check.
 

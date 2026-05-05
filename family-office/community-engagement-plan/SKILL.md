@@ -1,11 +1,8 @@
 ---
 name: community-engagement-plan
-display-name: "Family Office · Community Engagement Plan"
 description: "Family office: Produce a community engagement plan — relationships with civic, cultural, and nonprofit organizations; time commitments; reputational posture."
-tags: [family-office, pillar:legacy-preservation]
 ---
-
-# Community Engagement Plan
+# Family Office · Community Engagement Plan
 
 ## For Claude: How to Use This Skill
 

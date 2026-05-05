@@ -1,10 +1,8 @@
 ---
 name: high-throughput-paired-basis-maker
-display-name: "High-Throughput Basis Maker"
 description: "Run a paired-market basis strategy on Polymarket with mandatory backtest-first gating before trade intents."
 ---
-
-# High-Throughput Paired Basis Maker
+# High-Throughput Basis Maker
 
 ## For Claude: How to Use This Skill
 

@@ -1,11 +1,8 @@
 ---
 name: cap-call-notification-workflow
-display-name: "Family Office · Capital Call Notification Workflow"
 description: "Family office: Process an incoming GP capital call notice end-to-end — confirm, fund, log, reconcile."
-tags: [family-office, pillar:complexity-management, skill-shape:workflow]
 ---
-
-# Capital Call Notification Workflow
+# Family Office · Capital Call Notification Workflow
 
 ## For Claude: How to Use This Skill
 

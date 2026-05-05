@@ -1,11 +1,8 @@
 ---
 name: family-philanthropy-strategic-plan
-display-name: "Family Office · Family Philanthropy Strategic Plan"
 description: "Family office: Produce a strategic philanthropic plan — mission, causes, giving vehicles, budget, metrics, family engagement."
-tags: [family-office, pillar:legacy-preservation]
 ---
-
-# Family Philanthropy Strategic Plan
+# Family Office · Family Philanthropy Strategic Plan
 
 ## For Claude: How to Use This Skill
 

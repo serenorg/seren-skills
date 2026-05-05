@@ -1,6 +1,6 @@
-# seren-affiliate
+# affiliates
 
-Lean partner-link distribution skill for the [seren-affiliates](https://github.com/serenorg/seren-affiliates) program portfolio. Generated from [`seren-skillforge/examples/seren-affiliate`](https://github.com/serenorg/seren-skillforge/tree/main/examples/seren-affiliate) and published here.
+Lean partner-link distribution skill for the [seren-affiliates](https://github.com/serenorg/seren-affiliates) program portfolio. Generated from [`seren-skillforge/examples/affiliates`](https://github.com/serenorg/seren-skillforge/tree/main/examples/affiliates) and published here.
 
 ## What it does
 
@@ -15,7 +15,7 @@ For one publisher program per run, the skill:
 
 ## Placement
 
-Published at `seren-skills/affiliates/seren`. Complement to [`affiliates/seren-bucks`](../seren-bucks/SKILL.md) (campaign-specific review-first outreach). Shared `family: affiliate-v1` metadata.
+Published at `seren-skills/seren/affiliates`. Complement to [`affiliates/seren-bucks`](../../affiliates/seren-bucks/SKILL.md) (campaign-specific review-first outreach). Shared `family: affiliate-v1` metadata.
 
 ## Getting started
 
@@ -63,4 +63,4 @@ One-click unsubscribe is live. Every outbound email links to `https://affiliates
 
 ## Regenerating from the spec
 
-Edit `seren-skillforge/examples/seren-affiliate/skill.spec.yaml`, validate with `python -m skillforge validate --spec ...`, then re-release with `python -m skillforge release --spec ... --target ../seren-skills --resolve-publishers --require-api-key --create-pr`.
+Edit `seren-skillforge/examples/affiliates/skill.spec.yaml`, validate with `python -m skillforge validate --spec ...`, then re-release with `python -m skillforge release --spec ... --target ../seren-skills --resolve-publishers --require-api-key --create-pr`.

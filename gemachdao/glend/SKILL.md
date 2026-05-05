@@ -1,13 +1,11 @@
 ---
 name: glend
-display-name: "GemachDAO Glend"
 description: "Agent skill for the Glend DeFi Lend & Borrow protocol by GemachDAO — supply, borrow, repay, withdraw assets and monitor account health on Pharos Testnet (Aave V3), Ethereum, and Base (Compound V2) using viem"
 license: MIT
 compatibility: "Requires Node.js 18+ and viem; agents need AGENT_PRIVATE_KEY environment variable"
 allowed-tools: Bash(node:*) Bash(npx:*) Read Write
 ---
-
-# Glend Agent Skill
+# GemachDAO Glend
 
 ## What is Glend?
 

@@ -1,9 +1,7 @@
 ---
 name: grid-trader
-display-name: "Kraken Grid Trader"
 description: "Automated grid trading bot for Kraken — profits from BTC volatility using a mechanical, non-directional strategy"
 ---
-
 # Kraken Grid Trader
 
 ## For Claude: How to Use This Skill

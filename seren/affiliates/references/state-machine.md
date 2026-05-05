@@ -1,4 +1,4 @@
-# seren-affiliate state machine
+# affiliates state machine
 
 The skill operates one publisher program per run. State is owned by the
 serendb database `seren_affiliate`.

@@ -1,4 +1,4 @@
-# seren-affiliate uses only the Python standard library at runtime.
+# affiliates uses only the Python standard library at runtime.
 # Publisher connectors (seren-affiliates, seren-db, gmail, microsoft-outlook,
 # seren-models) are invoked by the Seren runtime harness, not from these
 # scripts. Install pytest for the test suite.

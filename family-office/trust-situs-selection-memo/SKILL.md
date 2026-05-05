@@ -1,11 +1,8 @@
 ---
 name: trust-situs-selection-memo
-display-name: "Family Office · Trust Situs Selection Memo"
 description: "Family office: Produce a trust situs selection memo comparing Florida, Delaware, Nevada, Wyoming, and the Dakotas on tax, creditor protection, privacy, and administration."
-tags: [family-office, pillar:legacy-preservation]
 ---
-
-# Trust Situs Selection Memo
+# Family Office · Trust Situs Selection Memo
 
 ## For Claude: How to Use This Skill
 

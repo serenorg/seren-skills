@@ -1,10 +1,8 @@
 ---
 name: seren-db
-display-name: "SerenDB"
 description: "Create, manage, and query SerenDB databases through the first-class seren-db publisher."
 ---
-
-# Seren DB
+# SerenDB
 
 ## For Claude: How to Use This Skill
 

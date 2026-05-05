@@ -1,11 +1,8 @@
 ---
 name: client-sourced-deal-review-memo
-display-name: "Family Office · Client-Sourced Deal Review Memo"
 description: "Family office: Produce a review memo for a deal the principal sourced themselves. Captures deal sponsor, structure, terms, conflicts, and recommendation."
-tags: [family-office, pillar:capital-allocation]
 ---
-
-# Client-Sourced Deal Review Memo
+# Family Office · Client-Sourced Deal Review Memo
 
 ## For Claude: How to Use This Skill
 

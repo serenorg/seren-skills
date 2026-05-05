@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime stub for seren-affiliate.
+"""Runtime stub for affiliates.
 
 The live runtime harness executes the workflow DAG declared in skill.spec.yaml
 against Seren publisher connectors. This module is the reference and smoke
@@ -86,7 +86,7 @@ def _bootstrap_stage(config: dict) -> dict:
 def _bootstrap_only(config: dict, run_id: str) -> dict:
     stage = _bootstrap_stage(config)
     return {
-        "skill": "seren-affiliate",
+        "skill": "affiliates",
         "run_id": run_id,
         "command": "bootstrap",
         "run_status": "ok" if stage["stage_status"] == "ok" else "blocked",
@@ -99,7 +99,7 @@ def _status(config: dict, run_id: str) -> dict:
     stage = _bootstrap_stage(config)
     if stage["stage_status"] != "ok":
         return {
-            "skill": "seren-affiliate",
+            "skill": "affiliates",
             "run_id": run_id,
             "command": "status",
             "run_status": "blocked",
@@ -109,7 +109,7 @@ def _status(config: dict, run_id: str) -> dict:
     program_slug = str(config["inputs"].get("program_slug", "")).strip()
     live = fetch_live_stats(config=config, program_slug=program_slug) if program_slug else None
     return {
-        "skill": "seren-affiliate",
+        "skill": "affiliates",
         "run_id": run_id,
         "command": "status",
         "run_status": "ok",
@@ -125,7 +125,7 @@ def _block(config: dict, run_id: str) -> dict:
     stage = _bootstrap_stage(config)
     if stage["stage_status"] != "ok":
         return {
-            "skill": "seren-affiliate",
+            "skill": "affiliates",
             "run_id": run_id,
             "command": "block",
             "run_status": "blocked",
@@ -144,7 +144,7 @@ def _block(config: dict, run_id: str) -> dict:
             }
         )
     return {
-        "skill": "seren-affiliate",
+        "skill": "affiliates",
         "run_id": run_id,
         "command": "block",
         "run_status": "ok" if result["status"] == "ok" else "blocked",
@@ -212,7 +212,7 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
     pairing_error = require_approve_draft_json_pairing(config)
     if pairing_error is not None:
         return {
-            "skill": "seren-affiliate",
+            "skill": "affiliates",
             "run_id": run_id,
             "command": command,
             "run_status": "blocked",
@@ -223,7 +223,7 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
     stage = _bootstrap_stage(config)
     if stage["stage_status"] != "ok":
         return {
-            "skill": "seren-affiliate",
+            "skill": "affiliates",
             "run_id": run_id,
             "command": command,
             "run_status": "blocked",
@@ -235,7 +235,7 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
     program_selection = select_program(config, programs)
     if program_selection["status"] != "ok":
         return {
-            "skill": "seren-affiliate",
+            "skill": "affiliates",
             "run_id": run_id,
             "command": command,
             "run_status": "blocked",
@@ -249,7 +249,7 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
     provider = resolve_provider(config)
     if provider["status"] != "ok":
         return {
-            "skill": "seren-affiliate",
+            "skill": "affiliates",
             "run_id": run_id,
             "command": command,
             "run_status": "blocked",
@@ -260,7 +260,7 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
     ingest = ingest_contacts(config)
     if ingest["status"] != "ok":
         return {
-            "skill": "seren-affiliate",
+            "skill": "affiliates",
             "run_id": run_id,
             "command": command,
             "run_status": "blocked",
@@ -293,7 +293,7 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
 
     if command == "ingest":
         return {
-            "skill": "seren-affiliate",
+            "skill": "affiliates",
             "run_id": run_id,
             "command": command,
             "run_status": "ok",
@@ -308,7 +308,7 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
     draft_result = draft_pitch(config=config, program=program, run_id=run_id)
     if draft_result["status"] != "ok":
         return {
-            "skill": "seren-affiliate",
+            "skill": "affiliates",
             "run_id": run_id,
             "command": command,
             "run_status": "blocked",
@@ -319,7 +319,7 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
 
     if command == "draft":
         return {
-            "skill": "seren-affiliate",
+            "skill": "affiliates",
             "run_id": run_id,
             "command": command,
             "run_status": "ok",
@@ -376,7 +376,7 @@ def _run_pipeline(config: dict, *, command: str, run_id: str) -> dict:
         )
 
     return {
-        "skill": "seren-affiliate",
+        "skill": "affiliates",
         "run_id": run_id,
         "command": command,
         "run_status": "ok",

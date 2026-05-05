@@ -1,11 +1,8 @@
 ---
 name: capital-allocation-router
-display-name: "Family Office · Capital Allocation Router"
 description: "Family office: Pillar router for Capital Allocation. Classifies a natural-language advisor ask into the matching leaf skill inside the Capital Allocation pillar. Catalog rebuild tracked in issue #427."
-tags: [family-office, pillar:capital-allocation, type:router]
 ---
-
-# Family Office — Capital Allocation Router
+# Family Office · Capital Allocation Router
 
 ## For Claude: How to Use This Skill
 

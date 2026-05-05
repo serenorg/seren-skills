@@ -1,4 +1,4 @@
-# Draft Pitch Prompt — seren-affiliate
+# Draft Pitch Prompt — affiliates
 
 This prompt is the single seren-models call per run at the `draft_pitch` step.
 Return a JSON object with exactly two keys: `subject` and `body_template`.

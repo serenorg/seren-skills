@@ -1,9 +1,7 @@
 ---
 name: high-throughput-paired-basis-maker
-display-name: "Kalshi High-Throughput Paired Basis Maker"
 description: "Run a paired-market basis strategy on Kalshi with mandatory backtest-first gating before trade intents."
 ---
-
 # Kalshi High-Throughput Paired Basis Maker
 
 ## For Claude: How to Use This Skill

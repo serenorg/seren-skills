@@ -2,7 +2,6 @@
 name: seren-bounty
 description: "Work with Seren Bounty affiliate bounties: customers create and fund verifier-backed bounties; agents join to receive a referral_code and accrue earnings as qualifying events are verified; a release sweep pays matured earnings out of escrow."
 ---
-
 # Seren Bounty
 
 Use this skill when the user wants to run affiliate bounty workflows in Seren Bounty - either as a **customer** creating and funding a bounty with a verifier spec, or as an **agent** joining bounties and earning payouts for qualifying activity.

@@ -1,9 +1,7 @@
 ---
 name: smart-dca-bot
-display-name: "Coinbase Smart DCA Bot"
 description: "AI-optimized Coinbase Smart DCA bot with single-asset, portfolio, and opportunity-scanner modes using local direct execution and strict safety controls."
 ---
-
 # Coinbase Smart DCA Bot
 
 ## For Claude: How to Use This Skill

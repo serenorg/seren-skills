@@ -24,7 +24,15 @@ ALLOWLISTED_FILES = {
     "tests/test_removed_skill_references.py",
 }
 
-SKIP_DIRS = {".git", ".worktrees", "__pycache__", ".venv", "node_modules", ".pytest_cache"}
+SKIP_DIRS = {
+    ".agent-shell",
+    ".git",
+    ".pytest_cache",
+    ".venv",
+    ".worktrees",
+    "__pycache__",
+    "node_modules",
+}
 
 
 def _literal_collections(module_path: Path) -> list[list[str] | tuple[str, ...] | dict[str, str]]:

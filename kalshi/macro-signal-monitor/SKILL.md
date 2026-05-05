@@ -1,9 +1,7 @@
 ---
 name: macro-signal-monitor
-display-name: "Kalshi Macro Signal Monitor"
 description: "Monitor gap and coil alignment for Kalshi contracts, map macro support to candidate markets, and explain signal freshness or ambiguity."
 ---
-
 # Kalshi Macro Signal Monitor
 
 ## For Claude: How to Use This Skill

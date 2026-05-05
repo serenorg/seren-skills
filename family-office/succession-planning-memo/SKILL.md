@@ -1,11 +1,8 @@
 ---
 name: succession-planning-memo
-display-name: "Family Office · Succession Planning Memo"
 description: "Family office: Produce a succession planning memo for leadership, ownership, and trustee roles across the family enterprise."
-tags: [family-office, pillar:legacy-preservation]
 ---
-
-# Succession Planning Memo
+# Family Office · Succession Planning Memo
 
 ## For Claude: How to Use This Skill
 

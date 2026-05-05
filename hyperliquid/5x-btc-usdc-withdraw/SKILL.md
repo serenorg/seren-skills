@@ -1,10 +1,8 @@
 ---
 name: 5x-btc-usdc-withdraw
-display-name: "Hyperliquid 5x BTC Withdraw"
 description: "5x leveraged BTC-PERP on Hyperliquid with free USDC withdrawal. No KYC, no debt, self-custody. Dry-run includes 270-day liquidation risk backtest via CoinGecko."
 ---
-
-# Hyperliquid 5x BTC USDC Withdraw
+# Hyperliquid 5x BTC Withdraw
 
 ## For Claude: How to Use This Skill
 

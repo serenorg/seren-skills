@@ -13,7 +13,7 @@ from typing import Any
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "dry_run": True,
-    "skill": "seren-affiliate",
+    "skill": "affiliates",
     "database": {
         "project": "affiliates",
         "name": "seren_affiliate",

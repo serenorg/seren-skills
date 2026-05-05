@@ -1,11 +1,8 @@
 ---
 name: healthcare-proxy-living-will-checklist
-display-name: "Family Office · Healthcare Proxy & Living Will Checklist"
 description: "Family office: Produce a checklist for healthcare proxy and living will documents — agents, scope, end-of-life directives, HIPAA authorizations."
-tags: [family-office, pillar:legacy-preservation]
 ---
-
-# Healthcare Proxy & Living Will Checklist
+# Family Office · Healthcare Proxy & Living Will Checklist
 
 ## For Claude: How to Use This Skill
 

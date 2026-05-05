@@ -1,9 +1,7 @@
 ---
 name: income-statement
-display-name: "Wells Fargo Income Statement"
 description: "Generate categorized income statements from Wells Fargo transaction data stored in SerenDB by the bank-statement-processing skill."
 ---
-
 # Wells Fargo Income Statement
 
 ## For Claude: How to Use This Skill

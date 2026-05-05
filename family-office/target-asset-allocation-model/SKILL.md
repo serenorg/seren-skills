@@ -1,11 +1,8 @@
 ---
 name: target-asset-allocation-model
-display-name: "Family Office · Target Asset Allocation Model"
 description: "Family office: Produce a target asset allocation model across public equities, fixed income, alternatives, real assets, and cash. Captures current allocation, target allocation, and drift bands."
-tags: [family-office, pillar:capital-allocation]
 ---
-
-# Target Asset Allocation Model
+# Family Office · Target Asset Allocation Model
 
 ## For Claude: How to Use This Skill
 

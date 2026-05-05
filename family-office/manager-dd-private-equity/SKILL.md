@@ -1,11 +1,8 @@
 ---
 name: manager-dd-private-equity
-display-name: "Family Office · Private Equity Manager DD Memo"
 description: "Family office: Produce a due diligence memo for a prospective private equity fund. Captures fund vintage, track record, sector focus, fee terms, and J-curve expectations."
-tags: [family-office, pillar:capital-allocation]
 ---
-
-# Private Equity Manager DD Memo
+# Family Office · Private Equity Manager DD Memo
 
 ## For Claude: How to Use This Skill
 

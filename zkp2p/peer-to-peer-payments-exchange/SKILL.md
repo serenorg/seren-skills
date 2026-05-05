@@ -1,10 +1,8 @@
 ---
 name: peer-to-peer-payments-exchange
-display-name: "ZKP2P Payments Exchange"
 description: "Route and execute peer-to-peer fiat-to-crypto payment and exchange flows on Peer (ZKP2P), including onramp, offramp, checkout, transfer, LP, vault, analytics, explorer, and activity monitoring paths."
 ---
-
-# Peer To Peer Payments Exchange
+# ZKP2P Payments Exchange
 
 ## For Claude: How to Use This Skill
 

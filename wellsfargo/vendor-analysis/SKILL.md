@@ -1,10 +1,8 @@
 ---
 name: vendor-analysis
-display-name: "Wells Fargo Vendor Analysis"
 description: "Group Wells Fargo transactions by normalized vendor name, rank by total spend and frequency, detect spending trends, and produce top vendor reports with month-over-month deltas."
 ---
-
-# Vendor Analysis
+# Wells Fargo Vendor Analysis
 
 ## For Claude: How to Use This Skill
 

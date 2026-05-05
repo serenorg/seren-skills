@@ -1,10 +1,8 @@
 ---
 name: browser-automation
-display-name: "Seren Browser Automation"
 description: "Automate web browsers using Playwright with stealth features for screenshots, web scraping, form filling, and browser interactions"
 ---
-
-# Browser Automation with Playwright
+# Seren Browser Automation
 
 Automate web browsers to perform tasks like taking screenshots, filling forms, clicking elements, and extracting data from websites.
 

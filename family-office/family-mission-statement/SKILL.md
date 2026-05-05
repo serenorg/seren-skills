@@ -1,11 +1,8 @@
 ---
 name: family-mission-statement
-display-name: "Family Office · Family Mission Statement"
 description: "Family office: Produce a family mission statement — values, purpose, principles, and aspirations."
-tags: [family-office, pillar:legacy-preservation]
 ---
-
-# Family Mission Statement
+# Family Office · Family Mission Statement
 
 ## For Claude: How to Use This Skill
 

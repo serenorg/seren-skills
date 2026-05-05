@@ -1,10 +1,8 @@
 ---
 name: api
-display-name: "Apollo API"
 description: "Apollo.io API for people and company enrichment, prospecting, and sales intelligence"
 ---
-
-# Apollo
+# Apollo API
 
 ## For Claude: How to Use This Skill
 

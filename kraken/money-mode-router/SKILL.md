@@ -1,9 +1,7 @@
 ---
 name: money-mode-router
-display-name: "Kraken Money Mode Router"
 description: "Kraken customer skill that converts user goals into a concrete Kraken action mode (payments, investing, trading, on-chain, automation) and persists each session to SerenDB"
 ---
-
 # Kraken Money Mode Router
 
 ## For Claude: How to Use This Skill

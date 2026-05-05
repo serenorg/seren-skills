@@ -1,13 +1,11 @@
 ---
 name: gclaw-agent
-display-name: "GemachDAO GClaw Agent"
 description: "Autonomous living AI agent with GMAC token metabolism, DeFi trading via GDEX SDK, self-replication, swarm coordination, and multi-channel communication — a single Go binary that must trade crypto to survive"
 license: MIT
 compatibility: "Requires Go 1.21+ or Docker; runs on x86_64, ARM64, RISC-V with <10MB RAM"
 allowed-tools: Bash(gclaw:*) Read Write
 ---
-
-# Gclaw — The Living Agent
+# GemachDAO GClaw Agent
 
 ## For Claude: How to Use This Skill
 

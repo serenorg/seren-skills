@@ -1,11 +1,8 @@
 ---
 name: concierge-personal-protection-plan
-display-name: "Family Office · Personal Protection Plan"
 description: "Family office: Produce a personal protection plan — threat profile, physical security, executive protection providers, travel security."
-tags: [family-office, pillar:complexity-management]
 ---
-
-# Personal Protection Plan
+# Family Office · Personal Protection Plan
 
 ## For Claude: How to Use This Skill
 

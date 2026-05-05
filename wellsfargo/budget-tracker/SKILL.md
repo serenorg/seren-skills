@@ -1,10 +1,8 @@
 ---
 name: budget-tracker
-display-name: "Wells Fargo Budget Tracker"
 description: "Compare actual Wells Fargo spending against user-defined monthly budgets per category, calculate variance, and track budget adherence over time."
 ---
-
-# Budget Tracker
+# Wells Fargo Budget Tracker
 
 ## For Claude: How to Use This Skill
 

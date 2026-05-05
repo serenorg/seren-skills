@@ -1,11 +1,8 @@
 ---
 name: leisure-asset-ownership-comparison
-display-name: "Family Office · Leisure Asset Ownership Comparison"
 description: "Family office: Produce a model comparing ownership options for a leisure asset (full ownership vs fractional vs chartered). Example: jet vs NetJets."
-tags: [family-office, pillar:complexity-management]
 ---
-
-# Leisure Asset Ownership Comparison
+# Family Office · Leisure Asset Ownership Comparison
 
 ## For Claude: How to Use This Skill
 

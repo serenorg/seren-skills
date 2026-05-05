@@ -1,11 +1,8 @@
 ---
 name: consolidated-reporting-spec
-display-name: "Family Office · Consolidated Reporting Specification"
 description: "Family office: Produce a specification for consolidated family-office reporting across entities, accounts, and asset classes."
-tags: [family-office, pillar:complexity-management]
 ---
-
-# Consolidated Reporting Specification
+# Family Office · Consolidated Reporting Specification
 
 ## For Claude: How to Use This Skill
 

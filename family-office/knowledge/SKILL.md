@@ -1,10 +1,8 @@
 ---
 name: knowledge
-display-name: "Family Office Knowledge"
 description: "Team memory system for family offices. Captures structured institutional knowledge (decisions, assumptions, risks, commitments, open questions), proactively resurfaces relevant context, asks for stale-memory validation, generates pre-meeting briefs and memory digests, and rewards contribution through visible team leverage."
 ---
-
-# Knowledge
+# Family Office Knowledge
 
 ## For Claude: How to Use This Skill
 

@@ -1,10 +1,8 @@
 ---
 name: p2p-hyperliquid-bitcoin-usdc-deposit
-display-name: "P2P Hyperliquid BTC Deposit"
 description: "Deposit cash into Polymarket with 5x Bitcoin leverage on Hyperliquid. No KYC, no debt, self-custody. Fiat onramp via ZKP2P peer-onramp. Dry-run includes 270-day liquidation risk backtest."
 ---
-
-# P2P Hyperliquid Bitcoin USDC Polymarket Deposit
+# P2P Hyperliquid BTC Deposit
 
 ## For Claude: How to Use This Skill
 

@@ -1,11 +1,8 @@
 ---
 name: legacy-preservation-router
-display-name: "Family Office · Legacy Preservation Router"
 description: "Family office: Pillar router for Legacy Preservation. Classifies a natural-language advisor ask into the matching leaf skill inside the Legacy Preservation pillar. Catalog rebuild tracked in issue #427."
-tags: [family-office, pillar:legacy-preservation, type:router]
 ---
-
-# Family Office — Legacy Preservation Router
+# Family Office · Legacy Preservation Router
 
 ## For Claude: How to Use This Skill
 

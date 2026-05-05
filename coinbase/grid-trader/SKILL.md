@@ -1,9 +1,7 @@
 ---
 name: grid-trader
-display-name: "Coinbase Grid Trader"
 description: "Automated grid trading bot for Coinbase Exchange — profits from price oscillation using a mechanical, non-directional strategy"
 ---
-
 # Coinbase Grid Trader
 
 ## For Claude: How to Use This Skill

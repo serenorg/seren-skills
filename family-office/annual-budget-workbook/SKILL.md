@@ -1,11 +1,8 @@
 ---
 name: annual-budget-workbook
-display-name: "Family Office · Annual Budget Workbook"
 description: "Family office: Produce an annual budget workbook for the family. Captures income sources, fixed expenses, variable expenses, savings targets, and charitable giving."
-tags: [family-office, pillar:complexity-management]
 ---
-
-# Annual Budget Workbook
+# Family Office · Annual Budget Workbook
 
 ## For Claude: How to Use This Skill
 

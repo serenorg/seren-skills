@@ -1,6 +1,6 @@
 {
   "status": "error",
-  "skill": "seren-affiliate",
+  "skill": "affiliates",
   "error_code": "connector_failure",
   "connector": "affiliates",
   "message": "Connector call failed during smoke test.",

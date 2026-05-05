@@ -1,9 +1,7 @@
 ---
 name: smart-dca-bot
-display-name: "Kraken Smart DCA Bot"
 description: "AI-optimized Kraken DCA bot with single-asset, portfolio, and scanner modes using local direct execution and strict safety controls."
 ---
-
 # Kraken Smart DCA Bot
 
 ## For Claude: How to Use This Skill

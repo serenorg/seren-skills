@@ -1,11 +1,8 @@
 ---
 name: family-meeting-agenda-minutes-template
-display-name: "Family Office · Family Meeting Agenda & Minutes Template"
 description: "Family office: Produce an agenda and minutes template for a recurring family meeting — attendees, agenda items, decisions, action items."
-tags: [family-office, pillar:legacy-preservation]
 ---
-
-# Family Meeting Agenda & Minutes Template
+# Family Office · Family Meeting Agenda & Minutes Template
 
 ## For Claude: How to Use This Skill
 

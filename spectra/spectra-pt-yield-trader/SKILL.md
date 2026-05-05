@@ -1,10 +1,8 @@
 ---
 name: spectra-pt-yield-trader
-display-name: "Spectra PT Yield Trader"
 description: "Plan and evaluate Spectra PT yield trades using the Spectra MCP server across 10 chains. Use when you need fixed-yield opportunity scans, PT quoting, portfolio simulation, and risk-gated execution handoff."
 ---
-
-# Spectra Pt Yield Trader
+# Spectra PT Yield Trader
 
 ## For Claude: How to Use This Skill
 

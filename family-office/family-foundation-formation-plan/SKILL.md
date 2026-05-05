@@ -1,11 +1,8 @@
 ---
 name: family-foundation-formation-plan
-display-name: "Family Office · Family Foundation Formation Plan"
 description: "Family office: Produce a formation plan for a family foundation — legal structure, initial funding, governance, grant-making policy."
-tags: [family-office, pillar:legacy-preservation]
 ---
-
-# Family Foundation Formation Plan
+# Family Office · Family Foundation Formation Plan
 
 ## For Claude: How to Use This Skill
 

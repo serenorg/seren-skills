@@ -1,9 +1,7 @@
 ---
 name: hybrid-signal-trader
-display-name: "Kalshi Hybrid Signal Trader"
 description: "Score Kalshi contract opportunities with cross-venue divergence plus gap and coil support, then return dry-run trade intents with plain-language rationale."
 ---
-
 # Kalshi Hybrid Signal Trader
 
 ## For Claude: How to Use This Skill

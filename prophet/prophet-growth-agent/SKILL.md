@@ -1,9 +1,7 @@
 ---
 name: prophet-growth-agent
-display-name: "Prophet Growth Agent"
 description: "Reinforce repeat Prophet market creation with lightweight status checks, progress tracking, reminder copy, and re-engagement recommendations after first success."
 ---
-
 # Prophet Growth Agent
 
 ## For Claude: How to Use This Skill

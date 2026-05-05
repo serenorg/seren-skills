@@ -1,10 +1,8 @@
 ---
 name: key-recovery-diagnosis
-display-name: "Crypto Key Recovery"
 description: "Diagnose crypto wallet access-loss scenarios, classify self-recovery feasibility, guide safe local recovery attempts for simple cases, and prepare sponsor handoff summaries for expert-only cases."
 ---
-
-# Crypto Key Self-Recovery Diagnosis
+# Crypto Key Recovery
 
 ## When to Use
 

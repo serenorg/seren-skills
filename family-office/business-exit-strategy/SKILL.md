@@ -1,11 +1,8 @@
 ---
 name: business-exit-strategy
-display-name: "Family Office · Exit Tax Minimization Plan"
 description: "Family office: Produce an exit tax minimization plan for a principal selling an operating business. Captures business basis, expected proceeds, planning windows, and candidate structures (QSBS, charitable trusts, installment sales)."
-tags: [family-office, pillar:capital-allocation]
 ---
-
-# Exit Tax Minimization Plan
+# Family Office · Exit Tax Minimization Plan
 
 ## For Claude: How to Use This Skill
 

@@ -14,7 +14,7 @@ MAX_PAGES_PER_RUN = 50  # 50 * 500 = 25k opt-outs per run, plenty per affiliate
 # Cloudflare's WAF on affiliates-ui.serendb.com 403s the default urllib
 # User-Agent. Send a proper identifying UA so the public read API is reachable.
 DEFAULT_USER_AGENT = (
-    "seren-affiliate-skill/1 (+https://github.com/serenorg/seren-skills)"
+    "affiliates-skill/1 (+https://github.com/serenorg/seren-skills)"
 )
 
 SAMPLE_PROGRAMS = [

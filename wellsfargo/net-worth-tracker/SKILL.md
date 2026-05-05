@@ -1,10 +1,8 @@
 ---
 name: net-worth-tracker
-display-name: "Wells Fargo Net Worth"
 description: "Track account balances from Wells Fargo statement data with optional manual asset and liability entries to produce a simplified balance sheet and net worth trajectory over time."
 ---
-
-# Net Worth Tracker
+# Wells Fargo Net Worth
 
 ## For Claude: How to Use This Skill
 

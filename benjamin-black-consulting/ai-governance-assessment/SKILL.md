@@ -1,10 +1,8 @@
 ---
 name: ai-governance-assessment
-display-name: "AI Governance Assessment"
 description: "Assess AI governance maturity for compliance/risk leaders: evaluates 8 domains against NIST AI RMF, EU AI Act, ISO 42001, and OCC SR 11-7 frameworks. Persists results to SerenDB for tracking and follow-up."
 ---
-
-# AI Governance Readiness Assessment
+# AI Governance Assessment
 
 ## For Claude: How to Use This Skill
 

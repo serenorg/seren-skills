@@ -1,10 +1,8 @@
 ---
 name: seren-bucks
-display-name: "Seren Bucks Affiliate"
 description: "Review-first outreach skill for the default Seren Bucks affiliate program. It bootstraps affiliate context via /programs/discover, mines sent-mail history and address books for candidates, persists them into a skill-owned CRM, proposes an editable daily top-10, drafts outbound and reply batches for approval, reconciles affiliate and reply signals, enforces hard DNC, and returns a manual daily digest."
 ---
-
-# Seren Bucks
+# Seren Bucks Affiliate
 
 Review-first growth skill for one default Seren Bucks affiliate program.
 

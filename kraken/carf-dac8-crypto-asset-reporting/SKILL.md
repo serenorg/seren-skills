@@ -1,10 +1,8 @@
 ---
 name: carf-dac8-crypto-asset-reporting
-display-name: "Kraken CARF DAC8 Reporting"
 description: "Reconcile CARF/DAC8 exchange-reported crypto transactions against user records, including transfer tracking and optional 1099-DA bridge mode."
 ---
-
-# CARF / DAC8 Crypto Asset Reporting
+# Kraken CARF DAC8 Reporting
 
 ## For Claude: How to Use This Skill
 
