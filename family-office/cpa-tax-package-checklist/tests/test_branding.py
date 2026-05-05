@@ -2,16 +2,12 @@
 
 ONE test file — walks every family-office leaf + router and asserts:
 
-  1. display-name is `Family Office · <something non-empty>` for leaves
-     and matches a canonical map for routers.
+  1. The first top-level H1 is `Family Office · <something non-empty>` for
+     leaves and matches a canonical map for routers.
   2. description leads with `Family office: `.
-  3. tags contains `family-office`.
-  4. tags contains exactly one `pillar:<x>` tag for leaves and pillar
-     routers; the top-level router omits it.
-  5. Leaf's tag pillar matches the leaf's agent.py `PILLAR` constant
-     (source of truth, so tags cannot silently drift from code).
-  6. Routers carry `type:router`.
-  7. `knowledge/` is untouched (its SKILL.md is not required to match
+  3. frontmatter `name` matches the parent folder slug.
+  4. Leaves keep a valid agent.py `PILLAR` constant.
+  5. `knowledge/` is untouched (its SKILL.md is not required to match
      the family-office branding).
 
 Per-leaf duplication of this test would catch no new bugs. Living
@@ -46,6 +42,8 @@ PILLAR_ROUTER_PILLARS = {
     "legacy-preservation-router": "legacy-preservation",
 }
 
+KNOWN_PILLARS = frozenset(PILLAR_ROUTER_PILLARS.values())
+
 SKIP_DIRS = {"knowledge"}
 
 
@@ -69,13 +67,11 @@ def _parse_frontmatter(md: str) -> dict[str, str]:
     raise AssertionError("missing frontmatter closer")
 
 
-def _parse_tags(value: str) -> list[str]:
-    v = value.strip()
-    if v.startswith("[") and v.endswith("]"):
-        inner = v[1:-1]
-    else:
-        inner = v
-    return [t.strip().strip("\"'") for t in inner.split(",") if t.strip()]
+def _first_top_level_h1(md: str) -> str:
+    for line in md.splitlines():
+        if line.startswith("# ") and not line.startswith("## "):
+            return line[2:].strip()
+    raise AssertionError("missing top-level H1 display name")
 
 
 def _pillar_from_agent(leaf_dir: Path) -> str:
@@ -121,24 +117,24 @@ def test_skill_branded_correctly(slug: str, skill_dir: Path, is_router: bool) ->
     md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
     fm = _parse_frontmatter(md)
 
-    # 1. display-name branding.
-    display = fm.get("display-name", "")
+    # 1. H1 display name branding.
+    display = _first_top_level_h1(md)
     if is_router:
         assert display == CANONICAL_ROUTER_DISPLAY[slug], (
-            f"{slug}: router display-name must match canonical map; "
+            f"{slug}: router H1 display name must match canonical map; "
             f"got {display!r}"
         )
     else:
         assert display.startswith(DISPLAY_PREFIX), (
-            f"{slug}: leaf display-name must start with {DISPLAY_PREFIX!r}; "
+            f"{slug}: leaf H1 display name must start with {DISPLAY_PREFIX!r}; "
             f"got {display!r}"
         )
         # Reject the double-prefix regression seen during augmentation.
         assert not display.startswith(DISPLAY_PREFIX + DISPLAY_PREFIX), (
-            f"{slug}: display-name double-prefixed"
+            f"{slug}: H1 display name double-prefixed"
         )
         assert len(display) > len(DISPLAY_PREFIX), (
-            f"{slug}: display-name has prefix but no artifact name"
+            f"{slug}: H1 display name has prefix but no artifact name"
         )
 
     # 2. description leads with Family office:.
@@ -150,37 +146,17 @@ def test_skill_branded_correctly(slug: str, skill_dir: Path, is_router: bool) ->
         f"{slug}: description double-prefixed"
     )
 
-    # 3. tags — family-office always present.
-    tags = _parse_tags(fm.get("tags", ""))
-    assert "family-office" in tags, f"{slug}: tags missing 'family-office'"
+    # 3. Agent Skills frontmatter name matches the folder slug.
+    assert fm.get("name") == slug, (
+        f"{slug}: frontmatter name must match folder slug; got {fm.get('name')!r}"
+    )
 
-    # 4. Pillar tag correctness.
-    pillar_tags = [t for t in tags if t.startswith("pillar:")]
-    if slug == "router":
-        assert pillar_tags == [], f"{slug}: top-level router must NOT carry a pillar tag"
-    elif slug in PILLAR_ROUTER_PILLARS:
-        expected = f"pillar:{PILLAR_ROUTER_PILLARS[slug]}"
-        assert pillar_tags == [expected], (
-            f"{slug}: expected {expected!r}; got {pillar_tags!r}"
-        )
-    else:
-        # Leaf: must have exactly one pillar tag, and it must match the
-        # agent.py PILLAR constant (source of truth, not an inferred guess).
-        assert len(pillar_tags) == 1, (
-            f"{slug}: leaf must have exactly one pillar tag; got {pillar_tags!r}"
-        )
-        expected = f"pillar:{_pillar_from_agent(skill_dir)}"
-        assert pillar_tags[0] == expected, (
-            f"{slug}: tag {pillar_tags[0]!r} does not match agent.py pillar "
-            f"{expected!r} — tags would silently drift"
-        )
-
-    # 5. Routers carry type:router.
-    if is_router:
-        assert "type:router" in tags, f"{slug}: router missing 'type:router' tag"
-    else:
-        assert "type:router" not in tags, (
-            f"{slug}: leaf must not carry 'type:router' tag"
+    # 4. Leaf pillar source of truth still exists in code.
+    if not is_router:
+        pillar = _pillar_from_agent(skill_dir)
+        assert pillar in KNOWN_PILLARS, (
+            f"{slug}: agent.py pillar must be one of {sorted(KNOWN_PILLARS)!r}; "
+            f"got {pillar!r}"
         )
 
 
@@ -188,9 +164,8 @@ def test_knowledge_skill_is_not_rebranded() -> None:
     """Explicit guard: knowledge keeps its existing branding, untouched."""
     knowledge_md = FAMILY_OFFICE_ROOT / "knowledge" / "SKILL.md"
     assert knowledge_md.exists()
-    fm = _parse_frontmatter(knowledge_md.read_text(encoding="utf-8"))
-    display = fm.get("display-name", "")
+    display = _first_top_level_h1(knowledge_md.read_text(encoding="utf-8"))
     assert not display.startswith(DISPLAY_PREFIX), (
         "knowledge skill must NOT be rebranded — it ships with its original "
-        "display-name per the catalog's 'knowledge untouched' invariant"
+        "H1 display name per the catalog's 'knowledge untouched' invariant"
     )
