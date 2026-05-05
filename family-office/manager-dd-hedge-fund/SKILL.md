@@ -22,6 +22,15 @@ Invoke when the advisor asks about:
 - HF allocation memo
 - evaluate hedge fund
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **HF managers want a sparring partner, not a yes-man** — *[3JS4fbhLiRQ @ 04:40]*
+- **Principal-led HF investing still needs admin scaffolding** — *[f4vwiAXPj3s @ 09:30]*
+- **Active HF manager selection is back on the FO agenda** — *[qldW5BOd5TQ @ 07:06]*
+- **Diversification depends on disciplined HF manager selection** — *[qldW5BOd5TQ @ 17:57]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

@@ -22,6 +22,13 @@ Invoke when the advisor asks about:
 - create budget
 - budget workbook
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance). Evidence on this skill is currently thin (1 quote); treat as a directional signal, not validated demand:
+
+- **Operators reach for Sage Intacct planning module to run family budgeting** — *[_URp9ryeUlQ @ 45:37]*
+- **Budgeting lives inside the GL/planning stack, not as a standalone spreadsheet** — *[_URp9ryeUlQ @ 45:37]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

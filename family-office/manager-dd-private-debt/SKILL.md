@@ -22,6 +22,14 @@ Invoke when the advisor asks about:
 - direct lending fund
 - private debt allocation
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Private credit sits inside a broader alts stack, not standalone** — *[4T0BpwFhRvo @ 00:22]*
+- **Private credit allocations must be tax-engineered, not just yield-chased** — *[4T0BpwFhRvo @ 01:30]*
+- **Private debt allocations are climbing and need fresh DD muscle** — *[qldW5BOd5TQ @ 09:01]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

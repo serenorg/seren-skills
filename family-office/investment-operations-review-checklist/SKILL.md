@@ -22,6 +22,16 @@ Invoke when the advisor asks about:
 - custody check
 - reconciliation review
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Monthly reconciliation is too slow — cadence needs to tighten** — *[f4vwiAXPj3s @ 12:41]*
+- **Hedge-fund principal still needs fund-admin to handle subscription docs and transactions** — *[f4vwiAXPj3s @ 09:30]*
+- **Investment ledgers plus supporting documents are now one queryable dataset** — *[f4vwiAXPj3s @ 23:19]*
+- **Capital calls still arrive over email across the alts industry** — *[f4vwiAXPj3s @ 25:23]*
+- **Investment team rarely coordinated with insourced or outsourced tax planning** — *[HV86G3RCPV0 @ 20:07]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

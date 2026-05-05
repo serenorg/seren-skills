@@ -22,6 +22,16 @@ Invoke when the advisor asks about:
 - buyout fund memo
 - PE allocation
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **DD has to be intense, not box-checking** — *[4T0BpwFhRvo @ 06:51]*
+- **Insourcing DD only pencils above the billion-dollar mark** — *[HV86G3RCPV0 @ 22:39]*
+- **Trust takes time — vetting partners can't be rushed** — *[HV86G3RCPV0 @ 25:17]*
+- **Alts data lives in silos that won't assimilate cleanly** — *[45pe5yImE9s @ 01:03]*
+- **Talent retention is a chronic FO bottleneck** — *[_URp9ryeUlQ @ 04:53]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

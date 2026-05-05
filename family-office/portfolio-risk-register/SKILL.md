@@ -22,6 +22,16 @@ Invoke when the advisor asks about:
 - risk management memo
 - portfolio risks
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Global trade war flagged as the year's top portfolio risk** — *[qldW5BOd5TQ @ 00:53]*
+- **Five-year horizon: geopolitics, recession, debt-crisis dominate the register** — *[qldW5BOd5TQ @ 05:44]*
+- **Quality tilt is the defense against permanent-loss drawdowns** — *[qldW5BOd5TQ @ 15:13]*
+- **Founders need illiquidity premium or shouldn't be in private markets** — *[4T0BpwFhRvo @ 06:24]*
+- **Crypto volatility can't be engineered or analyst-diligenced like a stock** — *[4T0BpwFhRvo @ 17:40]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:

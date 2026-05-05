@@ -22,6 +22,15 @@ Invoke when the advisor asks about:
 - policy audit
 - insurance worksheet
 
+## Customer Pain (VOC)
+
+Synthesized from family-office operator interviews (see `references/voc-evidence.md` for full provenance):
+
+- **Load policy, ChatGPT extracts expiration and updates the database** — *[dLoQJfqGgag @ 26:49]*
+- **Simple question "when does my policy expire?" still goes unanswered** — *[dLoQJfqGgag @ 26:43]*
+- **Out-of-state coverage often gets refused at point of care** — *[t1gU3F9AE-E @ 16:17]*
+- **Insurance review must coordinate with tax, bill-pay, and wealth advisors** — *[HV86G3RCPV0 @ 04:15]*
+
 ## Artifact Specification
 
 This skill produces a single named deliverable:
