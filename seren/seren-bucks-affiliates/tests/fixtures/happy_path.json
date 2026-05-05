@@ -1,6 +1,7 @@
 {
   "status": "ok",
   "skill": "seren-bucks-affiliates",
+  "tracked_link": "https://serendb.com?ref=default",
   "workflow_step_count": 12,
   "dry_run": true,
   "program": {
@@ -14,7 +15,16 @@
   },
   "proposal": {
     "editable": true,
-    "size": 10
+    "size": 10,
+    "quota_shortfall": true,
+    "qualified_count": 5,
+    "target": 10,
+    "sources_exhausted": [
+      "gmail_sent",
+      "outlook_sent",
+      "gmail_contacts",
+      "outlook_contacts"
+    ]
   },
   "approval": {
     "new_outbound_required": true,

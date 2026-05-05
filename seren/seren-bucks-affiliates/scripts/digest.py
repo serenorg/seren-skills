@@ -34,6 +34,8 @@ def build_daily_digest(
             "",
             "## Candidate Sync",
             f"- Discovered candidates: {sync_result['discovered_count']}",
+            f"- Qualified candidates: {sync_result['qualified_count']}",
+            f"- Quota shortfall: {str(sync_result['quota_shortfall']).lower()}",
             f"- Source counts: {sync_result['source_counts']}",
             "",
             "## Proposal Top 10",

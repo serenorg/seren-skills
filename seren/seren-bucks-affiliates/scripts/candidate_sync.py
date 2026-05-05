@@ -86,13 +86,12 @@ def sync_candidates(config: dict) -> dict:
         source_counts[source_name] = len(source_items)
         for item in source_items:
             email = item.get("email", "")
-            context = {"thread_content": item.get("thread_content", "")}
 
-            if not is_personal_relationship(email, context):
+            if not is_personal_relationship(email):
                 filtered_out_business += 1
                 continue
 
-            penalty = compute_personal_score_penalty(email, context)
+            penalty = compute_personal_score_penalty(email)
             adjusted_score = max(0, item["candidate_score"] - penalty)
             item_copy = dict(item)
             item_copy["candidate_score"] = adjusted_score
@@ -105,12 +104,25 @@ def sync_candidates(config: dict) -> dict:
         reverse=True,
     )
 
+    target = int(config["inputs"].get("proposal_size", config["limits"]["proposal_size"]))
+    target = max(1, min(target, 10))
+    sources_exhausted = [
+        source_name
+        for source_name, enabled in source_flags.items()
+        if enabled
+    ]
+    quota_shortfall = len(candidates) < target
+
     return {
         "status": "ok",
         "persist_immediately": True,
         "crm_source_of_truth": "skill_owned_serendb",
         "source_counts": source_counts,
         "discovered_count": len(candidates),
+        "qualified_count": len(candidates),
+        "target": target,
+        "quota_shortfall": quota_shortfall,
+        "sources_exhausted": sources_exhausted if quota_shortfall else [],
         "filtered_out_business_emails": filtered_out_business,
         "candidates": candidates,
     }

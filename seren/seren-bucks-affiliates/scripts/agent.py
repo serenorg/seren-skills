@@ -8,7 +8,7 @@ import json
 
 from bootstrap import bootstrap_affiliate_context, bootstrap_auth_and_db
 from candidate_sync import sync_candidates
-from common import load_config, utc_now
+from common import load_config, tracked_link, utc_now
 from digest import build_daily_digest
 from drafting import build_draft_batches
 from ranking import build_editable_top10
@@ -39,6 +39,7 @@ def _bootstrap_only(config: dict) -> dict:
             "run_status": "blocked",
             "mode": "bootstrap",
             "generated_at": utc_now(),
+            "tracked_link": tracked_link(config),
             "error": auth_db,
         }
 
@@ -49,6 +50,7 @@ def _bootstrap_only(config: dict) -> dict:
             "mode": "bootstrap",
             "generated_at": utc_now(),
             "auth_path": auth_db["auth_path"],
+            "tracked_link": tracked_link(config),
             "error": affiliate,
         }
 
@@ -57,6 +59,7 @@ def _bootstrap_only(config: dict) -> dict:
         "mode": "bootstrap",
         "generated_at": utc_now(),
         "auth_path": auth_db["auth_path"],
+        "tracked_link": tracked_link(config),
         "database_status": auth_db["database_status"],
         "program": affiliate["program"],
         "affiliate_feed_status": affiliate["affiliate_feed_status"],
@@ -68,6 +71,7 @@ def _status(config: dict) -> dict:
         "run_status": "ok",
         "mode": "status",
         "generated_at": utc_now(),
+        "tracked_link": tracked_link(config),
         "program": config["program"],
         "database": config["database"],
         "limits": config["limits"],
@@ -84,6 +88,7 @@ def _run_pipeline(config: dict, *, mode: str) -> dict:
             "run_status": "blocked",
             "mode": mode,
             "generated_at": utc_now(),
+            "tracked_link": tracked_link(config),
             "error": auth_db,
         }
 
@@ -94,6 +99,7 @@ def _run_pipeline(config: dict, *, mode: str) -> dict:
             "mode": mode,
             "generated_at": utc_now(),
             "auth_path": auth_db["auth_path"],
+            "tracked_link": tracked_link(config),
             "error": affiliate,
         }
 
@@ -146,6 +152,7 @@ def _run_pipeline(config: dict, *, mode: str) -> dict:
         "mode": mode,
         "generated_at": utc_now(),
         "auth_path": auth_db["auth_path"],
+        "tracked_link": tracked_link(config),
         **payload,
     }
 
