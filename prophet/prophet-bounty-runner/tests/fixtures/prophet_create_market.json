@@ -1,0 +1,12 @@
+{
+  "data": {
+    "createMarket": {
+      "id": "prophet_market_fixture_001",
+      "slug": "btc-100k-may-10-2026",
+      "resolutionDate": "2026-05-10T23:59:00Z",
+      "creator": {
+        "id": "viewer_fixture_001"
+      }
+    }
+  }
+}
