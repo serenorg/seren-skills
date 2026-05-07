@@ -1,0 +1,30 @@
+{
+  "status": "error",
+  "skill": "prophet-bounty-runner",
+  "error_code": "connector_failure",
+  "connector": "bounty",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "bounty": {
+      "get": {
+        "status": "error",
+        "connector": "bounty",
+        "action": "get",
+        "error_code": "connector_failure"
+      },
+      "post": {
+        "status": "error",
+        "connector": "bounty",
+        "action": "post",
+        "error_code": "connector_failure"
+      }
+    },
+    "storage": {
+      "upsert": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "upsert"
+      }
+    }
+  }
+}
