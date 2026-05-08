@@ -3,12 +3,14 @@
 Reads the latest unread message matching a sender filter, decodes the
 base64url-encoded body, and returns plain text.
 
-Wire format: calls go through the agent's gateway at
-  GET /users/me/messages?q=...
-  GET /users/me/messages/{id}?format=full
+Wire format: the seren `gmail` publisher exposes the Google Gmail API
+under a flat surface (per the seren-bucks skill doc: `gmail` is scoped
+to `/messages`, `/threads`, `/drafts`). The publisher strips the
+`/users/me/` prefix from the upstream path and routes by tool. Use the
+plain `q=` query param, not the `X-Gmail-Query` header.
 
-The gateway is responsible for x402 / SEREN_API_KEY / OAuth-passthrough
-plumbing; this reader just shapes the request.
+Phase-14 live probe (2026-05-08): `GET /publishers/gmail/messages?q=...`
+returns 200; `GET /publishers/gmail/users/me/messages` returns 403.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 from . import EmailPublisherUnavailable
 
@@ -65,9 +68,8 @@ class GmailInboxReader:
             listing = self.gateway.call(
                 self.PUBLISHER,
                 "GET",
-                "/users/me/messages",
+                f"/messages?q={quote(query)}&maxResults=5",
                 body=None,
-                headers={"X-Gmail-Query": query},
             )
         except Exception as exc:  # pragma: no cover - exercised in live tests
             raise EmailPublisherUnavailable(f"gmail listing failed: {exc}") from exc
@@ -82,9 +84,8 @@ class GmailInboxReader:
         detail = self.gateway.call(
             self.PUBLISHER,
             "GET",
-            f"/users/me/messages/{msg_id}",
+            f"/messages/{msg_id}?format=full",
             body=None,
-            headers={"X-Gmail-Format": "full"},
         )
         payload = (detail or {}).get("payload") or {}
         return _flatten_body(payload) or None

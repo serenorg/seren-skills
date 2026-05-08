@@ -35,6 +35,11 @@ from typing import Any
 from bounty.client import BountyClient
 from bounty.reconciler import MarketRecord, SubmissionReconciler
 from candidates import filter_candidates, generate_candidates, score_candidates
+from expected_bounty_spec import CUSTOMER_SLUG as EXPECTED_CUSTOMER_SLUG
+from expected_bounty_spec import validate_bounty as _validate_bounty_spec
+from otp_worker.auth_facade import AuthFacade
+from otp_worker.playwright_client import RealBrowserSession
+from otp_worker.session_cache import SessionCache
 from polymarket.discovery import discover_polymarket_sources
 
 DEFAULT_DRY_RUN = False
@@ -112,20 +117,40 @@ def normalize_request(request: dict) -> dict:
 
 
 def acquire_prophet_token_via_otp(
-    email: str, *, provider: str, gateway: Any
+    email: str,
+    *,
+    provider: str,
+    gateway: Any,
+    bounty_id: str = "",
+    seren_user_id: str = "",
+    headless: bool = True,
 ) -> dict:
     """Drive the Privy email-OTP flow and return a JWT + viewer identity.
 
-    Implemented in phase 5 (`otp_worker.auth_facade.get_fresh_jwt`).
-    Tests monkeypatch this symbol on `agent` directly so the smoke
-    suite can simulate both happy path and OTP failure without a real
-    Playwright session. The production path is wired during Phase 14
-    live validation.
+    Phase 14 wiring (plan §11.4 + §20). Opens a Playwright-backed
+    `RealBrowserSession`, runs `AuthFacade.get_fresh_jwt`, and returns a
+    flat dict matching the shape `tests/fixtures/prophet_otp_session.json`
+    so test monkeypatches and production callers share one contract.
+
+    Tests still monkeypatch this symbol with a lambda; the production
+    branch only fires when the test does not stub the symbol.
     """
-    raise NotImplementedError(
-        "agent.acquire_prophet_token_via_otp is monkeypatched in tests; "
-        "Phase 14 wires the live AuthFacade.get_fresh_jwt entrypoint here."
-    )
+    facade = AuthFacade(cache=SessionCache())
+    with RealBrowserSession(headless=headless) as browser:
+        fresh = facade.get_fresh_jwt(
+            email=email,
+            provider=provider,
+            seren_user_id=seren_user_id,
+            bounty_id=bounty_id,
+            browser_session=browser,
+            gateway=gateway,
+        )
+    return {
+        "token": fresh.jwt,
+        "prophet_viewer_id": fresh.prophet_viewer_id,
+        "viewer_email": email,
+        "source": fresh.source,
+    }
 
 
 def run_command(request: dict, *, gateway: Any, storage: Any) -> dict:
@@ -181,17 +206,98 @@ def _count_local_markets(storage: Any, *, bounty_id: str | None) -> int:
 
 
 def _cmd_setup(req: dict, *, gateway: Any, storage: Any) -> dict:
-    """Auth + reachability checks only — no market work, no submissions."""
+    """Auth + reachability checks plus bounty auto-resolve.
+
+    Plan §22 acceptance criterion #4: `--command setup` against a real
+    SEREN_API_KEY returns ok=true and reports the auto-resolved
+    bounty_id. Operator-supplied `bounty_id` overrides auto-resolve
+    (per plan §3 ADR "Bounty auto-resolution hardening").
+    """
+    bounty_client = BountyClient(gateway=gateway)
+    pinned = (req.get("bounty_id") or "").strip()
+    if pinned:
+        return {
+            "status": "ok",
+            "command": "setup",
+            "connectors": AVAILABLE_CONNECTORS,
+            "bounty_id": pinned,
+            "bounty_resolution": "operator_pinned",
+        }
+    bounty_id, reason = _auto_resolve_bounty_id(bounty_client)
+    if not bounty_id:
+        return {
+            "status": "blocked",
+            "command": "setup",
+            "connectors": AVAILABLE_CONNECTORS,
+            "bounty_id": None,
+            "bounty_resolution": "blocked_no_bounty",
+            "reason": reason,
+        }
     return {
         "status": "ok",
         "command": "setup",
         "connectors": AVAILABLE_CONNECTORS,
+        "bounty_id": bounty_id,
+        "bounty_resolution": "auto_resolved",
     }
 
 
+def _auto_resolve_bounty_id(bounty_client: BountyClient) -> tuple[str, str]:
+    """Return (bounty_id, reason). bounty_id is empty when blocked.
+
+    Plan §3 ADR "Bounty auto-resolution hardening": filter open bounties
+    by `customer_slug=prophet`, validate each candidate against
+    `expected_bounty_spec.py`, pick the newest match. No fallback to
+    newest-by-created_at without spec validation.
+    """
+    try:
+        candidates = bounty_client.list_my_bounties(
+            customer_slug=EXPECTED_CUSTOMER_SLUG, status="open"
+        )
+    except Exception as exc:
+        return "", f"list_my_bounties failed: {exc}"
+    if not candidates:
+        return "", f"no open bounties with customer_slug={EXPECTED_CUSTOMER_SLUG!r}"
+    matched: list[dict] = []
+    failures: list[str] = []
+    for bounty in candidates:
+        ok, reason = _validate_bounty_spec(bounty)
+        if ok:
+            matched.append(bounty)
+        else:
+            failures.append(f"{bounty.get('id')}: {reason}")
+    if not matched:
+        return "", "no candidate matched expected_bounty_spec; rejected: " + "; ".join(failures)
+    matched.sort(key=lambda b: b.get("created_at") or "", reverse=True)
+    return matched[0].get("id") or "", "auto_resolved"
+
+
 def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
-    bounty_id = req.get("bounty_id") or DEFAULT_BOUNTY_ID
     bounty_client = BountyClient(gateway=gateway)
+    pinned = (req.get("bounty_id") or "").strip()
+    if pinned:
+        bounty_id = pinned
+    else:
+        resolved, reason = _auto_resolve_bounty_id(bounty_client)
+        if not resolved:
+            storage.insert(
+                "runs",
+                {
+                    "bounty_id": None,
+                    "command": "run",
+                    "status": "blocked_no_bounty",
+                    "error": reason,
+                    "dry_run": req["dry_run"],
+                },
+            )
+            return {
+                "status": "blocked",
+                "command": "run",
+                "bounty_id": None,
+                "reason": "blocked_no_bounty",
+                "error": reason,
+            }
+        bounty_id = resolved
 
     # Step 1 — bounty join is always idempotent and must happen before
     # OTP so we have the participant record persisted even if OTP fails.
@@ -205,6 +311,7 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
             req["prophet_email"],
             provider=req["email_provider"],
             gateway=gateway,
+            bounty_id=bounty_id,
         )
     except Exception as exc:
         storage.insert(
@@ -223,11 +330,13 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
             "bounty_id": bounty_id,
             "reason": "blocked_otp",
             "error": str(exc),
+            "prophet_auth": {"method": "otp", "source": "failed"},
         }
 
     jwt = (otp or {}).get("token") or ""
     viewer_id = (otp or {}).get("prophet_viewer_id") or ""
     viewer_email = (otp or {}).get("viewer_email") or ""
+    auth_source = (otp or {}).get("source") or "otp"
 
     # Per plan §11 step 10 + §17 schema: bind participant identity now
     # so every market persisted later carries this viewer_id. Phase 10
@@ -272,8 +381,15 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
             "bounty_id": bounty_id,
             "referral_code": join.referral_code,
             "dry_run": True,
-            "candidates_submitted": 0,
+            "polymarket_sources_considered": len(sources),
+            "candidates_generated": len(filtered),
             "prophet_markets_created": [],
+            "bounty_submission": {"status": "not_attempted", "submission_id": ""},
+            "prophet_auth": {
+                "method": "otp",
+                "source": auth_source,
+                "viewer_id": viewer_id,
+            },
         }
 
     # Step 6 — submit each surviving candidate via single-shot
@@ -403,7 +519,12 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
         "bounty_id": bounty_id,
         "referral_code": join.referral_code,
         "polymarket_sources_considered": len(sources),
-        "candidates_submitted": len(filtered),
+        "candidates_generated": len(filtered),
+        "prophet_auth": {
+            "method": "otp",
+            "source": auth_source,
+            "viewer_id": viewer_id,
+        },
         "prophet_markets_created": [
             {
                 "prophet_market_id": m.prophet_market_id,
@@ -501,9 +622,31 @@ def load_config(config_path: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+class _InMemoryStorage:
+    """Phase-14 in-memory persistence stand-in for the live smoke.
+
+    Mirrors the StubStorage shape the unit tests use so `_cmd_run` and
+    `_cmd_status` don't notice the difference. Plan §17 SerenDB-backed
+    persistence (Phase 14.5) will swap this for a real run_sql writer;
+    the smoke test verifies pipeline behavior, not the persistence layer.
+    """
+
+    def __init__(self) -> None:
+        self.runs: list[dict] = []
+        self.submissions: list[dict] = []
+        self.events: list[dict] = []
+        self.markets_created: list[dict] = []
+        self.participant_identity: list[dict] = []
+
+    def insert(self, table: str, row: dict) -> None:
+        if not hasattr(self, table):
+            raise AssertionError(f"_InMemoryStorage: unknown table {table!r}")
+        getattr(self, table).append(row)
+
+
 def main() -> int:
     args = parse_args()
-    _config = load_config(args.config)  # parsed for side-effect / future use
+    _config = load_config(args.config)
 
     request = {
         "command": args.command,
@@ -515,26 +658,33 @@ def main() -> int:
         "dry_run": args.dry_run,
         "json_output": args.json_output,
     }
-    # CLI is a stub — the real gateway/storage wiring happens at Phase 12
-    # (continuous runs via seren-cron). Print the normalized request so a
-    # smoke `python3 scripts/agent.py --command status` confirms the
-    # entrypoint is reachable.
     try:
-        normalized = normalize_request(request)
+        normalize_request(request)
     except ValueError as exc:
         print(json.dumps({"status": "invalid_request", "error": str(exc)}))
         return 2
 
-    print(
-        json.dumps(
-            {
-                "status": "stub_cli",
-                "command": normalized["command"],
-                "connectors": AVAILABLE_CONNECTORS,
-            }
-        )
-    )
-    return 0
+    # Lazy import so unit tests that import agent.py do not pay the
+    # urllib + Playwright cost. The HttpGateway is the same one the
+    # cron runner uses (plan §12); it unwraps the seren publisher
+    # `data.body` envelope so BountyClient sees flat dicts.
+    from seren_cron_client import HttpGateway
+
+    try:
+        gateway = HttpGateway()
+    except Exception as exc:
+        print(json.dumps({"status": "error", "error": str(exc)}))
+        return 1
+
+    storage = _InMemoryStorage()
+    try:
+        result = run_command(request, gateway=gateway, storage=storage)
+    except Exception as exc:
+        print(json.dumps({"status": "error", "error": str(exc), "command": request["command"]}))
+        return 1
+
+    print(json.dumps(result, sort_keys=True, default=str))
+    return 0 if result.get("status") in ("ok", "blocked") else 1
 
 
 if __name__ == "__main__":

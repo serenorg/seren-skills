@@ -44,7 +44,11 @@ from .playwright_client import (
 )
 from .session_cache import SessionCache, SessionCacheEntry
 
-PRIVY_OTP_SENDER = "noreply@privy.io"
+# Phase-14 live probe (2026-05-08): Privy now sends from
+# `no-reply@mail.privy.io`, not `noreply@privy.io`. Documented as the
+# second of two selector rotations seen during the live test (the
+# Connect-button → SIGN IN rotation is the first; see playwright_client.py).
+PRIVY_OTP_SENDER = "no-reply@mail.privy.io"
 INBOX_POLL_INTERVAL_SECONDS = 3.0
 INBOX_POLL_TIMEOUT_SECONDS = 90.0
 
@@ -122,6 +126,20 @@ def acquire_token(
     submit_otp_code(browser_session, code)
     jwt = wait_for_jwt(browser_session)
 
+    # Phase-14 diagnostic (gated on env var; disabled by default so
+    # production cron runs do not leak token previews to stderr).
+    import os as _os, sys as _sys
+    if _os.environ.get("PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE") == "1":
+        try:
+            dump = browser_session.dump_local_storage_keys()  # type: ignore[attr-defined]
+        except Exception:
+            dump = {"_dump_failed": "True"}
+        _sys.stderr.write(
+            f"[diag] localStorage keys: {sorted(dump.keys())}\n"
+            f"[diag] jwt_len={len(jwt)} jwt_first16={jwt[:16]!r} jwt_last8={jwt[-8:]!r} "
+            f"jwt_dot_segments={jwt.count('.')}\n"
+        )
+
     # Step 7: capture cookie set.
     artifacts = capture_artifacts(browser_session, jwt=jwt)
     if not artifacts.refresh_token:
@@ -180,6 +198,15 @@ def _query_viewer(*, gateway: Any, jwt: str) -> tuple[str, str]:
             headers={"Authorization": f"Bearer {jwt}"},
         )
     except Exception as exc:
+        # Phase-14 diagnostic: dump JWT shape on viewer 401 so we can
+        # tell whether prophet-ai is rejecting the token or the gateway
+        # is dropping it. Gated; only fires when explicitly opted in.
+        import os as _os, sys as _sys
+        if _os.environ.get("PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE") == "1":
+            _sys.stderr.write(
+                f"[diag] viewer_call_failed exc={exc!r} jwt_len={len(jwt)} "
+                f"jwt_first16={jwt[:16]!r} jwt_dot_segments={jwt.count('.')}\n"
+            )
         raise PrivyAuthFailed(f"viewer query failed: {exc}") from exc
 
     viewer = ((result or {}).get("data") or {}).get("viewer") or {}

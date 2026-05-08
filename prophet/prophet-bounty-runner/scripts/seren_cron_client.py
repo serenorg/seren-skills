@@ -25,9 +25,26 @@ import hashlib
 import json
 import os
 import platform
+import ssl
 from dataclasses import dataclass
 from typing import Any
 from urllib.request import Request, urlopen
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Return an SSL context that uses certifi when available.
+
+    Python's bundled OpenSSL on macOS does not always pick up the
+    system CA bundle, so `urlopen` fails with CERTIFICATE_VERIFY_FAILED
+    against api.serendb.com. Falling back to the platform default keeps
+    Linux/CI working when certifi is not installed.
+    """
+    try:
+        import certifi  # type: ignore[import-not-found]
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 PUBLISHER = "seren-cron"
 SKILL_SLUG = "prophet-bounty-runner"
@@ -173,11 +190,23 @@ class HttpGateway:
             method=method.upper(),
             data=data,
         )
-        with urlopen(request, timeout=self.timeout_seconds) as response:
+        with urlopen(request, timeout=self.timeout_seconds, context=_ssl_context()) as response:
             text = response.read().decode("utf-8")
-            if not text:
-                return {}
-            return json.loads(text)
+        if not text:
+            return {}
+        parsed = json.loads(text)
+        # Live probe (Phase 14): every Seren publisher response wraps the
+        # actual payload in `{data: {status, body, response_bytes, cost,
+        # ...metadata}}`. Unwrap to `body` so callers see the publisher's
+        # native shape (e.g. seren-bounty's `{bounties: [...]}` or prophet-ai's
+        # GraphQL `{data, errors}`). Test stubs register the unwrapped shape
+        # already, so this matches both production and StubGateway.
+        if isinstance(parsed, dict) and "data" in parsed and isinstance(parsed["data"], dict):
+            inner = parsed["data"]
+            if "body" in inner:
+                return inner["body"]
+            return inner
+        return parsed
 
 
 # ---------------------------------------------------------------------------

@@ -68,6 +68,31 @@ class BountyClient:
             body={"content_text": content_text, "content_prosemirror": None},
         )
 
+    def list_my_bounties(
+        self, *, customer_slug: str | None = None, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        """GET /organizations/me/bounties for the authenticated org.
+
+        Plan §3 ADR ("Bounty auto-resolution hardening"): the auto-resolve
+        path filters by `customer_slug=prophet&status=open`, validates each
+        candidate against `expected_bounty_spec.py`, and picks the newest
+        match. This thin wrapper just shapes the query and unwraps the
+        publisher response.
+        """
+        query = []
+        if customer_slug:
+            query.append(f"customer_slug={customer_slug}")
+        if status:
+            query.append(f"status={status}")
+        path = "/organizations/me/bounties"
+        if query:
+            path = f"{path}?{'&'.join(query)}"
+        response = self._call("GET", path, body=None)
+        bounties = response.get("bounties")
+        if not isinstance(bounties, list):
+            return []
+        return [b for b in bounties if isinstance(b, dict)]
+
     def earnings(self, *, bounty_id: str | None = None) -> list[dict[str, Any]]:
         """GET /users/me/earnings, optionally filtered by bounty_id.
 

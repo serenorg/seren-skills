@@ -21,7 +21,10 @@ from . import OtpEmailTimeout, PrivyAuthFailed
 PROPHET_APP_URL = "https://app.prophetmarket.ai"
 
 # Selectors — keep these as named constants for easy diffing on UI changes.
-SEL_CONNECT_BUTTON = 'button:has-text("Connect")'
+# Re-validated against https://app.prophetmarket.ai 2026-05-08 (Phase 14).
+# The login button text rotated from "Connect" to "SIGN IN" since the
+# plan was written; fix selector rotations here only.
+SEL_CONNECT_BUTTON = 'button:has-text("SIGN IN")'
 SEL_EMAIL_INPUT = "#email-input"
 SEL_EMAIL_SUBMIT = 'button:has-text("Submit")'
 SEL_OTP_INPUT_TEMPLATE = 'input[name="code-{i}"]'  # 0..5
@@ -78,6 +81,24 @@ def submit_otp_code(session: BrowserSession, code: str) -> None:
         session.fill(SEL_OTP_INPUT_TEMPLATE.format(i=i), digit)
 
 
+def _unwrap_jwt(raw: str | None) -> str | None:
+    """Strip JSON-quote wrapping the Privy SDK adds when persisting tokens.
+
+    Phase-14 live probe (2026-05-08): the Privy web SDK serializes
+    `privy:token` via `JSON.stringify`, so `localStorage.getItem` returns
+    `'"eyJ..."'` (literal surrounding double-quotes). Sending that as
+    `Bearer "eyJ..."` makes Prophet's GraphQL upstream return 401
+    Unauthorized. Real JWTs always start with `eyJ` (base64 `{"alg":...`),
+    so stripping balanced surrounding quotes is safe.
+    """
+    if not raw:
+        return raw
+    s = raw.strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        s = s[1:-1]
+    return s or None
+
+
 def wait_for_jwt(
     session: BrowserSession,
     *,
@@ -87,7 +108,7 @@ def wait_for_jwt(
     """Poll localStorage for privy:token until it appears or times out."""
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        token = session.get_local_storage(PRIVY_TOKEN_LOCAL_STORAGE_KEY)
+        token = _unwrap_jwt(session.get_local_storage(PRIVY_TOKEN_LOCAL_STORAGE_KEY))
         if token:
             return token
         time.sleep(poll_seconds)
@@ -104,3 +125,96 @@ def capture_artifacts(session: BrowserSession, *, jwt: str) -> PrivyAuthArtifact
         privy_token_cookie=session.get_cookie(PRIVY_TOKEN_COOKIE) or "",
         privy_session_cookie=session.get_cookie(PRIVY_SESSION_COOKIE) or "",
     )
+
+
+class RealBrowserSession:
+    """Concrete Playwright-backed BrowserSession for the Phase-14 live test.
+
+    Wraps `sync_playwright` chromium. Use as a context manager so the
+    browser process is reliably closed on exit:
+
+        with RealBrowserSession(headless=True) as session:
+            open_privy_modal(session)
+            ...
+
+    Plan §11.5 explicitly skipped a unit test for this class — it is
+    the seam between the testable Protocol surface and Playwright's
+    actual API. Live coverage comes from the Phase-14 acceptance run.
+    """
+
+    def __init__(self, *, headless: bool = True) -> None:
+        # Imported lazily so non-live runs (and unit tests that stub
+        # BrowserSession) do not pay the Playwright import cost.
+        from playwright.sync_api import sync_playwright  # noqa: PLC0415
+
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(headless=headless)
+        self._context = self._browser.new_context()
+        self._page = self._context.new_page()
+
+    def navigate(self, url: str) -> None:
+        self._page.goto(url, wait_until="domcontentloaded")
+
+    def click(self, selector: str) -> None:
+        self._page.click(selector)
+
+    def fill(self, selector: str, value: str) -> None:
+        self._page.fill(selector, value)
+
+    def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
+        self._page.wait_for_selector(selector, timeout=timeout_ms)
+
+    def get_local_storage(self, key: str) -> str | None:
+        value = self._page.evaluate(
+            "(k) => window.localStorage.getItem(k)", key
+        )
+        if isinstance(value, str):
+            return value
+        return None
+
+    def dump_local_storage_keys(self) -> dict[str, str]:
+        """Phase-14 diagnostic: enumerate every localStorage key + truncated value.
+
+        Used only by `acquire_token`'s debug branch when
+        `PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE=1` is set in the environment.
+        Truncates each value to 80 chars so JWTs don't end up in logs.
+        """
+        return self._page.evaluate(
+            """() => {
+                const out = {};
+                for (let i = 0; i < window.localStorage.length; i++) {
+                    const k = window.localStorage.key(i);
+                    const v = window.localStorage.getItem(k);
+                    out[k] = (v || '').slice(0, 80);
+                }
+                return out;
+            }"""
+        ) or {}
+
+    def get_cookie(self, name: str) -> str | None:
+        for cookie in self._context.cookies():
+            if cookie.get("name") == name:
+                value = cookie.get("value")
+                if isinstance(value, str):
+                    return value
+        return None
+
+    def close(self) -> None:
+        try:
+            self._context.close()
+        except Exception:
+            pass
+        try:
+            self._browser.close()
+        except Exception:
+            pass
+        try:
+            self._pw.stop()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "RealBrowserSession":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
