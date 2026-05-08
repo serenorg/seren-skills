@@ -5,8 +5,8 @@ Wires the modules from phases 5–9 (OTP worker, Prophet client, bounty
 client, polymarket discovery, candidate generator) into the three
 top-level commands the spec exposes: `setup`, `run`, `status`.
 
-Two intentional Phase-10 deviations from the live shape, both flagged
-inline so a Phase 14 hardening pass can find them:
+One intentional Phase-10 deviation from the live shape, flagged
+inline so a Phase 14 hardening pass can find it:
 
   - **Single-shot createMarket mutation per candidate**, not the four-
     step `initiateMarket → startOddsCalculation → ...` chain that
@@ -18,13 +18,9 @@ inline so a Phase 14 hardening pass can find them:
     response (the fixture returns `creator.id` and `resolutionDate`
     directly), saving an extra round-trip.
 
-  - **Submit cap of 1 candidate per run.** Plan §16.1 emits up to
-    `submit_limit` markets per run; Phase 10 hard-caps at 1 to match
-    the smoke fixture's single createMarket response and the
-    `len(create_market_calls) == 1` assertion. Lifting this cap is a
-    Phase 14 concern alongside the four-step chain and the dedup
-    pre-filter (plan §14.3 mandatory dedup is also deferred — the
-    Phase 10 fixture does not register a `markets` response).
+Plan §14.3 mandatory dedup against existing Prophet markets is also
+deferred to Phase 14 — the smoke fixture does not register a `markets`
+response, so calling `markets_for_dedup` would fail in tests today.
 """
 
 from __future__ import annotations
@@ -51,9 +47,6 @@ DEFAULT_BOUNTY_ID = "bounty_fixture_001"
 # Plan §3 ADR: every Prophet market must resolve before this instant.
 BOUNTY_DEADLINE = datetime(2026, 5, 11, 0, 0, 0, tzinfo=timezone.utc)
 BOUNTY_DEADLINE_ISO = "2026-05-11T00:00:00Z"
-
-# Phase 10 only — see module docstring.
-_PHASE10_SUBMIT_CAP = 1
 
 _CREATE_MARKET_MUTATION = (
     "mutation CreateMarket($source: PolymarketSourceInput!) { "
@@ -237,9 +230,6 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
     candidates = generate_candidates(sources, n=req["candidate_limit"])
     scored = score_candidates(candidates)
     filtered = filter_candidates(scored, submit_limit=req["submit_limit"])
-
-    # Phase 10 cap. See module docstring.
-    filtered = filtered[:_PHASE10_SUBMIT_CAP]
 
     # Step 5 — dry-run short-circuit BEFORE any Prophet write.
     if req["dry_run"]:

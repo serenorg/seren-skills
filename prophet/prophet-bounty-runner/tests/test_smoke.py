@@ -58,9 +58,17 @@ def _seed_happy_path(stub_gateway, stub_storage) -> None:
 # tests
 
 
-def test_happy_path_run_creates_one_market_and_one_submission(
+def test_happy_path_run_creates_qualifying_markets_and_one_submission(
     base_run_request, stub_gateway, stub_storage, monkeypatch
 ) -> None:
+    """Happy path emits 1..submit_limit markets and exactly one submission.
+
+    seren-bounty's submission contract REPLACES content per call (plan
+    §13.2), so submission count is always exactly 1 per run regardless
+    of how many markets get created. Market count is bounded only by
+    `submit_limit` and how many polymarket sources survive the deadline
+    + score filters.
+    """
     monkeypatch.setattr(
         "agent.acquire_prophet_token_via_otp",
         lambda *_args, **_kw: load_fixture("prophet_otp_session.json"),
@@ -74,7 +82,7 @@ def test_happy_path_run_creates_one_market_and_one_submission(
         "seren-bounty", "POST", "/bounties/bounty_fixture_001/submission"
     )
     assert result["status"] == "ok"
-    assert len(create_market_calls) == 1
+    assert 1 <= len(create_market_calls) <= base_run_request["submit_limit"]
     assert len(submission_calls) == 1
 
 
