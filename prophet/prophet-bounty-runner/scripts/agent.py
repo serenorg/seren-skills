@@ -124,6 +124,7 @@ def acquire_prophet_token_via_otp(
     bounty_id: str = "",
     seren_user_id: str = "",
     headless: bool = True,
+    require_viewer_binding: bool = True,
 ) -> dict:
     """Drive the Privy email-OTP flow and return a JWT + viewer identity.
 
@@ -132,19 +133,43 @@ def acquire_prophet_token_via_otp(
     flat dict matching the shape `tests/fixtures/prophet_otp_session.json`
     so test monkeypatches and production callers share one contract.
 
+    `require_viewer_binding=False` (dry-run) lets the run continue when
+    `viewer.user` is empty — common when the user has a Privy identity
+    on mainnet but no Prophet user record yet. Non-dry-run market
+    creation still demands a bound viewer_id (plan §22 #12 P0).
+
     Tests still monkeypatch this symbol with a lambda; the production
     branch only fires when the test does not stub the symbol.
     """
+    from otp_worker import PrivyAuthFailed  # local import to avoid test-time playwright dep
+
     facade = AuthFacade(cache=SessionCache())
-    with RealBrowserSession(headless=headless) as browser:
-        fresh = facade.get_fresh_jwt(
-            email=email,
-            provider=provider,
-            seren_user_id=seren_user_id,
-            bounty_id=bounty_id,
-            browser_session=browser,
-            gateway=gateway,
-        )
+    try:
+        with RealBrowserSession(headless=headless) as browser:
+            fresh = facade.get_fresh_jwt(
+                email=email,
+                provider=provider,
+                seren_user_id=seren_user_id,
+                bounty_id=bounty_id,
+                browser_session=browser,
+                gateway=gateway,
+            )
+    except PrivyAuthFailed as exc:
+        if require_viewer_binding:
+            raise
+        # Dry-run soft-fail path: surface the JWT we have (if any) and
+        # mark the binding as deferred. The cache may already have the
+        # JWT written; if not, return an empty token but a non-error
+        # source so the caller emits prophet_auth.method == "otp".
+        cache = SessionCache()
+        entry = cache.read()
+        return {
+            "token": entry.jwt or "",
+            "prophet_viewer_id": entry.prophet_viewer_id or "",
+            "viewer_email": email,
+            "source": "otp_deferred_binding",
+            "binding_error": str(exc),
+        }
     return {
         "token": fresh.jwt,
         "prophet_viewer_id": fresh.prophet_viewer_id,
@@ -312,6 +337,7 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
             provider=req["email_provider"],
             gateway=gateway,
             bounty_id=bounty_id,
+            require_viewer_binding=not bool(req["dry_run"]),
         )
     except Exception as exc:
         storage.insert(
@@ -407,7 +433,12 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
                 }
             },
         }
-        headers = {"Authorization": f"Bearer {jwt}"} if jwt else {}
+        # Phase-14 live probe (2026-05-08): the seren `prophet-ai`
+        # publisher gateway requires the SerenAPIKey on `Authorization`
+        # for caller-auth/billing, so the user's Privy JWT rides on
+        # the `Cookie` header (`privy-token=<jwt>`) — the Prophet web
+        # app's native auth channel and a documented passthrough header.
+        headers = {"Cookie": f"privy-token={jwt}"} if jwt else {}
         try:
             response = gateway.call(
                 "prophet-ai", "POST", "/api/graphql", body=body, headers=headers

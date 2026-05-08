@@ -27,7 +27,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 PUBLISHER = "polymarket-data"
-PATH = "/markets"
+# Phase-14 live probe (2026-05-08): the seren `polymarket-data` publisher
+# exposes Polymarket's Gamma API directly. Default `/markets` returns 20
+# arbitrary rows; we narrow to deadline-eligible open markets server-side
+# so the response we filter is already pre-trimmed.
+_BASE_PATH = "/markets"
+_DEFAULT_LIMIT = 100
 
 
 @dataclass
@@ -43,33 +48,50 @@ def discover_polymarket_sources(
     *, gateway: Any, deadline: datetime
 ) -> list[PolymarketSource]:
     """Fetch settling-markets feed and return the deadline-eligible subset."""
-    response = gateway.call(PUBLISHER, "GET", PATH, body=None)
-    raw_sources = _extract_sources(response)
     deadline_utc = _ensure_utc(deadline)
+    deadline_iso = deadline_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    path = (
+        f"{_BASE_PATH}?end_date_max={deadline_iso}"
+        f"&closed=false&active=true&limit={_DEFAULT_LIMIT}"
+    )
+    response = gateway.call(PUBLISHER, "GET", path, body=None)
+    raw_sources = _extract_sources(response)
 
     keepers: list[PolymarketSource] = []
     for raw in raw_sources:
         if not isinstance(raw, dict):
             continue
-        if raw.get("settled") is True:
+        # Polymarket Gamma exposes per-market lifecycle as `closed` (true
+        # once resolution is finalized). Fall back to `archived` /
+        # `resolved` if `closed` is absent — the publisher mirrors the
+        # source verbatim and shapes drift between vintages.
+        # `closed` is the live publisher field; `settled` is the legacy
+        # name preserved by older fixtures and downstream consumers.
+        if any(raw.get(k) is True for k in ("closed", "archived", "resolved", "settled")):
             continue
-        resolution_date = _parse_resolution_date(raw.get("resolution_date"))
+        # Field-name mapping (live probe 2026-05-08): the publisher
+        # returns Polymarket's native shape. `conditionId` is the
+        # canonical on-chain identifier; `endDate` is ISO-8601 UTC.
+        resolution_date = _parse_resolution_date(
+            raw.get("endDate") or raw.get("endDateIso") or raw.get("resolution_date")
+        )
         if resolution_date is None:
             continue
         if resolution_date >= deadline_utc:
             continue
-        market_id = raw.get("polymarket_market_id")
+        market_id = raw.get("conditionId") or raw.get("id") or raw.get("polymarket_market_id")
         question = raw.get("question")
         if not isinstance(market_id, str) or not market_id:
             continue
         if not isinstance(question, str) or not question:
             continue
+        category = _extract_category(raw)
         keepers.append(
             PolymarketSource(
                 polymarket_market_id=market_id,
                 question=question,
                 resolution_date=resolution_date,
-                category=raw.get("category") if isinstance(raw.get("category"), str) else None,
+                category=category,
                 settled=False,
             )
         )
@@ -77,12 +99,31 @@ def discover_polymarket_sources(
 
 
 def _extract_sources(response: Any) -> list[Any]:
-    if not isinstance(response, dict):
-        return []
-    sources = response.get("sources")
-    if not isinstance(sources, list):
-        return []
-    return sources
+    # Live probe 2026-05-08: the seren `polymarket-data` publisher returns
+    # a flat list of market objects. Tolerate the legacy `{sources: [...]}`
+    # envelope too so test fixtures keep working.
+    if isinstance(response, list):
+        return response
+    if isinstance(response, dict):
+        sources = response.get("sources") or response.get("markets") or response.get("data")
+        if isinstance(sources, list):
+            return sources
+    return []
+
+
+def _extract_category(raw: dict[str, Any]) -> str | None:
+    direct = raw.get("category")
+    if isinstance(direct, str) and direct:
+        return direct
+    # Polymarket nests category under `events[0].category` for some shapes.
+    events = raw.get("events")
+    if isinstance(events, list) and events:
+        first = events[0]
+        if isinstance(first, dict):
+            cat = first.get("category")
+            if isinstance(cat, str) and cat:
+                return cat
+    return None
 
 
 def _parse_resolution_date(value: Any) -> datetime | None:

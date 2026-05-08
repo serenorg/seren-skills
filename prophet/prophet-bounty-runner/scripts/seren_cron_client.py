@@ -190,8 +190,24 @@ class HttpGateway:
             method=method.upper(),
             data=data,
         )
-        with urlopen(request, timeout=self.timeout_seconds, context=_ssl_context()) as response:
-            text = response.read().decode("utf-8")
+        try:
+            with urlopen(request, timeout=self.timeout_seconds, context=_ssl_context()) as response:
+                text = response.read().decode("utf-8")
+        except Exception as exc:
+            # Surface the upstream error body when a publisher returns a
+            # structured GraphQL error or a JSON `{error: ...}` envelope.
+            # Phase-14 diagnostic: bare "HTTP Error 401: Unauthorized"
+            # hides the prophet-ai message that would tell us why a JWT
+            # is rejected (e.g. "user not registered, call
+            # registerWithPrivy"). Re-raise with the body appended.
+            body_text = ""
+            try:
+                body_text = exc.read().decode("utf-8")  # type: ignore[attr-defined]
+            except Exception:
+                body_text = ""
+            if body_text:
+                raise RuntimeError(f"{exc} :: body={body_text[:600]}") from exc
+            raise
         if not text:
             return {}
         parsed = json.loads(text)

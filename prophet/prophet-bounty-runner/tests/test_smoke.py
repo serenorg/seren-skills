@@ -37,7 +37,7 @@ def _seed_happy_path(stub_gateway, stub_storage) -> None:
     stub_gateway.register(
         "polymarket-data",
         "GET",
-        "/markets",
+        "/markets?end_date_max=2026-05-11T00:00:00Z&closed=false&active=true&limit=100",
         load_fixture("polymarket_settling.json"),
     )
     stub_gateway.register(

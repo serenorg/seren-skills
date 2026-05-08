@@ -148,7 +148,7 @@ def acquire_token(
         raise PrivyAuthFailed("Privy did not set privy-refresh-token cookie")
 
     # Step 8: bind participant identity (P0 — plan §11.1 step 10, §3 ADR).
-    viewer_id, viewer_email = _query_viewer(gateway=gateway, jwt=jwt)
+    viewer_id, viewer_email = _query_viewer(gateway=gateway, jwt=jwt, email=email)
     if viewer_email.casefold() != email.casefold():
         raise IdentityMismatch(
             f"Prophet viewer.email {viewer_email!r} does not match "
@@ -178,42 +178,113 @@ def acquire_token(
     )
 
 
-def _query_viewer(*, gateway: Any, jwt: str) -> tuple[str, str]:
+def _query_viewer(*, gateway: Any, jwt: str, email: str = "") -> tuple[str, str]:
     """Call prophet-ai's `viewer { id email }` and return (id, email).
 
-    The real schema field names are confirmed during the Phase 6 schema
-    probe; the agent-side Prophet client wraps this. This thin helper
-    keeps the OTP worker self-contained and lets test_token_acquirer
-    stub the entire viewer-binding step.
+    Phase-14: if the first viewer call fails (most commonly because the
+    user has a Privy identity but no Prophet user record bound to it),
+    try `registerWithPrivy` once and re-query. Idempotent on the
+    Prophet side: an already-registered user gets back their existing
+    record, and a fresh user gets created. Either way the viewer query
+    should succeed on retry.
     """
+    try:
+        return _viewer_call(gateway, jwt)
+    except _ViewerNotAuthorized as exc:
+        if not email:
+            raise PrivyAuthFailed(f"viewer query failed: {exc}") from exc
+        try:
+            _register_with_privy(gateway=gateway, jwt=jwt, email=email)
+        except Exception as register_exc:
+            raise PrivyAuthFailed(
+                f"viewer query failed: {exc}; registerWithPrivy fallback also failed: {register_exc}"
+            ) from exc
+        try:
+            return _viewer_call(gateway, jwt)
+        except Exception as retry_exc:
+            raise PrivyAuthFailed(
+                f"viewer query still failed after registerWithPrivy: {retry_exc}"
+            ) from retry_exc
+
+
+class _ViewerNotAuthorized(Exception):
+    """Raised when Prophet rejects the viewer query (401 / no user record)."""
+
+
+def _viewer_call(gateway: Any, jwt: str) -> tuple[str, str]:
     try:
         result = gateway.call(
             "prophet-ai",
             "POST",
             "/api/graphql",
             body={
-                "query": "query Viewer { viewer { id email } }",
+                "query": (
+                    "query Viewer { viewer { user { id email } "
+                    "walletBalance { availableCents totalCents "
+                    "onChainUsdc safeAddress safeDeployed } } }"
+                ),
                 "variables": {},
             },
-            headers={"Authorization": f"Bearer {jwt}"},
+            # Phase-14 live probe (2026-05-08): Prophet's `Viewer` type
+            # has no top-level `id`/`email`; user identity lives at
+            # `viewer.user`. Wallet balance lives at `viewer.walletBalance`
+            # and gets folded into the participant_identity row so the
+            # deposit-recommendation step has the data it needs.
+            #
+            # Auth: gateway needs SerenAPIKey on `Authorization` for
+            # caller-auth/billing, so Privy JWT rides on the `Cookie`
+            # header (`privy-token=<jwt>`) — the Prophet web app's
+            # native auth channel and a documented passthrough header.
+            headers={"Cookie": f"privy-token={jwt}"},
         )
     except Exception as exc:
-        # Phase-14 diagnostic: dump JWT shape on viewer 401 so we can
-        # tell whether prophet-ai is rejecting the token or the gateway
-        # is dropping it. Gated; only fires when explicitly opted in.
         import os as _os, sys as _sys
         if _os.environ.get("PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE") == "1":
             _sys.stderr.write(
                 f"[diag] viewer_call_failed exc={exc!r} jwt_len={len(jwt)} "
                 f"jwt_first16={jwt[:16]!r} jwt_dot_segments={jwt.count('.')}\n"
             )
-        raise PrivyAuthFailed(f"viewer query failed: {exc}") from exc
+        raise _ViewerNotAuthorized(str(exc)) from exc
 
     viewer = ((result or {}).get("data") or {}).get("viewer") or {}
-    viewer_id = viewer.get("id") or ""
-    viewer_email = viewer.get("email") or ""
+    user = viewer.get("user") or {}
+    viewer_id = user.get("id") or ""
+    viewer_email = user.get("email") or ""
     if not viewer_id or not viewer_email:
-        raise PrivyAuthFailed(
-            f"viewer query returned incomplete payload: id={viewer_id!r} email={viewer_email!r}"
-        )
+        errors = (result or {}).get("errors") or []
+        msg = errors[0].get("message", "viewer null") if errors else "viewer payload incomplete"
+        raise _ViewerNotAuthorized(f"viewer payload empty: {msg}")
     return viewer_id, viewer_email
+
+
+def _register_with_privy(*, gateway: Any, jwt: str, email: str) -> None:
+    """Idempotent registerWithPrivy call. Errors propagate to caller.
+
+    Phase-14: discovered via live introspection on 2026-05-08. Input
+    fields are all SCALAR (email, fullName, eoaAddress, isWalletLogin),
+    none NON_NULL, so passing only email is safe. Prophet-side schema
+    is `Mutation: registerWithPrivy(input: RegisterWithPrivyInput!) ->
+    PrivyRegistrationResult!`.
+    """
+    import os as _os, sys as _sys
+    mutation = (
+        "mutation RegisterWithPrivy($input: RegisterWithPrivyInput!) { "
+        "registerWithPrivy(input: $input) { __typename } "
+        "}"
+    )
+    result = gateway.call(
+        "prophet-ai",
+        "POST",
+        "/api/graphql",
+        body={
+            "query": mutation,
+            "variables": {"input": {"email": email, "isWalletLogin": False}},
+        },
+        headers={"Cookie": f"privy-token={jwt}"},
+    )
+    if _os.environ.get("PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE") == "1":
+        errors = (result or {}).get("errors") or []
+        _sys.stderr.write(
+            f"[diag] registerWithPrivy result.data={(result or {}).get('data')!r} "
+            f"errors={errors!r}\n"
+        )

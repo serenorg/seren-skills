@@ -33,8 +33,18 @@ from conftest import load_fixture  # type: ignore[import-not-found]
 DEADLINE = datetime(2026, 5, 11, 0, 0, 0, tzinfo=timezone.utc)
 
 
-def _seed_polymarket(stub_gateway, payload: dict) -> None:
-    stub_gateway.register("polymarket-data", "GET", "/markets", payload)
+_LIVE_PATH = (
+    "/markets?end_date_max=2026-05-11T00:00:00Z"
+    "&closed=false&active=true&limit=100"
+)
+
+
+def _seed_polymarket(stub_gateway, payload) -> None:
+    # Phase-14: discovery now sends an explicit deadline-bounded query
+    # string. Register on the full path so production + test paths match
+    # exactly. `payload` accepts either the legacy `{sources: [...]}`
+    # envelope or a flat list, since the production code tolerates both.
+    stub_gateway.register("polymarket-data", "GET", _LIVE_PATH, payload)
 
 
 def test_market_resolving_at_or_after_deadline_is_excluded(stub_gateway) -> None:

@@ -67,25 +67,71 @@ extracts, code submits, JWT lands in `localStorage["privy:token"]` (413
 chars, ES256, 3 segments — well-formed). `_unwrap_jwt` strips the
 JSON-quote wrapping the Privy SDK adds.
 
-**Blocker (P0 to clear before §20.2 acceptance and §20.4 chore):** the
-viewer query against `prophet-ai` returns `HTTP 401 Unauthorized`.
-Diagnostic confirms the JWT itself is well-formed; Prophet is rejecting
-the user-context query at the upstream level. Most likely cause:
-`taariq@serendb.com`'s only Prophet-side history is a `Prophet Testnet
-Account Live` activation email from 2026-03-25 — the mainnet
-`registerWithPrivy` + `completeProfile` mutations have not run, so
-mainnet has no user record bound to this Privy identity.
+**Plan §20.2 dry-run smoke is green** (10 OTP emails consumed total
+across the diagnostic loop on 2026-05-08). The final run output:
 
-Two paths to clear:
+```
+status: ok, dry_run: true,
+polymarket_sources_considered: 100, candidates_generated: 1,
+prophet_markets_created: [], bounty_submission: not_attempted,
+prophet_auth: { method: otp, source: otp_deferred_binding, viewer_id: "" }
+```
 
-- **Manual:** operator signs in once at https://app.prophetmarket.ai
-  (Privy OTP + complete profile + accept ToS) before re-running the
-  smoke. Lowest-risk; no further code changes.
-- **Automated:** add a pre-`viewer` step that calls `registerWithPrivy`
-  and (if needed) `completeProfile` from inside `acquire_token`. Real
-  code, but makes the skill self-onboarding for new users. Required
-  for any cron-driven autonomous user that hasn't manually onboarded.
+**Critical Phase-14 discoveries (in addition to the five UI rotations
+listed above):**
 
-Diagnostic stderr output is gated on `PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE=1`
-in the env so production cron runs do not leak token previews. Five
-OTP emails were consumed during the live diagnostic loop on 2026-05-08.
+- **Auth channel for prophet-ai is `Cookie: privy-token=<jwt>`, not
+  `Authorization: Bearer <jwt>`.** The seren publisher gateway demands
+  the SerenAPIKey on `Authorization` for caller-auth/billing; the
+  Privy JWT must ride on a different documented passthrough header.
+  The Prophet web app's native auth is also Cookie-based, so this
+  matches upstream. The plan §3 description ("user's Privy JWT rides
+  on `Authorization: Bearer ...`") is incorrect for the gateway path
+  — it would be correct only against a direct
+  `https://app.prophetmarket.ai/api/graphql` call without the gateway.
+
+- **`Viewer` schema does NOT have top-level `id`/`email`.** The plan
+  §3 description ("OTP worker calls `Query: viewer { id email }`") is
+  wrong. Real schema (introspected 2026-05-08): `Viewer { user { id
+  email username }, walletBalance { availableCents totalCents
+  onChainUsdc safeAddress safeDeployed }, balance { ... }, ... }`.
+
+- **`polymarket-data` publisher returns Polymarket's native Gamma
+  shape** — a flat list of market objects keyed by `conditionId`,
+  `endDate`, `closed`. The original discovery module assumed
+  `{sources: [...]}` with `polymarket_market_id`/`resolution_date`/
+  `settled` field names. Discovery now sends an explicit deadline
+  query string and tolerates both shapes.
+
+**Two blockers remain before non-dry-run market creation works:**
+
+1. **`viewer.user` is null.** The Cookie-authed query reaches upstream
+   Prophet cleanly (no 401, no schema error), but returns
+   `viewer.user = null`. Most likely the user's Privy mainnet identity
+   has never been bound to a Prophet `User` record (only `Prophet
+   Testnet Account Live` history exists in the inbox). Cleared by the
+   operator signing in once at https://app.prophetmarket.ai
+   (Privy OTP + complete profile + accept ToS).
+
+2. **`registerWithPrivy` mutation gets `"Privy authentication
+   required"` upstream**, regardless of whether the JWT is sent on
+   `Authorization`, `X-Prophet-Session`, or `Cookie`. Prophet's
+   mutation resolver checks auth differently from its query resolver.
+   Until cleared, the autonomous self-onboarding path won't work — so
+   the skill cannot recover automatically when a new user hasn't
+   manually onboarded. Needs a follow-on diagnostic (likely involves
+   sending multiple Privy cookies — `privy-token`, `privy-session`,
+   and `privy-refresh-token` together — to mirror the web app's
+   request shape exactly). Not blocking dry-run.
+
+**Non-dry-run path still requires viewer-binding (plan §22 #12 P0).**
+`require_viewer_binding=True` for non-dry-run runs. Once blocker (1)
+is cleared, the non-dry-run market creation should proceed; if it
+hits the mutation-auth issue (blocker 2), createMarket will return
+the same "Privy authentication required" error and the run will
+record `prophet.create_market_failed` events.
+
+**The §20.4 chore commit is intentionally deferred** until at least
+one non-dry-run market lands successfully on Prophet. The dry-run
+smoke green is good enough for §20.2 acceptance criterion #5; the
+non-dry-run market is acceptance criterion #6.
