@@ -145,16 +145,39 @@ def run_command(request: dict, *, gateway: Any, storage: Any) -> dict:
 
 
 def _cmd_status(req: dict, *, gateway: Any, storage: Any) -> dict:
-    """Read-only earnings query. Must NOT touch polymarket-data or prophet-ai."""
+    """Read-only earnings + local-ledger query.
+
+    Plan §17.3: the status command shows both server-side earnings and
+    the skill-owned `markets_created` count. Must NOT touch
+    polymarket-data or prophet-ai — earnings come from seren-bounty,
+    market count comes from local SerenDB.
+    """
     bounty_client = BountyClient(gateway=gateway)
     bounty_id = req.get("bounty_id")
     earnings = bounty_client.earnings(bounty_id=bounty_id)
+    local_count = _count_local_markets(storage, bounty_id=bounty_id)
     return {
         "status": "ok",
         "command": "status",
         "bounty_id": bounty_id,
         "earnings_count": len(earnings),
+        "local_markets_created": local_count,
     }
+
+
+def _count_local_markets(storage: Any, *, bounty_id: str | None) -> int:
+    """Count rows in the skill-owned `markets_created` ledger.
+
+    When bounty_id is None, counts across all bounties (the user's
+    cumulative market output for whoever they are). When bounty_id is
+    set, scopes to that bounty only — the operator's reconciler shape.
+    """
+    rows = getattr(storage, "markets_created", None) or []
+    if bounty_id is None:
+        return sum(1 for r in rows if isinstance(r, dict))
+    return sum(
+        1 for r in rows if isinstance(r, dict) and r.get("bounty_id") == bounty_id
+    )
 
 
 def _cmd_setup(req: dict, *, gateway: Any, storage: Any) -> dict:
@@ -359,8 +382,10 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
         submission_id = (submission or {}).get("submission_id", "")
 
     # Step 8 — persist the run row last so its status reflects what
-    # actually happened above.
-    run_status = "succeeded" if created else "no_markets_created"
+    # actually happened above. Zero-market runs are still `succeeded`
+    # per the §17.2 enum (the pipeline completed without error; the
+    # market_count column distinguishes empty days from active ones).
+    run_status = "succeeded"
     storage.insert(
         "runs",
         {
