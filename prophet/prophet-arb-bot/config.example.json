@@ -1,0 +1,26 @@
+{
+  "inputs": {
+    "prophet_email": "you@example.com",
+    "email_provider": "gmail",
+    "manual_pairs": []
+  },
+  "storage": {
+    "project_name": "prophet",
+    "database_name": "prophet"
+  },
+  "scoring": {
+    "min_spread": 0.03,
+    "max_spread": 0.30,
+    "kelly_fraction": 0.25,
+    "max_trade_size_usdc": 50.0,
+    "min_trade_size_usdc": 5.0,
+    "bankroll_usdc": 200.0
+  },
+  "intelligence": {
+    "enabled": false,
+    "max_basis_volatility": 0.05,
+    "fetch_correlations": true
+  },
+  "live_mode": false,
+  "max_orders_per_run": 5
+}

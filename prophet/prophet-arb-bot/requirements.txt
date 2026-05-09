@@ -1,0 +1,8 @@
+# prophet-arb-bot runtime.
+# - certifi: optional but recommended on macOS where the bundled OpenSSL
+#   does not always pick up the system CA bundle (see HttpGateway._ssl_context).
+# - psycopg2-binary: required for SerenDB-backed persistence. The seren-db
+#   publisher returns a Postgres connection URI; we connect with psycopg2
+#   directly (the publisher does not expose an ad-hoc run-sql endpoint).
+certifi>=2024.7.4
+psycopg2-binary>=2.9.9
