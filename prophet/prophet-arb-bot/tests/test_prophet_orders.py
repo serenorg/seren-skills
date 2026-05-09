@@ -222,6 +222,138 @@ def test_cancel_order_returns_false_when_payload_has_errors(stub_gateway) -> Non
     assert client.cancel_order(jwt="x", order_id="ord_1") is False
 
 
+def test_list_user_orders_uses_viewer_orders_relay_shape(stub_gateway) -> None:
+    """Pin the live `viewer.orders` Relay shape (issue #478).
+
+    The previous query hit `Query.userOrders` which does not exist in
+    Prophet's schema, so the dedupe path silently failed every tick.
+    The real path is `viewer.orders { edges { node { ... } } }` returning
+    Order records with `market { id }`, `priceBps`, `quantityShares`.
+    """
+    stub_gateway.register(
+        "prophet-ai",
+        "POST",
+        "/api/graphql",
+        {
+            "data": {
+                "viewer": {
+                    "orders": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": "ord_open_1",
+                                    "market": {"id": "mkt_a"},
+                                    "outcome": "YES",
+                                    "side": "BUY",
+                                    "type": "LIMIT",
+                                    "priceBps": 4200,
+                                    "quantityShares": 23.81,
+                                    "filledShares": 0.0,
+                                    "remainingShares": 23.81,
+                                    "status": "OPEN",
+                                }
+                            },
+                            {
+                                "node": {
+                                    "id": "ord_open_2",
+                                    "market": {"id": "mkt_b"},
+                                    "outcome": "NO",
+                                    "side": "SELL",
+                                    "type": "LIMIT",
+                                    "priceBps": 5500,
+                                    "quantityShares": 9.0,
+                                    "filledShares": 1.0,
+                                    "remainingShares": 8.0,
+                                    "status": "PARTIALLY_FILLED",
+                                }
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    )
+    client = ProphetOrderClient(gateway=stub_gateway)
+    orders = client.list_user_orders(jwt="x", status="OPEN")
+
+    body = stub_gateway.calls_to("prophet-ai", "POST", "/api/graphql")[0]["body"]
+    # Walk viewer.orders.edges[].node, not the dead userOrders path.
+    assert "viewer" in body["query"]
+    assert "edges" in body["query"]
+    assert "node" in body["query"]
+    assert "userOrders" not in body["query"]
+    # Selection set must use Order's real field names.
+    assert "quantityShares" in body["query"]
+    assert "priceBps" in body["query"]
+    assert "market { id }" in body["query"] or "market{id}" in body["query"].replace(
+        " ", ""
+    )
+
+    assert len(orders) == 2
+    assert orders[0].order_id == "ord_open_1"
+    assert orders[0].market_id == "mkt_a"
+    assert orders[0].outcome == "yes"
+    assert orders[0].side == "buy"
+    assert orders[0].limit_price == 0.42  # priceBps 4200 / 10000
+    assert orders[0].shares == 23.81
+    assert orders[0].status == "open"
+
+    assert orders[1].market_id == "mkt_b"
+    assert orders[1].limit_price == 0.55
+    assert orders[1].filled_shares == 1.0
+
+
+def test_list_user_orders_market_filter_is_client_side(stub_gateway) -> None:
+    """`market_id` is a client-side filter today — OrdersInput shape unknown.
+
+    The agent dedupes by (market_id, outcome, side); the client must drop
+    nodes whose market.id does not match the requested filter rather than
+    relying on a server-side argument that we have not yet introspected.
+    """
+    stub_gateway.register(
+        "prophet-ai",
+        "POST",
+        "/api/graphql",
+        {
+            "data": {
+                "viewer": {
+                    "orders": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": "ord_a",
+                                    "market": {"id": "mkt_a"},
+                                    "outcome": "YES",
+                                    "side": "BUY",
+                                    "priceBps": 5000,
+                                    "quantityShares": 10.0,
+                                    "filledShares": 0.0,
+                                    "status": "OPEN",
+                                }
+                            },
+                            {
+                                "node": {
+                                    "id": "ord_b",
+                                    "market": {"id": "mkt_b"},
+                                    "outcome": "YES",
+                                    "side": "BUY",
+                                    "priceBps": 5000,
+                                    "quantityShares": 10.0,
+                                    "filledShares": 0.0,
+                                    "status": "OPEN",
+                                }
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    )
+    client = ProphetOrderClient(gateway=stub_gateway)
+    orders = client.list_user_orders(jwt="x", market_id="mkt_b", status="OPEN")
+    assert [o.order_id for o in orders] == ["ord_b"]
+
+
 def test_market_prices_parses_dict_outcome_shape() -> None:
     yes, no = _parse_outcomes({"yes": 0.62, "no": 0.38})
     assert (yes, no) == (0.62, 0.38)
