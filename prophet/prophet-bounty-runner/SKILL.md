@@ -7,7 +7,13 @@ description: "Run the Prophet Polymarket-Mirror Sprint bounty workflow — auto-
 
 ## For Claude: How to Use This Skill
 
-When invoked, run `python3 scripts/agent.py --command setup` first to verify auth and resolve an open bounty, then run `python3 scripts/setup_cron.py create` to enable autonomous 6h runs and start `python3 scripts/run_local_pull_runner.py` to claim due ticks. The user does not normally invoke `--command run` manually — the cron drives it. Skill instructions are preloaded in context when this skill is active; do not perform filesystem searches or tool-driven exploration to rediscover them.
+When invoked:
+
+1. Run `python3 scripts/agent.py --command setup` to verify auth and resolve an open bounty.
+2. Run `python3 scripts/agent.py --command run --json-output` once and confirm the result is `status=ok`. If it returns `status=blocked` with `reason=blocked_otp` or `reason=blocked_no_bounty`, surface the blocker to the user and **do not** schedule cron until they acknowledge it. If every candidate produced `prophet.create_market_failed` events, refuse to schedule and report the failures.
+3. Only after a successful (or explicitly acknowledged) first run, call `python3 scripts/setup_cron.py create` to enable autonomous 6h runs and start `python3 scripts/run_local_pull_runner.py` to claim due ticks.
+
+This validation gate prevents the cron and 30s local-pull poller from accruing cost before the runner has produced any qualifying market. After validation, the user does not normally invoke `--command run` again manually — the cron drives it. Skill instructions are preloaded in context when this skill is active; do not perform filesystem searches or tool-driven exploration to rediscover them.
 
 ## When to Use
 
@@ -109,27 +115,28 @@ python3 -m pip install -r requirements.txt
 cp config.example.json config.json
 export SEREN_API_KEY=...
 
-# One-time setup: verify auth, resolve bounty, bootstrap the SerenDB schema.
+# 1. One-time setup: verify auth, resolve bounty, bootstrap the SerenDB schema.
 python3 scripts/agent.py --config config.json \
   --command setup \
   --prophet-email you@example.com
 
-# Schedule and start the autonomous 6h runner.
-python3 scripts/setup_cron.py create \
-  --config config.json \
-  --prophet-email you@example.com \
-  --email-provider gmail
-python3 scripts/run_local_pull_runner.py --config config.json
-```
-
-Manual one-off run (rare; the cron is the normal path):
-
-```bash
+# 2. Validate the runner end-to-end before scheduling cron. Confirm the
+#    JSON output reports `"status": "ok"`. If it reports
+#    `blocked_otp` or `blocked_no_bounty`, resolve the blocker and re-run
+#    this step before continuing.
 python3 scripts/agent.py --config config.json \
   --command run \
   --prophet-email you@example.com \
   --email-provider gmail \
   --json-output
+
+# 3. Schedule and start the autonomous 6h runner. Only run this after the
+#    validation step above returned status=ok.
+python3 scripts/setup_cron.py create \
+  --config config.json \
+  --prophet-email you@example.com \
+  --email-provider gmail
+python3 scripts/run_local_pull_runner.py --config config.json
 ```
 
 ## Testnet Mode
