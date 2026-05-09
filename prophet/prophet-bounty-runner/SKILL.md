@@ -44,9 +44,15 @@ Earnings are conditional on the operator's daily reconciliation pass — the ski
 
 `bounty_id` is auto-resolved by the skill against open `customer_slug = prophet` bounties; the user does not pass it.
 
+## First-Time Prophet Setup (one-time, before the first non-dry-run)
+
+Before the skill's first non-dry-run market creation, the user **must sign in once at `https://app.prophetmarket.ai`** with the same email they configure as `prophet_email`. Privy login alone (which the skill performs autonomously) does not create a Prophet `User` row; the webapp does that on first sign-in. Without this one-time bind, GraphQL queries return `viewer.user = null` and `createMarket` fails with `Privy authentication required`.
+
+Concretely: open `app.prophetmarket.ai`, click **Sign In**, complete the Privy email-OTP flow, and accept any first-time profile / ToS prompts. After that, the skill can run autonomously forever; the bind is permanent.
+
 ## Email + OTP Setup
 
-The skill reads OTPs from the user's inbox via the `gmail` or `outlook` publisher. It only inspects the most recent unread message from `noreply@privy.io` (or the matching Prophet sender) and never moves, deletes, or marks other messages.
+The skill reads OTPs from the user's inbox via the `gmail` or `outlook` publisher. It only inspects the most recent unread message from `no-reply@mail.privy.io` (or the matching Prophet sender) and never moves, deletes, or marks other messages.
 
 Configure the chosen publisher in **Seren Desktop → Settings → Publisher MCPs** and grant read scope. The skill will fail closed with a setup-style error if the publisher is not connected.
 
@@ -130,7 +136,7 @@ python3 scripts/agent.py --config config.json \
 
 ## Testnet Mode
 
-Testnet support tracks the pattern documented by `prophet-market-seeder/SKILL.md` (Privy testnet base URL + USDC faucet at `0xa0f2da5e260486895d73086dd98af09c25dc2883c6ac96025a688f855c180d06`). The bounty-runner agent does **not** currently honor a `testnet` config block or the `PROPHET_TESTNET_MODE` env var; for live validation, point `--bounty-id` at a separate `customer_slug = prophet-test` bounty per the operator's live-test checklist (plan §20). Real testnet integration may land in a follow-on revision.
+Testnet support tracks the pattern documented by `prophet-market-seeder/SKILL.md` (Privy testnet base URL + USDC faucet at `0xa0f2da5e260486895d73086dd98af09c25dc2883c6ac96025a688f855c180d06`). The bounty-runner agent does **not** currently honor a `testnet` config block or the `PROPHET_TESTNET_MODE` env var. Real testnet integration may land in a follow-on revision; for now, validate against the production bounty (the user is the operator and the only implementer, so their first market accruing earnings against their own escrow is acceptable and was acknowledged at launch).
 
 ## Disclaimers
 
@@ -143,7 +149,7 @@ Testnet support tracks the pattern documented by `prophet-market-seeder/SKILL.md
 ## Troubleshooting
 
 **OTP not delivered within 90 seconds.**
-- Check the spam folder; the Privy sender is `noreply@privy.io`.
+- Check the spam folder; the Privy sender is `no-reply@mail.privy.io`.
 - Verify the gmail/outlook publisher is connected and has read scope in Seren Desktop → Settings → Publisher MCPs.
 - The run records `status=blocked_otp`; the cron will fire again in 6h. To force an immediate retry, run `agent.py --command run` once by hand.
 

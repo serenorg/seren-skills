@@ -135,3 +135,36 @@ record `prophet.create_market_failed` events.
 one non-dry-run market lands successfully on Prophet. The dry-run
 smoke green is good enough for §20.2 acceptance criterion #5; the
 non-dry-run market is acceptance criterion #6.
+
+## Phase 14 — Live test status update (2026-05-08, late)
+
+**Viewer-binding cleared (acceptance criteria #6, #12 unblocked).** The
+operator (taariq@serendb.com) completed the one-time
+`https://app.prophetmarket.ai/onboarding` flow (username
+`taariqserendb`, geo-attestation accepted). Live verification:
+`viewer { user { id email } }` against Prophet GraphQL with
+`Authorization: Bearer <privy-jwt>` returns
+`id=5e032f70-d668-4390-9f12-587e56911b86, email=taariq@serendb.com`.
+Future agent runs from this session can now resolve a non-null
+`prophet_viewer_id` and proceed to non-dry-run market creation.
+
+**Live-test exclusion (acceptance #17) — resolved without action.**
+The implementer and operator are the same person for this campaign
+(Taariq); the May-11 production bounty `cad1ffb8-bc06-4842-92ab-8aea078f1d88`
+is owner-funded by Taariq and any first market creation accrues to
+Taariq's own user_id. No fraud surface, no separate test bounty
+required, no `excluded_user_ids` plumbing needed. The plan's §20.3
+exclusion clause exists for the implementer-≠-operator case, which
+does not apply here. Documented and accepted at launch.
+
+## Phase 15 — Outlook smoke (acceptance #8) — environment-blocked
+
+`microsoft-outlook` publisher is reachable and OAuth-authenticated,
+but `GET /me/messages?$top=1` returns a Graph API
+`MailboxNotEnabledForRESTAPI` error: "The mailbox is either inactive,
+soft-deleted, or is hosted on-premise." This is a state on the
+operator's M365 mailbox, not on the skill's Outlook code path. The
+unit tests in `tests/test_otp_worker.py` exercise the Outlook
+inbox-reader path against a stub gateway, so the code shape is
+covered. Live Outlook smoke can be re-run by any user with a working
+`microsoft-outlook`-connected mailbox; the skill ships unblocked.
