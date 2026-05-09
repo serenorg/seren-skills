@@ -29,6 +29,15 @@ SEL_EMAIL_INPUT = "#email-input"
 SEL_EMAIL_SUBMIT = 'button:has-text("Submit")'
 SEL_OTP_INPUT_TEMPLATE = 'input[name="code-{i}"]'  # 0..5
 
+# Onboarding form selectors. After a successful Privy OTP the Prophet
+# webapp redirects first-time users to `/onboarding` and gates User-row
+# creation behind these two fields. The skill auto-fills both per
+# operator direction (Prophet team approved on 2026-05-08).
+SEL_ONBOARDING_USERNAME = "#username"
+SEL_ONBOARDING_GEO_ATTESTATION = "#geo-attestation"
+SEL_ONBOARDING_CONTINUE = 'button:has-text("Continue")'
+ONBOARDING_URL_FRAGMENT = "/onboarding"
+
 PRIVY_TOKEN_LOCAL_STORAGE_KEY = "privy:token"
 PRIVY_REFRESH_COOKIE = "privy-refresh-token"
 PRIVY_TOKEN_COOKIE = "privy-token"
@@ -57,6 +66,8 @@ class BrowserSession(Protocol):
     def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None: ...
     def get_local_storage(self, key: str) -> str | None: ...
     def get_cookie(self, name: str) -> str | None: ...
+    def get_url(self) -> str: ...
+    def is_checked(self, selector: str) -> bool: ...
 
 
 def open_privy_modal(session: BrowserSession) -> None:
@@ -115,6 +126,37 @@ def wait_for_jwt(
     raise OtpEmailTimeout(
         f"privy:token did not appear in localStorage within {timeout_seconds:.0f}s"
     )
+
+
+def at_onboarding_screen(session: BrowserSession) -> bool:
+    """True iff the browser is sitting on Prophet's first-time onboarding form.
+
+    First-time Privy logins land at `/onboarding?returnTo=/`; returning
+    users skip straight back to `/`. Used by the token-acquirer flow to
+    decide whether to drive the username + geo-attestation form.
+    """
+    try:
+        return ONBOARDING_URL_FRAGMENT in session.get_url()
+    except Exception:
+        return False
+
+
+def fill_onboarding_form(session: BrowserSession, *, username: str) -> None:
+    """Auto-fill Prophet's first-time onboarding form and submit it.
+
+    Per operator direction (Prophet team approved 2026-05-08):
+    - username is generated from `prophet_email` upstream and passed in
+    - the geo-attestation checkbox is auto-ticked
+
+    On Prophet-side username uniqueness collision the caller is
+    responsible for retrying with a hashed-suffix username; this
+    function just drives the form once.
+    """
+    session.wait_for(SEL_ONBOARDING_USERNAME, timeout_ms=15_000)
+    session.fill(SEL_ONBOARDING_USERNAME, username)
+    if not session.is_checked(SEL_ONBOARDING_GEO_ATTESTATION):
+        session.click(SEL_ONBOARDING_GEO_ATTESTATION)
+    session.click(SEL_ONBOARDING_CONTINUE)
 
 
 def capture_artifacts(session: BrowserSession, *, jwt: str) -> PrivyAuthArtifacts:
@@ -198,6 +240,15 @@ class RealBrowserSession:
                 if isinstance(value, str):
                     return value
         return None
+
+    def get_url(self) -> str:
+        return self._page.url or ""
+
+    def is_checked(self, selector: str) -> bool:
+        try:
+            return bool(self._page.is_checked(selector))
+        except Exception:
+            return False
 
     def close(self) -> None:
         try:
