@@ -1,7 +1,8 @@
 """Critical-only OTP-worker tests.
 
 Reduced from plan §11.5 (7 test files) to 6 load-bearing assertions
-focused on fail-closed and security boundaries:
+focused on fail-closed and security boundaries, plus the issue-#470
+guard that the OTP path no longer hard-imports python-playwright.
 
   1. otp_extractor returns the right 6 digits on a Privy-shaped body
   2. otp_extractor RAISES (not returns None) when no code is present
@@ -9,10 +10,11 @@ focused on fail-closed and security boundaries:
   4. session_cache treats corrupted JSON as needs_otp (fail-closed)
   5. token_refresher 401 flips cache to needs_otp WITHOUT raising
   6. auth_facade falls through to TokenAcquirer when cache=needs_otp
+  7. RealBrowserSession does NOT import python-playwright (issue #470)
+  8. RealBrowserSession routes BrowserSession methods through gateway
 
-Skipped: pagination tests, inbox-reader stubs, playwright client (plan
-§11.5 already excludes that one), call-order assertions, backoff counter
-tests. Those are exercised in Phase 14 live acceptance.
+Skipped: pagination tests, inbox-reader stubs, call-order assertions,
+backoff counter tests. Those are exercised in Phase 14 live acceptance.
 """
 
 from __future__ import annotations
@@ -148,3 +150,104 @@ def test_auth_facade_falls_through_to_otp_when_cache_needs_otp(tmp_path: Path) -
     assert fresh.source == "otp"
     assert fresh.jwt == "eyJ.fresh.jwt"
     assert len(acquirer_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Test 7 + 8: RealBrowserSession is gateway-driven, not python-playwright
+# (issue #470 — `from playwright.sync_api import sync_playwright` broke every
+# fresh install; the OTP worker now drives the Seren-managed Playwright
+# publisher through `gateway.call(...)` like every other Seren publisher.)
+
+
+def test_real_browser_session_does_not_import_python_playwright() -> None:
+    """Loading the module must not require the python-playwright package.
+
+    Before #470 this import lived at module top-level inside __init__,
+    so a fresh install (no `pip install playwright`) crashed with
+    ModuleNotFoundError on the first `agent.py --command run` tick.
+    """
+    import sys
+
+    # Force a clean import so we exercise the load path, not a cached module.
+    sys.modules.pop("otp_worker.playwright_client", None)
+    import otp_worker.playwright_client as pw_client  # noqa: F401
+
+    # No hard `playwright` (or `playwright.sync_api`) entry should land in
+    # sys.modules as a side-effect of importing playwright_client. The
+    # presence of either name is the exact failure mode #470 fixes.
+    assert "playwright" not in sys.modules
+    assert "playwright.sync_api" not in sys.modules
+
+
+def test_real_browser_session_routes_through_gateway() -> None:
+    """Every BrowserSession method maps to one gateway.call("playwright", ...).
+
+    The Privy OTP dance needs navigate / wait_for / click / fill /
+    evaluate (localStorage poll) / get_cookie. Those are the only calls
+    the production session is allowed to make — anything else means we
+    forked a second control surface against `app.prophetmarket.ai`,
+    which is what #470 exists to prevent.
+    """
+    from otp_worker.playwright_client import (
+        PRIVY_TOKEN_LOCAL_STORAGE_KEY,
+        RealBrowserSession,
+    )
+
+    class _SpyGateway:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self._responses: dict[str, object] = {
+                "/navigate": {},
+                "/wait_for_selector": {},
+                "/click": {},
+                "/fill": {},
+                "/press": {},
+                "/evaluate": {"result": '"eyJ.fake.jwt"'},  # JSON-wrapped (Privy SDK)
+                "/get_cookie": {"value": "rt_fixture"},
+                "/get_url": {"url": "https://app.prophetmarket.ai/"},
+                "/is_checked": {"checked": False},
+                "/close": {},
+                "/reset": {},
+            }
+
+        def call(self, publisher, method, path, body=None, headers=None):
+            assert publisher == "playwright", (
+                f"OTP worker may only call the playwright publisher; got {publisher!r}"
+            )
+            assert method.upper() == "POST"
+            self.calls.append({"path": path, "body": body or {}})
+            return self._responses.get(path, {})
+
+    gateway = _SpyGateway()
+    session = RealBrowserSession(gateway=gateway, headless=True)
+
+    session.navigate("https://app.prophetmarket.ai")
+    session.wait_for("#email-input", timeout_ms=15_000)
+    session.click('button:has-text("Submit")')
+    session.fill("#email-input", "implementer@example.com")
+    jwt = session.get_local_storage(PRIVY_TOKEN_LOCAL_STORAGE_KEY)
+    cookie = session.get_cookie("privy-refresh-token")
+    session.close()
+
+    paths = [c["path"] for c in gateway.calls]
+    assert "/navigate" in paths
+    assert "/wait_for_selector" in paths
+    assert "/click" in paths
+    assert "/fill" in paths
+    assert "/evaluate" in paths
+    assert "/get_cookie" in paths
+
+    # Bodies must carry the MCP-tool field names so the publisher request
+    # contract stays stable across `playwright_navigate` / `_click` / etc.
+    nav = next(c for c in gateway.calls if c["path"] == "/navigate")
+    assert nav["body"]["url"] == "https://app.prophetmarket.ai"
+    fill = next(c for c in gateway.calls if c["path"] == "/fill")
+    assert fill["body"] == {"selector": "#email-input", "value": "implementer@example.com"}
+    cookie_call = next(c for c in gateway.calls if c["path"] == "/get_cookie")
+    assert cookie_call["body"]["name"] == "privy-refresh-token"
+
+    # localStorage values come back JSON-quoted from Privy's SDK; the
+    # session preserves that form so `wait_for_jwt`'s `_unwrap_jwt` can
+    # do the unwrap (and so other localStorage values aren't mangled).
+    assert jwt == '"eyJ.fake.jwt"'
+    assert cookie == "rt_fixture"

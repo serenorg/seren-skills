@@ -169,98 +169,135 @@ def capture_artifacts(session: BrowserSession, *, jwt: str) -> PrivyAuthArtifact
     )
 
 
+_PLAYWRIGHT_PUBLISHER_SLUG = "playwright"
+
+
 class RealBrowserSession:
-    """Concrete Playwright-backed BrowserSession for the Phase-14 live test.
+    """Concrete BrowserSession that drives the Seren-managed Playwright MCP.
 
-    Wraps `sync_playwright` chromium. Use as a context manager so the
-    browser process is reliably closed on exit:
+    Issue #470: this class used to bundle its own Python `playwright`
+    runtime (`from playwright.sync_api import sync_playwright`), which
+    broke every fresh install with `ModuleNotFoundError` and forked
+    browser automation away from Seren's canonical Playwright publisher.
 
-        with RealBrowserSession(headless=True) as session:
+    Each `BrowserSession` method now maps to a single
+    `gateway.call("playwright", "POST", "/<tool>", body=...)` so the
+    Privy OTP dance routes through the same publisher seam as gmail,
+    polymarket-data, prophet-ai, etc.
+
+    Use as a context manager so the publisher-side session is reliably
+    closed on exit:
+
+        with RealBrowserSession(gateway=gateway, headless=True) as session:
             open_privy_modal(session)
             ...
-
-    Plan §11.5 explicitly skipped a unit test for this class — it is
-    the seam between the testable Protocol surface and Playwright's
-    actual API. Live coverage comes from the Phase-14 acceptance run.
     """
 
-    def __init__(self, *, headless: bool = True) -> None:
-        # Imported lazily so non-live runs (and unit tests that stub
-        # BrowserSession) do not pay the Playwright import cost.
-        from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    def __init__(self, *, gateway: Any, headless: bool = True) -> None:
+        self._gateway = gateway
+        self._headless = headless
 
-        self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=headless)
-        self._context = self._browser.new_context()
-        self._page = self._context.new_page()
+    # -- BrowserSession Protocol surface ------------------------------------
 
     def navigate(self, url: str) -> None:
-        self._page.goto(url, wait_until="domcontentloaded")
+        self._call("/navigate", {"url": url})
 
     def click(self, selector: str) -> None:
-        self._page.click(selector)
+        self._call("/click", {"selector": selector})
 
     def fill(self, selector: str, value: str) -> None:
-        self._page.fill(selector, value)
+        self._call("/fill", {"selector": selector, "value": value})
 
     def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
-        self._page.wait_for_selector(selector, timeout=timeout_ms)
+        self._call(
+            "/wait_for_selector",
+            {"selector": selector, "timeout": timeout_ms},
+        )
 
     def get_local_storage(self, key: str) -> str | None:
-        value = self._page.evaluate(
-            "(k) => window.localStorage.getItem(k)", key
+        # `wait_for_jwt` runs `_unwrap_jwt` on the return value, so the
+        # raw JSON-quoted form is preserved here intentionally.
+        # `playwright_evaluate` only takes a `script` field, so the key
+        # is templated inline (JSON-quoted to escape safely).
+        script = (
+            "(() => { const v = window.localStorage.getItem("
+            + _js_string_literal(key)
+            + "); return v === null ? null : v; })()"
         )
-        if isinstance(value, str):
-            return value
-        return None
+        result = self._call("/evaluate", {"script": script})
+        unwrapped = _coerce_evaluate_result(result)
+        return unwrapped if isinstance(unwrapped, str) else None
 
     def dump_local_storage_keys(self) -> dict[str, str]:
-        """Phase-14 diagnostic: enumerate every localStorage key + truncated value.
+        """Diagnostic enumeration; gated on PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE.
 
-        Used only by `acquire_token`'s debug branch when
-        `PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE=1` is set in the environment.
         Truncates each value to 80 chars so JWTs don't end up in logs.
         """
-        return self._page.evaluate(
-            """() => {
-                const out = {};
-                for (let i = 0; i < window.localStorage.length; i++) {
-                    const k = window.localStorage.key(i);
-                    const v = window.localStorage.getItem(k);
-                    out[k] = (v || '').slice(0, 80);
-                }
-                return out;
-            }"""
-        ) or {}
+        script = (
+            "(() => {"
+            "  const out = {};"
+            "  for (let i = 0; i < window.localStorage.length; i++) {"
+            "    const k = window.localStorage.key(i);"
+            "    const v = window.localStorage.getItem(k);"
+            "    out[k] = (v || '').slice(0, 80);"
+            "  }"
+            "  return out;"
+            "})()"
+        )
+        try:
+            result = self._call("/evaluate", {"script": script})
+        except Exception:
+            return {}
+        unwrapped = _coerce_evaluate_result(result)
+        return unwrapped if isinstance(unwrapped, dict) else {}
 
     def get_cookie(self, name: str) -> str | None:
-        for cookie in self._context.cookies():
-            if cookie.get("name") == name:
-                value = cookie.get("value")
-                if isinstance(value, str):
-                    return value
+        # `document.cookie` cannot read HttpOnly cookies (privy-refresh-
+        # token is HttpOnly), so the cookie read goes through a
+        # publisher-side endpoint with access to BrowserContext.cookies().
+        # The `PrivyAuthFailed("Privy did not set privy-refresh-token
+        # cookie")` check in token_acquirer fails closed if missing.
+        try:
+            result = self._call("/get_cookie", {"name": name})
+        except Exception:
+            return None
+        if isinstance(result, dict):
+            value = result.get("value")
+            if isinstance(value, str):
+                return value
+        if isinstance(result, str):
+            return result
         return None
 
     def get_url(self) -> str:
-        return self._page.url or ""
+        try:
+            result = self._call("/evaluate", {"script": "window.location.href"})
+        except Exception:
+            return ""
+        unwrapped = _coerce_evaluate_result(result)
+        return unwrapped if isinstance(unwrapped, str) else ""
 
     def is_checked(self, selector: str) -> bool:
         try:
-            return bool(self._page.is_checked(selector))
+            result = self._call(
+                "/evaluate",
+                {
+                    "script": (
+                        "(() => { const el = document.querySelector("
+                        + _js_string_literal(selector)
+                        + "); return !!(el && el.checked); })()"
+                    )
+                },
+            )
         except Exception:
             return False
+        return bool(_coerce_evaluate_result(result))
+
+    # -- Lifecycle ----------------------------------------------------------
 
     def close(self) -> None:
         try:
-            self._context.close()
-        except Exception:
-            pass
-        try:
-            self._browser.close()
-        except Exception:
-            pass
-        try:
-            self._pw.stop()
+            self._call("/close", {})
         except Exception:
             pass
 
@@ -269,3 +306,34 @@ class RealBrowserSession:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
+
+    # -- Internal -----------------------------------------------------------
+
+    def _call(self, path: str, body: dict[str, Any]) -> Any:
+        return self._gateway.call(
+            _PLAYWRIGHT_PUBLISHER_SLUG,
+            "POST",
+            path,
+            body=body,
+        )
+
+
+def _js_string_literal(value: str) -> str:
+    import json as _json
+
+    return _json.dumps(value)
+
+
+def _coerce_evaluate_result(result: Any) -> Any:
+    """Unwrap the `playwright_evaluate` response envelope.
+
+    Different Playwright MCP implementations return the evaluated value
+    under different field names (`result`, `value`, `output`); fall back
+    to the raw payload so we don't silently swallow something usable.
+    """
+    if isinstance(result, dict):
+        for key in ("result", "value", "output"):
+            if key in result:
+                return result[key]
+        return result
+    return result
