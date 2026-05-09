@@ -1,5 +1,10 @@
 {
-  "classification_overrides": {},
+  "classification_overrides": {
+    "prophet/prophet-bounty-runner": {
+      "trading": false,
+      "reason": "Market-creation bounty runner, not a trading skill. The runtime drives the Privy email-OTP flow, calls Prophet's `createMarket` GraphQL mutation, and persists earnings telemetry; it never places trade orders, never holds inventory, never runs an exit path, and never touches a CLOB or DEX. The pattern-based detector hits because the runtime mentions `monitor` (bounty pool monitor), `dry_run` (cron dry-run), `deposit` (deposit-recommendation step), and `positions` (commentary). Sibling Prophet skills (`prophet-adversarial-auditor`, `prophet-growth-agent`, `prophet-market-seeder`) are not flagged because they have less surface text; this one only flips when a follow-up PR's diff is rich enough to be picked up by the changed-skills walker (PR #467's larger diff was masked by a depth-1 fetch on CI, hiding the same false positive)."
+    }
+  },
   "waivers": {
     "prophet/prophet-polymarket-edge": {
       "rules": [
