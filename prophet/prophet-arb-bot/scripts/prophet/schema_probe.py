@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -40,7 +41,15 @@ query IntrospectProphet {
         type {
           name
           kind
-          ofType { name kind }
+          ofType { name kind ofType { name kind } }
+        }
+        args {
+          name
+          type {
+            name
+            kind
+            ofType { name kind ofType { name kind } }
+          }
         }
       }
       inputFields {
@@ -48,7 +57,7 @@ query IntrospectProphet {
         type {
           name
           kind
-          ofType { name kind }
+          ofType { name kind ofType { name kind } }
         }
       }
     }
@@ -57,6 +66,23 @@ query IntrospectProphet {
 """
 
 GATEWAY_URL = "https://api.serendb.com/publishers/prophet-ai/api/graphql"
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Mirror db._ssl_context: prefer certifi, fall back to default trust.
+
+    macOS Python (system + python.org) does not consult the keychain by
+    default, so urlopen without an explicit context fails with
+    CERTIFICATE_VERIFY_FAILED. The certifi bundle ships with most
+    Python installs (we already require psycopg2-binary, which depends
+    on it transitively).
+    """
+    try:
+        import certifi  # type: ignore[import-not-found]
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 def fetch_schema(*, seren_api_key: str, privy_jwt: str | None) -> dict:
@@ -81,7 +107,9 @@ def fetch_schema(*, seren_api_key: str, privy_jwt: str | None) -> dict:
         GATEWAY_URL, data=body, method="POST", headers=headers
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as resp:
+        with urllib.request.urlopen(
+            request, timeout=30, context=_ssl_context()
+        ) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         message = exc.read().decode("utf-8", errors="replace")
