@@ -145,7 +145,10 @@ def acquire_prophet_token_via_otp(
 
     facade = AuthFacade(cache=SessionCache())
     try:
-        with RealBrowserSession(headless=headless) as browser:
+        # #470: RealBrowserSession now drives the Seren-managed Playwright
+        # MCP publisher via the gateway, so the OTP path no longer needs
+        # a bundled python-playwright runtime on the user's machine.
+        with RealBrowserSession(gateway=gateway, headless=headless) as browser:
             fresh = facade.get_fresh_jwt(
                 email=email,
                 provider=provider,
