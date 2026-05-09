@@ -48,7 +48,12 @@ def _ssl_context() -> ssl.SSLContext:
 
 PUBLISHER = "seren-cron"
 SKILL_SLUG = "prophet-bounty-runner"
-DEFAULT_POLL_INTERVAL_SECONDS = 30
+# Issue #469: 30s polling burned ~$432/mo per idle user on seren-cron's
+# $0.005-per-poll endpoint. The bounty cron fires every 6h, so polling
+# 4,000x/tick is pure waste. 12h matches the cron rhythm (one missed
+# tick is recovered on the next poll), and the server can still override
+# at runtime via `next_poll_seconds` in the poll response.
+DEFAULT_POLL_INTERVAL_SECONDS = 12 * 60 * 60  # 12 hours
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 # Plan §18.3: cron schedule defaults to every 6 hours, on the hour, UTC.
