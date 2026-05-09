@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -710,7 +711,17 @@ def main() -> int:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1
 
-    storage = _InMemoryStorage()
+    # Issue #474: production runs must persist to SerenDB so the
+    # operator's reconciler, dedup, and cumulative submission folding
+    # actually see prior ticks. Fall back to the in-memory stand-in
+    # only when SEREN_API_KEY is unset (standalone CLI dry-runs on a
+    # box without auth).
+    if os.environ.get("SEREN_API_KEY") or os.environ.get("API_KEY"):
+        from serendb_storage import SerenDBStorage
+
+        storage: Any = SerenDBStorage(gateway=gateway)
+    else:
+        storage = _InMemoryStorage()
     try:
         result = run_command(request, gateway=gateway, storage=storage)
     except Exception as exc:
