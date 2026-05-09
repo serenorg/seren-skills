@@ -91,11 +91,11 @@ def test_place_order_unwraps_graphql_errors(stub_gateway) -> None:
         "prophet-ai",
         "POST",
         "/api/graphql",
-        {"errors": [{"message": "PlaceOrderInput.limitPrice required"}]},
+        {"errors": [{"message": "PlaceOrderInput.type required"}]},
     )
     client = ProphetOrderClient(gateway=stub_gateway)
     with pytest.raises(
-        ProphetGraphQLError, match="PlaceOrderInput.limitPrice required"
+        ProphetGraphQLError, match="PlaceOrderInput.type required"
     ):
         client.place_order(
             jwt="x",
@@ -105,6 +105,121 @@ def test_place_order_unwraps_graphql_errors(stub_gateway) -> None:
             shares=1.0,
             limit_price=0.5,
         )
+
+
+def test_place_order_sends_live_schema_input_shape(stub_gateway) -> None:
+    """Pin the GraphQL input shape to the live Prophet schema (issue #477).
+
+    PlaceOrderInput requires: marketId, outcome (YES|NO), type (LIMIT|MARKET),
+    side (BUY|SELL), priceBps (Int 0-10000), quantity (Float, in shares).
+    timeInForce (GTC default) is optional. The previous best-guess sent
+    `limitPrice`/`shares` which Prophet rejects, and omitted the required
+    `type` field entirely.
+    """
+    stub_gateway.register(
+        "prophet-ai",
+        "POST",
+        "/api/graphql",
+        {
+            "data": {
+                "placeOrder": {
+                    "order": {
+                        "id": "ord_1",
+                        "market": {"id": "m1"},
+                        "outcome": "YES",
+                        "side": "BUY",
+                        "type": "LIMIT",
+                        "priceBps": 5000,
+                        "quantityShares": 20.0,
+                        "filledShares": 0.0,
+                        "status": "OPEN",
+                    }
+                }
+            }
+        },
+    )
+    client = ProphetOrderClient(gateway=stub_gateway)
+    order = client.place_order(
+        jwt="x",
+        market_id="m1",
+        outcome="yes",
+        side="buy",
+        shares=10.0,  # USDC notional
+        limit_price=0.5,
+    )
+
+    body = stub_gateway.calls_to("prophet-ai", "POST", "/api/graphql")[0]["body"]
+    sent_input = body["variables"]["input"]
+    # Required fields exactly as Prophet's PlaceOrderInput expects.
+    assert sent_input["marketId"] == "m1"
+    assert sent_input["outcome"] == "YES"
+    assert sent_input["side"] == "BUY"
+    assert sent_input["type"] == "LIMIT"
+    assert sent_input["priceBps"] == 5000  # 0.5 * 10000
+    # quantity = USDC notional / limit_price = shares
+    assert sent_input["quantity"] == 20.0
+    assert sent_input.get("timeInForce", "GTC") == "GTC"
+    # Old field names must not leak.
+    assert "limitPrice" not in sent_input
+    assert "shares" not in sent_input
+    # Selection set must use Order's real field names.
+    assert "quantityShares" in body["query"]
+    assert "priceBps" in body["query"]
+    assert "market { id }" in body["query"] or "market{id}" in body["query"].replace(" ", "")
+    # Returned ProphetOrder maps live-schema fields back to the dataclass.
+    assert order.market_id == "m1"
+    assert order.shares == 20.0
+    assert order.limit_price == 0.5  # priceBps 5000 -> 0.5
+
+
+def test_cancel_order_sends_input_object_and_inspects_errors(stub_gateway) -> None:
+    """Pin cancelOrder shape (issue #477).
+
+    Live schema is `cancelOrder(input: CancelOrderInput!)` returning
+    `CancelOrderPayload { order, errors }`. The previous guess used
+    `cancelOrder(orderId: ID!)` and asked for a non-existent `ok` field.
+    """
+    stub_gateway.register(
+        "prophet-ai",
+        "POST",
+        "/api/graphql",
+        {
+            "data": {
+                "cancelOrder": {
+                    "order": {"id": "ord_1", "status": "CANCELLED"},
+                    "errors": None,
+                }
+            }
+        },
+    )
+    client = ProphetOrderClient(gateway=stub_gateway)
+    ok = client.cancel_order(jwt="x", order_id="ord_1")
+
+    body = stub_gateway.calls_to("prophet-ai", "POST", "/api/graphql")[0]["body"]
+    assert body["variables"] == {"input": {"orderId": "ord_1"}}
+    # Selection set must not request the non-existent `ok` field.
+    assert " ok" not in body["query"]
+    assert "errors" in body["query"]
+    assert ok is True
+
+
+def test_cancel_order_returns_false_when_payload_has_errors(stub_gateway) -> None:
+    """A non-empty errors[] on CancelOrderPayload means cancel did not happen."""
+    stub_gateway.register(
+        "prophet-ai",
+        "POST",
+        "/api/graphql",
+        {
+            "data": {
+                "cancelOrder": {
+                    "order": None,
+                    "errors": [{"message": "order already filled"}],
+                }
+            }
+        },
+    )
+    client = ProphetOrderClient(gateway=stub_gateway)
+    assert client.cancel_order(jwt="x", order_id="ord_1") is False
 
 
 def test_market_prices_parses_dict_outcome_shape() -> None:
