@@ -122,52 +122,98 @@ class ProphetOrderClient:
         market_id: str | None = None,
         status: str | None = None,
     ) -> list[ProphetOrder]:
-        """User's outstanding orders (open by default).
+        """User's outstanding orders via Prophet's Relay-style viewer.orders.
 
-        Schema guess: prophet-ai exposes `userOrders` as a viewer-scoped
-        query with optional market and status filters. If the live schema
-        names this `viewer.orders` instead, the GraphQL error from the
-        gateway will identify the mismatch and the operator can swap.
+        Live schema:
+            type Viewer { orders(input: OrdersInput): OrderConnection! }
+            type OrderConnection { edges: [OrderEdge!]! }
+            type OrderEdge       { node: Order!, cursor: String! }
+
+        OrdersInput shape is not yet introspected, so market_id and status
+        filters are applied client-side after fetching the connection. This
+        is the cross-tick dedupe input — silent failures here can lead to
+        double-quoting, so any unexpected response shape raises.
         """
         query = """
-        query UserOrders($marketId: ID, $status: OrderStatus) {
-          userOrders(marketId: $marketId, status: $status) {
-            id
-            marketId
-            outcome
-            side
-            shares
-            limitPrice
-            filledShares
-            status
+        query ViewerOrders {
+          viewer {
+            orders {
+              edges {
+                node {
+                  id
+                  market { id }
+                  outcome
+                  side
+                  type
+                  priceBps
+                  quantityShares
+                  filledShares
+                  remainingShares
+                  status
+                }
+              }
+            }
           }
         }
         """
-        variables: dict[str, Any] = {}
-        if market_id:
-            variables["marketId"] = market_id
-        if status:
-            variables["status"] = status
-        payload = self._post(jwt=jwt, query=query, variables=variables)
-        orders = ((payload or {}).get("data") or {}).get("userOrders") or []
-        if not isinstance(orders, list):
+        payload = self._post(jwt=jwt, query=query, variables={})
+        viewer = ((payload or {}).get("data") or {}).get("viewer") or {}
+        orders_field = viewer.get("orders")
+        if orders_field is None:
             raise ProphetSchemaError(
-                "userOrders did not return a list — schema may have drifted"
+                "viewer.orders missing — Prophet schema may have drifted"
             )
-        return [
-            ProphetOrder(
-                order_id=o.get("id") or "",
-                market_id=o.get("marketId") or "",
-                outcome=(o.get("outcome") or "").lower(),
-                side=(o.get("side") or "").lower(),
-                shares=_safe_float(o.get("shares")),
-                limit_price=_safe_float(o.get("limitPrice")),
-                filled_shares=_safe_float(o.get("filledShares")),
-                status=(o.get("status") or "").lower(),
+        edges = orders_field.get("edges") if isinstance(orders_field, dict) else None
+        if not isinstance(edges, list):
+            raise ProphetSchemaError(
+                "viewer.orders.edges did not return a list — schema may have drifted"
             )
-            for o in orders
-            if isinstance(o, dict)
-        ]
+
+        # Dedupe semantics: callers pass status="OPEN" meaning "any order
+        # that would conflict with placing a new one". Partially filled
+        # and pending orders both still rest on the book, so treat them as
+        # active. For any other status, match exactly.
+        wanted_status = (status or "").lower() or None
+        ACTIVE_STATUSES = {"open", "partially_filled", "pending"}
+
+        results: list[ProphetOrder] = []
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            node = edge.get("node")
+            if not isinstance(node, dict):
+                continue
+            market_obj = node.get("market") or {}
+            node_market_id = (
+                market_obj.get("id") if isinstance(market_obj, dict) else None
+            ) or ""
+            if market_id and node_market_id != market_id:
+                continue
+            node_status = (node.get("status") or "").lower()
+            if wanted_status == "open":
+                if node_status not in ACTIVE_STATUSES:
+                    continue
+            elif wanted_status and node_status != wanted_status:
+                continue
+            price_bps = node.get("priceBps")
+            limit_price = (
+                float(price_bps) / 10000.0
+                if isinstance(price_bps, (int, float))
+                else 0.0
+            )
+            results.append(
+                ProphetOrder(
+                    order_id=node.get("id") or "",
+                    market_id=node_market_id,
+                    outcome=(node.get("outcome") or "").lower(),
+                    side=(node.get("side") or "").lower(),
+                    shares=_safe_float(node.get("quantityShares")),
+                    limit_price=limit_price,
+                    filled_shares=_safe_float(node.get("filledShares")),
+                    status=node_status,
+                )
+            )
+        return results
 
     # ------------------------------------------------------------------
     # Writes
