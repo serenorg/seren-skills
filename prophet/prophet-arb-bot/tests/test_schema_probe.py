@@ -127,3 +127,98 @@ def test_introspection_query_captures_mutation_args() -> None:
     in the saved fixture, not just each input object's own field list.
     """
     assert "args" in schema_probe.INTROSPECTION_QUERY
+
+
+def _capture_request(monkeypatch, gateway_body: bytes):
+    """Patch urlopen and return a dict that captures the outbound Request."""
+    captured: dict[str, object] = {}
+
+    class _FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def read(self): return gateway_body
+
+    def fake_urlopen(req, timeout=None, context=None):
+        captured["headers"] = dict(req.header_items())
+        captured["url"] = req.full_url
+        return _FakeResp()
+
+    monkeypatch.setattr(schema_probe.urllib.request, "urlopen", fake_urlopen)
+    return captured
+
+
+def test_fetch_schema_authenticates_with_authorization_bearer(monkeypatch) -> None:
+    """fetch_schema must use Authorization: Bearer, not X-Seren-Api-Key (#485).
+
+    The Seren gateway returns HTTP 401 to any request that does not carry
+    `Authorization: Bearer <key>`. Every other Prophet code path in this
+    skill (HttpGateway, ProphetOrderClient, MinimalProphetClient) uses the
+    Bearer header. The probe was the only outlier.
+    """
+    captured = _capture_request(
+        monkeypatch,
+        gateway_body=b'{"data":{"__schema":{"types":[]}}}',
+    )
+    schema_probe.fetch_schema(seren_api_key="my-seren-key", privy_jwt=None)
+
+    # urllib normalizes header names with title-case.
+    headers = {k.lower(): v for k, v in captured["headers"].items()}
+    assert headers.get("authorization") == "Bearer my-seren-key", (
+        f"Expected Authorization: Bearer my-seren-key, got headers={headers}"
+    )
+    assert "x-seren-api-key" not in headers, (
+        "X-Seren-Api-Key must not be sent — gateway rejects it with 401."
+    )
+
+
+def test_fetch_schema_prefers_privy_jwt_when_provided(monkeypatch) -> None:
+    """When the user provides a Privy JWT, it takes precedence in the
+    Authorization header (matches ProphetOrderClient behavior).
+
+    Probe is JWT-optional, but if one is provided the gateway forwards
+    Authorization to Prophet so auth-gated fields show up in the
+    introspection result.
+    """
+    captured = _capture_request(
+        monkeypatch,
+        gateway_body=b'{"data":{"__schema":{"types":[]}}}',
+    )
+    schema_probe.fetch_schema(seren_api_key="my-seren-key", privy_jwt="eyJjwt...")
+
+    headers = {k.lower(): v for k, v in captured["headers"].items()}
+    assert headers.get("authorization") == "Bearer eyJjwt..."
+    assert "x-seren-api-key" not in headers
+
+
+def test_fetch_schema_unwraps_seren_gateway_envelope(monkeypatch) -> None:
+    """The Seren gateway wraps publisher responses as
+    `{"data": {"status": 200, "body": <graphql>, "cost": ..., ...}}`.
+
+    fetch_schema must unwrap that to the bare GraphQL payload so the
+    saved fixture has the canonical `{"data": {"__schema": {...}}}`
+    shape that the order client and tests expect.
+    """
+    wrapped_body = (
+        b'{"data":{"status":200,'
+        b'"body":{"data":{"__schema":{"types":[{"name":"Query"}]}}},'
+        b'"cost":"0.000000","payment_source":"prepaid_balance"}}'
+    )
+    _capture_request(monkeypatch, gateway_body=wrapped_body)
+
+    result = schema_probe.fetch_schema(seren_api_key="k", privy_jwt=None)
+
+    # Canonical GraphQL shape: data.__schema.types[]
+    assert result["data"]["__schema"]["types"][0]["name"] == "Query"
+    # Gateway envelope keys must NOT leak into the saved fixture.
+    assert "status" not in result["data"]
+    assert "cost" not in result["data"]
+    assert "payment_source" not in result["data"]
+
+
+def test_fetch_schema_passes_unwrapped_response_through(monkeypatch) -> None:
+    """If the gateway ever stops wrapping, the unwrap must be a no-op."""
+    unwrapped_body = b'{"data":{"__schema":{"types":[{"name":"Query"}]}}}'
+    _capture_request(monkeypatch, gateway_body=unwrapped_body)
+
+    result = schema_probe.fetch_schema(seren_api_key="k", privy_jwt=None)
+    assert result["data"]["__schema"]["types"][0]["name"] == "Query"

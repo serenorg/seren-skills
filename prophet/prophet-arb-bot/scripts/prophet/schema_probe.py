@@ -86,19 +86,24 @@ def _ssl_context() -> ssl.SSLContext:
 
 
 def fetch_schema(*, seren_api_key: str, privy_jwt: str | None) -> dict:
-    """Fire the introspection query through the gateway.
+    """Fire the introspection query through the Seren gateway.
 
-    The gateway forwards SEREN_API_KEY for billing/auth and the
-    Authorization Bearer header through to Prophet for the JWT.
-    Introspection is a public read so the JWT is optional, but we pass
-    it when available so any auth-gated fields show up too.
+    Auth (issue #485): the Seren gateway only accepts
+    `Authorization: Bearer ...` and returns HTTP 401 to anything else
+    (including `X-Seren-Api-Key`). When the user provides a Privy JWT,
+    it takes precedence — matching ProphetOrderClient/HttpGateway
+    behavior so auth-gated introspection fields surface.
+
+    Response unwrap (issue #485): the gateway wraps publisher payloads
+    as `{"data": {"status": 200, "body": <graphql>, "cost": ..., ...}}`.
+    Tooling and the saved fixture expect the canonical GraphQL shape
+    (`{"data": {"__schema": {...}}}`), so we strip the envelope here.
     """
+    auth_token = privy_jwt or seren_api_key
     headers = {
         "Content-Type": "application/json",
-        "X-Seren-Api-Key": seren_api_key,
+        "Authorization": f"Bearer {auth_token}",
     }
-    if privy_jwt:
-        headers["Authorization"] = f"Bearer {privy_jwt}"
 
     body = json.dumps(
         {"query": INTROSPECTION_QUERY, "variables": {}}
@@ -110,12 +115,41 @@ def fetch_schema(*, seren_api_key: str, privy_jwt: str | None) -> dict:
         with urllib.request.urlopen(
             request, timeout=30, context=_ssl_context()
         ) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         message = exc.read().decode("utf-8", errors="replace")
         raise SystemExit(
             f"prophet-ai introspection failed: HTTP {exc.code}\n{message}"
         ) from exc
+
+    return _unwrap_gateway_envelope(payload)
+
+
+def _unwrap_gateway_envelope(payload: dict) -> dict:
+    """Return the inner GraphQL payload regardless of gateway wrapping.
+
+    Wrapped form:   `{"data": {"status": 200, "body": <graphql>, ...}}`
+    Unwrapped form: `{"data": {"__schema": ...}}` or `{"errors": [...]}`
+
+    Detection key: gateway wrappers carry both `status` and `body` and
+    do NOT have `__schema` directly under `data`. Unwrapped payloads
+    have `__schema` directly under `data`. This keeps callers writing
+    `payload["data"]["__schema"]` regardless of whether the gateway
+    changes its wrapping behavior in the future.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    data = payload.get("data")
+    if (
+        isinstance(data, dict)
+        and "body" in data
+        and "status" in data
+        and "__schema" not in data
+    ):
+        body = data.get("body")
+        if isinstance(body, dict):
+            return body
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
