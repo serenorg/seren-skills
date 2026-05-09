@@ -543,7 +543,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "probe-schema":
         from prophet.schema_probe import main as probe_main  # type: ignore
 
-        return probe_main()
+        # Pass an explicit empty argv so the probe's argparse does not
+        # re-parse the parent agent's --config / --command flags.
+        return probe_main([])
 
     config = AgentConfig.load(args.config)
     gateway = HttpGateway()

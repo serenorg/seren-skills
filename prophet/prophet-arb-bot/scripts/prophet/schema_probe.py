@@ -90,14 +90,14 @@ def fetch_schema(*, seren_api_key: str, privy_jwt: str | None) -> dict:
         ) from exc
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument(
         "--output",
         default="tests/fixtures/prophet_schema.json",
         help="Where to write the introspection result (default: tests/fixtures/prophet_schema.json).",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     seren_api_key = os.environ.get("SEREN_API_KEY")
     if not seren_api_key:
