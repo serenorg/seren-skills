@@ -44,11 +44,9 @@ Earnings are conditional on the operator's daily reconciliation pass — the ski
 
 `bounty_id` is auto-resolved by the skill against open `customer_slug = prophet` bounties; the user does not pass it.
 
-## First-Time Prophet Setup (one-time, before the first non-dry-run)
+## First-Run Prophet Onboarding (zero-touch)
 
-Before the skill's first non-dry-run market creation, the user **must sign in once at `https://app.prophetmarket.ai`** with the same email they configure as `prophet_email`. Privy login alone (which the skill performs autonomously) does not create a Prophet `User` row; the webapp does that on first sign-in. Without this one-time bind, GraphQL queries return `viewer.user = null` and `createMarket` fails with `Privy authentication required`.
-
-Concretely: open `app.prophetmarket.ai`, click **Sign In**, complete the Privy email-OTP flow, and accept any first-time profile / ToS prompts. After that, the skill can run autonomously forever; the bind is permanent.
+On first run the skill auto-creates the user's Prophet account from `prophet_email`: it walks Privy email-OTP, fills the onboarding form (username derived from the email's local-part with a hash-suffix fallback on collision, geo-attestation auto-ticked per Prophet's published ToS), and binds the user to the `AGENTACCESS` referral code so markets are attributed to the bounty operator's affiliate flow. No manual webapp visit required; the bind is permanent and re-runs are no-ops.
 
 ## Email + OTP Setup
 

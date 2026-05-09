@@ -36,13 +36,16 @@ from .otp_extractor import extract_otp_code
 from .playwright_client import (
     BrowserSession,
     PrivyAuthArtifacts,
+    at_onboarding_screen,
     capture_artifacts,
+    fill_onboarding_form,
     open_privy_modal,
     submit_email,
     submit_otp_code,
     wait_for_jwt,
 )
 from .session_cache import SessionCache, SessionCacheEntry
+from .username import base_username_from_email, collision_fallback
 
 # Phase-14 live probe (2026-05-08): Privy now sends from
 # `no-reply@mail.privy.io`, not `noreply@privy.io`. Documented as the
@@ -51,6 +54,13 @@ from .session_cache import SessionCache, SessionCacheEntry
 PRIVY_OTP_SENDER = "no-reply@mail.privy.io"
 INBOX_POLL_INTERVAL_SECONDS = 3.0
 INBOX_POLL_TIMEOUT_SECONDS = 90.0
+
+# Prophet's `/onboarding` form redirects to `/` once the User row lands.
+# The skill polls the URL off `/onboarding` to know when to proceed; if
+# Prophet ever stalls the redirect (network, validation), bail out
+# instead of looping forever.
+ONBOARDING_POLL_INTERVAL_SECONDS = 1.0
+ONBOARDING_POLL_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass
@@ -126,6 +136,15 @@ def acquire_token(
     submit_otp_code(browser_session, code)
     jwt = wait_for_jwt(browser_session)
 
+    # Step 6b — first-time onboarding bind. Prophet redirects new users
+    # to `/onboarding` and gates User-row creation behind a username +
+    # geo-attestation form. Auto-fill both per operator direction
+    # (Prophet team approved 2026-05-08); on Prophet-side username
+    # uniqueness collision retry once with a hashed-suffix username.
+    _drive_onboarding_if_present(
+        session=browser_session, email=email, sleep=sleep, now=now
+    )
+
     # Phase-14 diagnostic (gated on env var; disabled by default so
     # production cron runs do not leak token previews to stderr).
     import os as _os, sys as _sys
@@ -154,6 +173,25 @@ def acquire_token(
             f"Prophet viewer.email {viewer_email!r} does not match "
             f"inputs.prophet_email {email!r}"
         )
+
+    # Step 8b — bind the user to the AGENTACCESS affiliate code so that
+    # markets they create are attributed on Prophet's affiliate-scoped
+    # APIs (which the operator's reconciler queries). Idempotent: a
+    # prior bind from an earlier cold-start surfaces an "already
+    # redeemed" error that the helper swallows. See
+    # prophet/affiliate.py for the wire shape and discovery notes.
+    from prophet.affiliate import bind_agentaccess  # lazy import; avoids cycles
+
+    try:
+        bind_agentaccess(gateway=gateway, jwt=jwt)
+    except Exception as exc:
+        # Don't fail the cold-start: if the bind genuinely failed
+        # (auth/schema drift) the operator's reconciler will report
+        # zero markets and the issue will surface there, but the user
+        # has a working session for everything else.
+        import os as _os, sys as _sys
+        if _os.environ.get("PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE") == "1":
+            _sys.stderr.write(f"[diag] bind_agentaccess failed: {exc!r}\n")
 
     # Step 9: persist atomically.
     expires_at = _decode_jwt_exp(jwt)
@@ -288,3 +326,49 @@ def _register_with_privy(*, gateway: Any, jwt: str, email: str) -> None:
             f"[diag] registerWithPrivy result.data={(result or {}).get('data')!r} "
             f"errors={errors!r}\n"
         )
+
+
+def _drive_onboarding_if_present(
+    *,
+    session: BrowserSession,
+    email: str,
+    sleep: Callable[[float], None],
+    now: Callable[[], datetime],
+) -> None:
+    """Drive Prophet's first-time onboarding form if the JWT landed there.
+
+    Returning users skip onboarding entirely (`/onboarding` is never the
+    landing URL for them), so this is a no-op for warm sessions. For
+    cold-start users it fills the username + ticks the geo-attestation
+    + clicks Continue, then polls until Prophet redirects off
+    `/onboarding`. On Prophet-side username-uniqueness collision (the
+    page stays on `/onboarding` past the timeout with the same username
+    we submitted), retries once with the hashed-suffix fallback.
+    """
+    if not at_onboarding_screen(session):
+        return
+
+    candidates = [base_username_from_email(email), collision_fallback(email)]
+    deadline_total = now().timestamp() + (
+        ONBOARDING_POLL_TIMEOUT_SECONDS * len(candidates)
+    )
+    last_username = ""
+    for username in candidates:
+        last_username = username
+        fill_onboarding_form(session, username=username)
+        # Poll until the URL leaves `/onboarding`. If it does within the
+        # per-attempt budget, we're done. Otherwise loop and try the
+        # collision fallback.
+        attempt_deadline = now().timestamp() + ONBOARDING_POLL_TIMEOUT_SECONDS
+        while now().timestamp() < attempt_deadline:
+            if not at_onboarding_screen(session):
+                return
+            sleep(ONBOARDING_POLL_INTERVAL_SECONDS)
+        if now().timestamp() >= deadline_total:
+            break
+
+    raise PrivyAuthFailed(
+        "Prophet onboarding did not complete within "
+        f"{ONBOARDING_POLL_TIMEOUT_SECONDS * len(candidates):.0f}s "
+        f"(last attempted username={last_username!r})"
+    )
