@@ -182,19 +182,22 @@ class ProphetOrderClient:
         shares: float,
         limit_price: float,
     ) -> ProphetOrder:
-        """Submit a limit order. Returns the order record on success.
+        """Submit a LIMIT/GTC order against Prophet's PlaceOrderInput.
 
-        Schema guess (best-guess submitter — §3 ADR):
-            mutation placeOrder($input: PlaceOrderInput!) {
-              placeOrder(input: $input) {
-                order { id marketId outcome side shares limitPrice
-                        filledShares status }
-              }
+        Live schema (probed via tests/fixtures/prophet_schema.json):
+            input PlaceOrderInput {
+              marketId:    ID!
+              outcome:     BetOutcome!  (YES | NO)
+              type:        OrderType!   (LIMIT | MARKET)
+              side:        OrderSide!   (BUY | SELL)
+              priceBps:    Int          (0..10000 basis points)
+              quantity:    Float!       (in shares of the outcome token)
+              timeInForce: TimeInForce  (GTC | IOC | FOK | DAY)
             }
 
-        Input shape mirrors the four-step `createMarketWithBet` pattern
-        from the bounty-runner. Limit price is a 0-1 probability; shares
-        is the integer-or-float quantity (USDC value at fill).
+        `shares` here is the USDC notional the operator intends to commit
+        (carried through from arbitrage scoring). We convert to Prophet's
+        share-denominated quantity by dividing notional by limit_price.
 
         Fails closed if:
           - The mutation returns no order (schema mismatch).
@@ -212,19 +215,25 @@ class ProphetOrderClient:
         if shares <= 0:
             raise ValueError(f"shares must be > 0; got {shares!r}")
 
+        price_bps = int(round(limit_price * 10000))
+        quantity_shares = shares / limit_price
+
         query = """
         mutation PlaceOrder($input: PlaceOrderInput!) {
           placeOrder(input: $input) {
             order {
               id
-              marketId
+              market { id }
               outcome
               side
-              shares
-              limitPrice
+              type
+              priceBps
+              quantityShares
               filledShares
+              remainingShares
               status
             }
+            errors { message }
           }
         }
         """
@@ -235,47 +244,72 @@ class ProphetOrderClient:
                 "input": {
                     "marketId": market_id,
                     "outcome": outcome.upper(),
+                    "type": "LIMIT",
                     "side": side.upper(),
-                    "shares": shares,
-                    "limitPrice": limit_price,
+                    "priceBps": price_bps,
+                    "quantity": quantity_shares,
+                    "timeInForce": "GTC",
                 }
             },
         )
-        order = (
-            ((payload or {}).get("data") or {})
-            .get("placeOrder", {})
-            .get("order")
-            or {}
-        )
+        place_payload = ((payload or {}).get("data") or {}).get("placeOrder") or {}
+        errors = place_payload.get("errors") or []
+        if errors:
+            first = errors[0] if isinstance(errors, list) else {}
+            message = first.get("message") if isinstance(first, dict) else str(first)
+            raise ProphetGraphQLError(f"placeOrder rejected: {message or errors!r}")
+        order = place_payload.get("order") or {}
         if not order.get("id"):
             raise ProphetSchemaError(
                 "placeOrder did not return an order.id — schema may have drifted "
-                "or input shape was rejected. Run agent.py --probe-schema and "
-                "regenerate tests/fixtures/prophet_orders_schema.json."
+                "or input shape was rejected. Run agent.py --command probe-schema "
+                "and regenerate tests/fixtures/prophet_schema.json."
             )
+        market_obj = order.get("market") or {}
+        returned_price_bps = order.get("priceBps")
+        returned_limit_price = (
+            float(returned_price_bps) / 10000.0
+            if isinstance(returned_price_bps, (int, float))
+            else limit_price
+        )
         return ProphetOrder(
             order_id=order.get("id") or "",
-            market_id=order.get("marketId") or market_id,
+            market_id=(market_obj.get("id") if isinstance(market_obj, dict) else None)
+            or market_id,
             outcome=(order.get("outcome") or outcome).lower(),
             side=(order.get("side") or side).lower(),
-            shares=_safe_float(order.get("shares"), shares),
-            limit_price=_safe_float(order.get("limitPrice"), limit_price),
+            shares=_safe_float(order.get("quantityShares"), quantity_shares),
+            limit_price=returned_limit_price,
             filled_shares=_safe_float(order.get("filledShares")),
             status=(order.get("status") or "open").lower(),
         )
 
     def cancel_order(self, *, jwt: str, order_id: str) -> bool:
-        """Cancel an open order. Returns True on success."""
+        """Cancel an open order. Returns True if Prophet accepted the cancel.
+
+        Live schema:
+            input CancelOrderInput { orderId: ID! }
+            type  CancelOrderPayload { order: Order, errors: [...]! }
+        """
         query = """
-        mutation CancelOrder($orderId: ID!) {
-          cancelOrder(orderId: $orderId) {
-            ok
+        mutation CancelOrder($input: CancelOrderInput!) {
+          cancelOrder(input: $input) {
+            order { id status }
+            errors { message }
           }
         }
         """
-        payload = self._post(jwt=jwt, query=query, variables={"orderId": order_id})
+        payload = self._post(
+            jwt=jwt,
+            query=query,
+            variables={"input": {"orderId": order_id}},
+        )
         result = ((payload or {}).get("data") or {}).get("cancelOrder") or {}
-        return bool(result.get("ok"))
+        errors = result.get("errors") or []
+        if errors:
+            return False
+        order = result.get("order") or {}
+        return bool(order.get("id"))
 
     # ------------------------------------------------------------------
     # transport — uniform error handling. Mirrors MinimalProphetClient._post
