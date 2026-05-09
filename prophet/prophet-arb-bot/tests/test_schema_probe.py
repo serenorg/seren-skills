@@ -81,3 +81,49 @@ def test_schema_probe_main_rejects_bogus_argv(monkeypatch) -> None:
     with pytest.raises(SystemExit) as exc:
         schema_probe.main(["--unknown-flag"])
     assert exc.value.code == 2
+
+
+def test_fetch_schema_uses_certified_ssl_context(monkeypatch) -> None:
+    """fetch_schema must pass an explicit SSLContext to urlopen (issue #480).
+
+    macOS Python (system + python.org) does not consult the keychain for
+    HTTPS certificate validation by default. Without an explicit context,
+    urlopen raises CERTIFICATE_VERIFY_FAILED on every probe. The fix
+    mirrors db._ssl_context: prefer certifi.where() if available, fall
+    back to the default trust store.
+    """
+    captured: dict[str, object] = {}
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"data":{"__schema":{"types":[]}}}'
+
+    def fake_urlopen(req, timeout=None, context=None):
+        captured["context"] = context
+        return _FakeResp()
+
+    monkeypatch.setattr(schema_probe.urllib.request, "urlopen", fake_urlopen)
+    schema_probe.fetch_schema(seren_api_key="k", privy_jwt=None)
+
+    import ssl as _ssl
+
+    ctx = captured["context"]
+    assert isinstance(ctx, _ssl.SSLContext), (
+        "fetch_schema must pass an explicit SSLContext to urlopen "
+        "(macOS urllib has no usable default trust store)"
+    )
+    assert ctx.verify_mode == _ssl.CERT_REQUIRED
+
+
+def test_introspection_query_captures_mutation_args() -> None:
+    """The probe must capture `args` on fields so future drift in input
+    types (PlaceOrderInput, CancelOrderInput, OrdersInput) is visible
+    in the saved fixture, not just each input object's own field list.
+    """
+    assert "args" in schema_probe.INTROSPECTION_QUERY
