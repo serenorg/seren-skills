@@ -38,9 +38,6 @@ from bounty.reconciler import MarketRecord, SubmissionReconciler
 from candidates import filter_candidates, generate_candidates, score_candidates
 from expected_bounty_spec import CUSTOMER_SLUG as EXPECTED_CUSTOMER_SLUG
 from expected_bounty_spec import validate_bounty as _validate_bounty_spec
-from otp_worker.auth_facade import AuthFacade
-from otp_worker.playwright_client import RealBrowserSession
-from otp_worker.session_cache import SessionCache
 from polymarket.discovery import discover_polymarket_sources
 
 DEFAULT_DRY_RUN = False
@@ -117,6 +114,17 @@ def normalize_request(request: dict) -> dict:
     return out
 
 
+class MissingSessionToken(Exception):
+    """`PROPHET_SESSION_TOKEN` env var is unset.
+
+    Issue #487: browser automation is the agent's responsibility, not
+    the subprocess's. The agent must drive Privy via Seren Desktop's
+    Playwright MCP, capture the JWT from `localStorage["privy:token"]`,
+    and inject it as `PROPHET_SESSION_TOKEN` before shelling out to
+    `agent.py`. See SKILL.md for the runbook.
+    """
+
+
 def acquire_prophet_token_via_otp(
     email: str,
     *,
@@ -127,58 +135,68 @@ def acquire_prophet_token_via_otp(
     headless: bool = True,
     require_viewer_binding: bool = True,
 ) -> dict:
-    """Drive the Privy email-OTP flow and return a JWT + viewer identity.
+    """Read the JWT supplied by the agent and bind it to a viewer_id.
 
-    Phase 14 wiring (plan §11.4 + §20). Opens a Playwright-backed
-    `RealBrowserSession`, runs `AuthFacade.get_fresh_jwt`, and returns a
-    flat dict matching the shape `tests/fixtures/prophet_otp_session.json`
-    so test monkeypatches and production callers share one contract.
+    Issue #487: the Python subprocess no longer drives a browser. The
+    agent (running in Seren Desktop with `mcp__playwright__*` tools)
+    walks Privy email-OTP, captures the JWT from
+    `localStorage["privy:token"]`, and exports it as
+    `PROPHET_SESSION_TOKEN` before invoking this script.
 
-    `require_viewer_binding=False` (dry-run) lets the run continue when
-    `viewer.user` is empty — common when the user has a Privy identity
-    on mainnet but no Prophet user record yet. Non-dry-run market
-    creation still demands a bound viewer_id (plan §22 #12 P0).
+    Missing env var → `MissingSessionToken`. Viewer-bind failure →
+    `PrivyAuthFailed`. Both surface as `status=blocked` with distinct
+    reasons in `_cmd_run`.
 
-    Tests still monkeypatch this symbol with a lambda; the production
-    branch only fires when the test does not stub the symbol.
+    `provider`, `bounty_id`, `seren_user_id`, and `headless` are kept
+    in the signature for backward-compat with existing test
+    monkeypatches; they are otherwise unused.
     """
-    from otp_worker import PrivyAuthFailed  # local import to avoid test-time playwright dep
+    from otp_worker import PrivyAuthFailed
+    from otp_worker.token_acquirer import _query_viewer
 
-    facade = AuthFacade(cache=SessionCache())
+    del provider, bounty_id, seren_user_id, headless  # unused; see docstring
+
+    jwt = (os.environ.get("PROPHET_SESSION_TOKEN") or "").strip()
+    if not jwt:
+        raise MissingSessionToken(
+            "PROPHET_SESSION_TOKEN is required. The agent must drive Privy "
+            "OTP via Seren Desktop's Playwright MCP, capture the JWT from "
+            "localStorage[\"privy:token\"], and export it before calling "
+            "agent.py. See SKILL.md."
+        )
+
     try:
-        # #470: RealBrowserSession now drives the Seren-managed Playwright
-        # MCP publisher via the gateway, so the OTP path no longer needs
-        # a bundled python-playwright runtime on the user's machine.
-        with RealBrowserSession(gateway=gateway, headless=headless) as browser:
-            fresh = facade.get_fresh_jwt(
-                email=email,
-                provider=provider,
-                seren_user_id=seren_user_id,
-                bounty_id=bounty_id,
-                browser_session=browser,
-                gateway=gateway,
-            )
-    except PrivyAuthFailed as exc:
+        viewer_id, viewer_email = _query_viewer(
+            gateway=gateway, jwt=jwt, email=email
+        )
+    except Exception as exc:
         if require_viewer_binding:
-            raise
-        # Dry-run soft-fail path: surface the JWT we have (if any) and
-        # mark the binding as deferred. The cache may already have the
-        # JWT written; if not, return an empty token but a non-error
-        # source so the caller emits prophet_auth.method == "otp".
-        cache = SessionCache()
-        entry = cache.read()
+            raise PrivyAuthFailed(
+                f"PROPHET_SESSION_TOKEN viewer bind failed: {exc}"
+            ) from exc
         return {
-            "token": entry.jwt or "",
-            "prophet_viewer_id": entry.prophet_viewer_id or "",
+            "token": jwt,
+            "prophet_viewer_id": "",
             "viewer_email": email,
-            "source": "otp_deferred_binding",
+            "source": "env_token_unbound",
             "binding_error": str(exc),
         }
+
+    if (
+        require_viewer_binding
+        and viewer_email
+        and email
+        and viewer_email.casefold() != email.casefold()
+    ):
+        raise PrivyAuthFailed(
+            f"PROPHET_SESSION_TOKEN viewer.email {viewer_email!r} does "
+            f"not match prophet_email {email!r}"
+        )
     return {
-        "token": fresh.jwt,
-        "prophet_viewer_id": fresh.prophet_viewer_id,
-        "viewer_email": email,
-        "source": fresh.source,
+        "token": jwt,
+        "prophet_viewer_id": viewer_id,
+        "viewer_email": viewer_email or email,
+        "source": "env_token",
     }
 
 
@@ -332,9 +350,12 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
     # OTP so we have the participant record persisted even if OTP fails.
     join = bounty_client.join(bounty_id)
 
-    # Step 2 — OTP. Failure persists a blocked_otp run row and returns
-    # blocked status; no Prophet or Polymarket calls happen in this
-    # branch (fail-closed evidence per plan §3 ADR).
+    # Step 2 — OTP. Issue #487: missing PROPHET_SESSION_TOKEN is a
+    # distinct, agent-actionable failure (the agent must drive Privy
+    # via Playwright MCP and inject the JWT first); viewer-bind
+    # failures keep the existing `blocked_otp` reason. No Prophet or
+    # Polymarket calls happen in the blocked branch (fail-closed
+    # evidence per plan §3 ADR).
     try:
         otp = acquire_prophet_token_via_otp(
             req["prophet_email"],
@@ -343,6 +364,25 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
             bounty_id=bounty_id,
             require_viewer_binding=not bool(req["dry_run"]),
         )
+    except MissingSessionToken as exc:
+        storage.insert(
+            "runs",
+            {
+                "bounty_id": bounty_id,
+                "command": "run",
+                "status": "blocked_missing_session_token",
+                "error": str(exc),
+                "dry_run": req["dry_run"],
+            },
+        )
+        return {
+            "status": "blocked",
+            "command": "run",
+            "bounty_id": bounty_id,
+            "reason": "missing_session_token",
+            "error": str(exc),
+            "prophet_auth": {"method": "env_token", "source": "missing"},
+        }
     except Exception as exc:
         storage.insert(
             "runs",
@@ -360,7 +400,7 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
             "bounty_id": bounty_id,
             "reason": "blocked_otp",
             "error": str(exc),
-            "prophet_auth": {"method": "otp", "source": "failed"},
+            "prophet_auth": {"method": "env_token", "source": "failed"},
         }
 
     jwt = (otp or {}).get("token") or ""
@@ -700,9 +740,9 @@ def main() -> int:
         return 2
 
     # Lazy import so unit tests that import agent.py do not pay the
-    # urllib + Playwright cost. The HttpGateway is the same one the
-    # cron runner uses (plan §12); it unwraps the seren publisher
-    # `data.body` envelope so BountyClient sees flat dicts.
+    # urllib cost. The HttpGateway is the same one the cron runner
+    # uses (plan §12); it unwraps the seren publisher `data.body`
+    # envelope so BountyClient sees flat dicts.
     from seren_cron_client import HttpGateway
 
     try:
