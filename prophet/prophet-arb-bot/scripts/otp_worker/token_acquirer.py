@@ -167,7 +167,7 @@ def acquire_token(
         raise PrivyAuthFailed("Privy did not set privy-refresh-token cookie")
 
     # Step 8: bind participant identity (P0 — plan §11.1 step 10, §3 ADR).
-    viewer_id, viewer_email = _query_viewer(gateway=gateway, jwt=jwt, email=email)
+    viewer_id, viewer_email = _query_viewer(gateway=gateway, jwt=jwt)
     if viewer_email.casefold() != email.casefold():
         raise IdentityMismatch(
             f"Prophet viewer.email {viewer_email!r} does not match "
@@ -216,40 +216,18 @@ def acquire_token(
     )
 
 
-def _query_viewer(*, gateway: Any, jwt: str, email: str = "") -> tuple[str, str]:
-    """Call prophet-ai's `viewer { id email }` and return (id, email).
+def _query_viewer(*, gateway: Any, jwt: str) -> tuple[str, str]:
+    """Call prophet-ai's `viewer { user { id email } }` and return (id, email).
 
-    Phase-14: if the first viewer call fails (most commonly because the
-    user has a Privy identity but no Prophet user record bound to it),
-    try `registerWithPrivy` once and re-query. Idempotent on the
-    Prophet side: an already-registered user gets back their existing
-    record, and a fresh user gets created. Either way the viewer query
-    should succeed on retry.
+    Fails closed with PrivyAuthFailed if Prophet rejects the JWT (most
+    commonly because the user has a Privy identity but no Prophet user
+    record bound yet). The valid recovery is for `_drive_onboarding_if_present`
+    upstream to drive Prophet's onboarding form via Playwright — Prophet's
+    `registerWithPrivy` mutation requires the full Privy cookie jar
+    (`privy-token` + `privy-session` + `privy-refresh-token`), which the
+    publisher proxy does not forward, so a server-side fallback cannot
+    create the user record.
     """
-    try:
-        return _viewer_call(gateway, jwt)
-    except _ViewerNotAuthorized as exc:
-        if not email:
-            raise PrivyAuthFailed(f"viewer query failed: {exc}") from exc
-        try:
-            _register_with_privy(gateway=gateway, jwt=jwt, email=email)
-        except Exception as register_exc:
-            raise PrivyAuthFailed(
-                f"viewer query failed: {exc}; registerWithPrivy fallback also failed: {register_exc}"
-            ) from exc
-        try:
-            return _viewer_call(gateway, jwt)
-        except Exception as retry_exc:
-            raise PrivyAuthFailed(
-                f"viewer query still failed after registerWithPrivy: {retry_exc}"
-            ) from retry_exc
-
-
-class _ViewerNotAuthorized(Exception):
-    """Raised when Prophet rejects the viewer query (401 / no user record)."""
-
-
-def _viewer_call(gateway: Any, jwt: str) -> tuple[str, str]:
     try:
         result = gateway.call(
             "prophet-ai",
@@ -282,7 +260,7 @@ def _viewer_call(gateway: Any, jwt: str) -> tuple[str, str]:
                 f"[diag] viewer_call_failed exc={exc!r} jwt_len={len(jwt)} "
                 f"jwt_first16={jwt[:16]!r} jwt_dot_segments={jwt.count('.')}\n"
             )
-        raise _ViewerNotAuthorized(str(exc)) from exc
+        raise PrivyAuthFailed(f"viewer query failed: {exc}") from exc
 
     viewer = ((result or {}).get("data") or {}).get("viewer") or {}
     user = viewer.get("user") or {}
@@ -291,41 +269,8 @@ def _viewer_call(gateway: Any, jwt: str) -> tuple[str, str]:
     if not viewer_id or not viewer_email:
         errors = (result or {}).get("errors") or []
         msg = errors[0].get("message", "viewer null") if errors else "viewer payload incomplete"
-        raise _ViewerNotAuthorized(f"viewer payload empty: {msg}")
+        raise PrivyAuthFailed(f"viewer payload empty: {msg}")
     return viewer_id, viewer_email
-
-
-def _register_with_privy(*, gateway: Any, jwt: str, email: str) -> None:
-    """Idempotent registerWithPrivy call. Errors propagate to caller.
-
-    Phase-14: discovered via live introspection on 2026-05-08. Input
-    fields are all SCALAR (email, fullName, eoaAddress, isWalletLogin),
-    none NON_NULL, so passing only email is safe. Prophet-side schema
-    is `Mutation: registerWithPrivy(input: RegisterWithPrivyInput!) ->
-    PrivyRegistrationResult!`.
-    """
-    import os as _os, sys as _sys
-    mutation = (
-        "mutation RegisterWithPrivy($input: RegisterWithPrivyInput!) { "
-        "registerWithPrivy(input: $input) { __typename } "
-        "}"
-    )
-    result = gateway.call(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
-        body={
-            "query": mutation,
-            "variables": {"input": {"email": email, "isWalletLogin": False}},
-        },
-        headers={"Cookie": f"privy-token={jwt}"},
-    )
-    if _os.environ.get("PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE") == "1":
-        errors = (result or {}).get("errors") or []
-        _sys.stderr.write(
-            f"[diag] registerWithPrivy result.data={(result or {}).get('data')!r} "
-            f"errors={errors!r}\n"
-        )
 
 
 def _drive_onboarding_if_present(

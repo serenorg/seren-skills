@@ -51,7 +51,7 @@ def bind_agentaccess(*, gateway: Any, jwt: str) -> None:
         # Same auth shape as the rest of the prophet-ai gateway calls:
         # SerenAPIKey on Authorization (gateway-side, applied by the
         # publisher proxy), Privy JWT on Cookie. See
-        # otp_worker/token_acquirer.py::_viewer_call for the contract.
+        # otp_worker/token_acquirer.py::_query_viewer for the contract.
         headers={"Cookie": f"privy-token={jwt}"},
     )
     errors = (result or {}).get("errors") or []
