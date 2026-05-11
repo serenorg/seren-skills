@@ -166,9 +166,7 @@ def acquire_prophet_token_via_otp(
         )
 
     try:
-        viewer_id, viewer_email = _query_viewer(
-            gateway=gateway, jwt=jwt, email=email
-        )
+        viewer_id, viewer_email = _query_viewer(gateway=gateway, jwt=jwt)
     except Exception as exc:
         if require_viewer_binding:
             raise PrivyAuthFailed(

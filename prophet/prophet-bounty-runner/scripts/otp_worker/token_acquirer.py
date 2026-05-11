@@ -7,17 +7,17 @@ captured and binds it to a Prophet `viewer.user.id`.
 
 Public surface (callers in `agent.py`):
 
-  - `_query_viewer(*, gateway, jwt, email)` — returns `(viewer_id,
-    viewer_email)`. Falls back to `_register_with_privy` once if
-    Prophet rejects the JWT with `_ViewerNotAuthorized` (no Prophet
-    user record bound yet).
-
-  - `_register_with_privy(*, gateway, jwt, email)` — idempotent
-    `registerWithPrivy` mutation; live publisher proxy currently
-    rejects this with `Privy authentication required` (issue #487
-    out-of-scope note), so the fallback rarely succeeds today. The
-    agent's modal stack handles the user-creation path until Prophet
-    fixes the publisher-proxy auth shape.
+  - `_query_viewer(*, gateway, jwt)` — returns `(viewer_id,
+    viewer_email)`. Fails closed with `PrivyAuthFailed` if Prophet
+    rejects the JWT (most commonly because no Prophet user record is
+    bound to the Privy identity yet). The valid recovery is for the
+    agent to re-run the browser-side modal stack (*Got it!* →
+    referral code → *Skip* deposit) and re-export
+    `PROPHET_SESSION_TOKEN`. The Python publisher proxy cannot create
+    the user record because Prophet's `registerWithPrivy` mutation
+    requires the full Privy cookie jar (`privy-token` +
+    `privy-session` + `privy-refresh-token`), which the proxy does
+    not forward.
 """
 
 from __future__ import annotations
@@ -27,40 +27,13 @@ from typing import Any
 from . import PrivyAuthFailed
 
 
-class _ViewerNotAuthorized(Exception):
-    """Raised when Prophet rejects the viewer query (401 / no user record)."""
+def _query_viewer(*, gateway: Any, jwt: str) -> tuple[str, str]:
+    """Call prophet-ai's `viewer { user { id email } }` and return (id, email).
 
-
-def _query_viewer(*, gateway: Any, jwt: str, email: str = "") -> tuple[str, str]:
-    """Call prophet-ai's `viewer { id email }` and return (id, email).
-
-    If the first viewer call fails (most commonly because the user
-    has a Privy identity but no Prophet user record bound to it),
-    try `registerWithPrivy` once and re-query. Idempotent on the
-    Prophet side: an already-registered user gets back their existing
-    record, and a fresh user gets created. Either way the viewer
-    query should succeed on retry.
+    Fails closed with `PrivyAuthFailed` on any rejection. See the module
+    docstring for why there is no server-side `registerWithPrivy`
+    fallback.
     """
-    try:
-        return _viewer_call(gateway, jwt)
-    except _ViewerNotAuthorized as exc:
-        if not email:
-            raise PrivyAuthFailed(f"viewer query failed: {exc}") from exc
-        try:
-            _register_with_privy(gateway=gateway, jwt=jwt, email=email)
-        except Exception as register_exc:
-            raise PrivyAuthFailed(
-                f"viewer query failed: {exc}; registerWithPrivy fallback also failed: {register_exc}"
-            ) from exc
-        try:
-            return _viewer_call(gateway, jwt)
-        except Exception as retry_exc:
-            raise PrivyAuthFailed(
-                f"viewer query still failed after registerWithPrivy: {retry_exc}"
-            ) from retry_exc
-
-
-def _viewer_call(gateway: Any, jwt: str) -> tuple[str, str]:
     try:
         result = gateway.call(
             "prophet-ai",
@@ -95,7 +68,7 @@ def _viewer_call(gateway: Any, jwt: str) -> tuple[str, str]:
                 f"[diag] viewer_call_failed exc={exc!r} jwt_len={len(jwt)} "
                 f"jwt_first16={jwt[:16]!r} jwt_dot_segments={jwt.count('.')}\n"
             )
-        raise _ViewerNotAuthorized(str(exc)) from exc
+        raise PrivyAuthFailed(f"viewer query failed: {exc}") from exc
 
     viewer = ((result or {}).get("data") or {}).get("viewer") or {}
     user = viewer.get("user") or {}
@@ -104,45 +77,5 @@ def _viewer_call(gateway: Any, jwt: str) -> tuple[str, str]:
     if not viewer_id or not viewer_email:
         errors = (result or {}).get("errors") or []
         msg = errors[0].get("message", "viewer null") if errors else "viewer payload incomplete"
-        raise _ViewerNotAuthorized(f"viewer payload empty: {msg}")
+        raise PrivyAuthFailed(f"viewer payload empty: {msg}")
     return viewer_id, viewer_email
-
-
-def _register_with_privy(*, gateway: Any, jwt: str, email: str) -> None:
-    """Idempotent registerWithPrivy call. Errors propagate to caller.
-
-    Phase-14: discovered via live introspection on 2026-05-08. Input
-    fields are all SCALAR (email, fullName, eoaAddress, isWalletLogin),
-    none NON_NULL, so passing only email is safe. Prophet-side schema
-    is `Mutation: registerWithPrivy(input: RegisterWithPrivyInput!) ->
-    PrivyRegistrationResult!`.
-
-    Issue #487 out-of-scope note: the live publisher proxy rejects
-    this mutation with `Privy authentication required` even when the
-    JWT successfully passes a `viewer` query. New-user creation
-    happens via the agent's modal stack until Prophet fixes the
-    proxy auth shape.
-    """
-    import os as _os
-    import sys as _sys
-    mutation = (
-        "mutation RegisterWithPrivy($input: RegisterWithPrivyInput!) { "
-        "registerWithPrivy(input: $input) { __typename } "
-        "}"
-    )
-    result = gateway.call(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
-        body={
-            "query": mutation,
-            "variables": {"input": {"email": email, "isWalletLogin": False}},
-        },
-        headers={"Cookie": f"privy-token={jwt}"},
-    )
-    if _os.environ.get("PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE") == "1":
-        errors = (result or {}).get("errors") or []
-        _sys.stderr.write(
-            f"[diag] registerWithPrivy result.data={(result or {}).get('data')!r} "
-            f"errors={errors!r}\n"
-        )

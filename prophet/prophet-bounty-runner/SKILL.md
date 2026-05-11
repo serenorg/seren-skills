@@ -370,9 +370,11 @@ python3 scripts/run_local_pull_runner.py --config config.json
   rejected the JWT. Most common cause: the modal stack did not
   complete and the user has no Prophet user record yet. Re-run
   step 6 of the runbook (Got it! → referral code → skip
-  deposit). The skill cannot create the user record headlessly
-  — Prophet's `registerWithPrivy` rejects publisher-proxy auth
-  (tracked separately).
+  deposit), then re-export `PROPHET_SESSION_TOKEN`. New-user
+  creation only works through the browser-driven modal stack;
+  the publisher proxy cannot create the record because Prophet's
+  `registerWithPrivy` mutation requires the full Privy cookie
+  jar that only the browser holds.
 
 **Cron paused with no recent ticks.**
 
