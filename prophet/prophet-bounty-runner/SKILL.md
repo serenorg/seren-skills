@@ -60,7 +60,7 @@ rediscover them.
   OTP in-place from the user's gmail or outlook inbox via the
   publisher.
 - Discovers settling Polymarket markets that resolve before
-  `2026-05-11`, scores and filters candidates, and submits them
+  `2026-05-26`, scores and filters candidates, and submits them
   as new Prophet markets.
 - Persists every created market to the skill-owned SerenDB with
   the user's `prophet_viewer_id` so the operator's daily
@@ -82,7 +82,7 @@ Bounty terms (`customer_slug = prophet`):
   event.
 - Qualifying market: a Prophet market whose `creator.id` matches
   the user's bound `prophet_viewer_id` and whose `resolutionDate`
-  is strictly before `2026-05-11T00:00:00Z`.
+  is strictly before `2026-05-26T00:00:00Z`.
 
 Earnings are conditional on the operator's daily reconciliation
 pass — the skill does not credit itself. The reconciler reads

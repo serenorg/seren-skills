@@ -17,7 +17,7 @@
     {
       "polymarket_market_id": "0xpoly-003",
       "question": "Resolves AFTER deadline — should be filtered.",
-      "resolution_date": "2026-05-15T00:00:00Z",
+      "resolution_date": "2026-05-30T00:00:00Z",
       "category": "crypto",
       "settled": false
     }

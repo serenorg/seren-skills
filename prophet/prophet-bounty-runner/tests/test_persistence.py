@@ -37,7 +37,7 @@ def _seed_happy_path(stub_gateway, stub_transport=None) -> None:
     stub_gateway.register(
         "polymarket-data",
         "GET",
-        "/markets?end_date_max=2026-05-11T00:00:00Z&closed=false&active=true&limit=100",
+        "/markets?end_date_max=2026-05-26T00:00:00Z&closed=false&active=true&limit=100",
         load_fixture("polymarket_settling.json"),
     )
     # Issue #493: Prophet createMarket is now on the transport seam, not the gateway.

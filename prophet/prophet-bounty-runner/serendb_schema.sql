@@ -13,7 +13,7 @@
 --      already on the ledger" signal — re-inserting the same id is the
 --      idempotency-fail path, not a "let's just persist twice" silent dup.
 --
---   2. `markets_created.resolves_at < 2026-05-11T00:00:00Z` CHECK. A
+--   2. `markets_created.resolves_at < 2026-05-26T00:00:00Z` CHECK. A
 --      defense-in-depth gate after the per-row eligibility check in
 --      `agent._cmd_run`. If application logic ever stops enforcing the
 --      deadline (refactor, schema drift, copy-paste error), the database
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS {{schema_name}}.markets_created (
   run_id                TEXT NOT NULL REFERENCES {{schema_name}}.runs(run_id),
   prophet_market_url    TEXT NOT NULL,
   polymarket_source_url TEXT NOT NULL,
-  resolves_at           TIMESTAMPTZ NOT NULL CHECK (resolves_at < TIMESTAMPTZ '2026-05-11T00:00:00Z'),
+  resolves_at           TIMESTAMPTZ NOT NULL CHECK (resolves_at < TIMESTAMPTZ '2026-05-26T00:00:00Z'),
   prophet_viewer_id     TEXT NOT NULL,
   bounty_id             TEXT NOT NULL,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -90,3 +90,14 @@ CREATE TABLE IF NOT EXISTS {{schema_name}}.events (
   payload    JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Idempotent deadline migration. `CREATE TABLE IF NOT EXISTS` does not refresh
+-- the inline CHECK on tables that already exist, so re-running this schema
+-- against a database created against an earlier deadline leaves the old
+-- constraint in place. Drop and re-add the auto-named constraint so the new
+-- ceiling applies on both fresh installs and migrated installs.
+ALTER TABLE {{schema_name}}.markets_created
+  DROP CONSTRAINT IF EXISTS markets_created_resolves_at_check;
+ALTER TABLE {{schema_name}}.markets_created
+  ADD CONSTRAINT markets_created_resolves_at_check
+  CHECK (resolves_at < TIMESTAMPTZ '2026-05-26T00:00:00Z');
