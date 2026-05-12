@@ -361,6 +361,34 @@ class ProphetOrderClient:
         order = result.get("order") or {}
         return bool(order.get("id"))
 
+    def cancel_open_orders(
+        self,
+        *,
+        jwt: str,
+        market_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Emergency exit helper: cancel every currently active Prophet order.
+
+        Direct operator exit commands should first remove resting Prophet
+        exposure. This helper intentionally reuses `list_user_orders(...,
+        status="OPEN")` so OPEN, PENDING, and PARTIALLY_FILLED orders are
+        treated as active and each one is cancelled individually.
+        """
+        orders = self.list_user_orders(jwt=jwt, market_id=market_id, status="OPEN")
+        results: list[dict[str, Any]] = []
+        for order in orders:
+            results.append(
+                {
+                    "order_id": order.order_id,
+                    "market_id": order.market_id,
+                    "outcome": order.outcome,
+                    "side": order.side,
+                    "status": order.status,
+                    "cancelled": self.cancel_order(jwt=jwt, order_id=order.order_id),
+                }
+            )
+        return results
+
     # ------------------------------------------------------------------
     # transport delegation. Mirrors MinimalProphetClient._post
 

@@ -213,6 +213,87 @@ def test_cancel_order_returns_false_when_payload_has_errors(stub_transport) -> N
     assert client.cancel_order(jwt="x", order_id="ord_1") is False
 
 
+def test_emergency_exit_cancel_all_open_orders_uses_stub_prophet_client(stub_transport) -> None:
+    """Emergency unwind cancels every active Prophet order before any new exposure."""
+    stub_transport.register_by_query_substring(
+        "query ViewerOrders",
+        {
+            "data": {
+                "viewer": {
+                    "orders": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": "ord_open",
+                                    "market": {"id": "mkt_a"},
+                                    "outcome": "YES",
+                                    "side": "SELL",
+                                    "type": "LIMIT",
+                                    "priceBps": 6200,
+                                    "quantityShares": 5.0,
+                                    "filledShares": 0.0,
+                                    "remainingShares": 5.0,
+                                    "status": "OPEN",
+                                }
+                            },
+                            {
+                                "node": {
+                                    "id": "ord_partial",
+                                    "market": {"id": "mkt_b"},
+                                    "outcome": "NO",
+                                    "side": "BUY",
+                                    "type": "LIMIT",
+                                    "priceBps": 4000,
+                                    "quantityShares": 3.0,
+                                    "filledShares": 1.0,
+                                    "remainingShares": 2.0,
+                                    "status": "PARTIALLY_FILLED",
+                                }
+                            },
+                            {
+                                "node": {
+                                    "id": "ord_done",
+                                    "market": {"id": "mkt_c"},
+                                    "outcome": "YES",
+                                    "side": "BUY",
+                                    "type": "LIMIT",
+                                    "priceBps": 5000,
+                                    "quantityShares": 1.0,
+                                    "filledShares": 1.0,
+                                    "remainingShares": 0.0,
+                                    "status": "FILLED",
+                                }
+                            },
+                        ]
+                    }
+                }
+            }
+        },
+    )
+    stub_transport.register_by_query_substring(
+        "mutation CancelOrder",
+        {
+            "data": {
+                "cancelOrder": {
+                    "order": {"id": "cancelled", "status": "CANCELLED"},
+                    "errors": None,
+                }
+            }
+        },
+    )
+    client = ProphetOrderClient(transport=stub_transport)
+
+    results = client.cancel_open_orders(jwt="jwt")
+
+    assert [r["order_id"] for r in results] == ["ord_open", "ord_partial"]
+    assert all(r["cancelled"] for r in results)
+    cancel_calls = [c for c in stub_transport.calls if "mutation CancelOrder" in c["query"]]
+    assert [c["variables"]["input"]["orderId"] for c in cancel_calls] == [
+        "ord_open",
+        "ord_partial",
+    ]
+
+
 def test_list_user_orders_uses_viewer_orders_relay_shape(stub_transport) -> None:
     """Pin the live `viewer.orders` Relay shape (issue #478).
 

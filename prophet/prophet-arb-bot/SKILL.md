@@ -74,6 +74,12 @@ Without both, the cycle still scores opportunities and emits the decision rows i
 
 When the user gives a direct exit instruction (`sell`, `close`, `exit`, `unwind`, `flatten`), execute the exit path immediately. Cancel every open prophet order surfaced by `--command status` and ask only the minimum clarifying question if the user also wants to liquidate held positions (which cannot be force-sold on Prophet without an offsetting order).
 
+## CLOB / Order-Book Exit Rules
+
+For any CLOB or order-book exit path used by this skill, immediate exits must be marketable, not passive. Cancel all resting orders first, fetch the latest full book, then price a sell exit at the current `tick_size` minimum so it crosses the best bid instead of resting on the book. Never use a passive sell or post-only order for an immediate `sell`, `close`, `exit`, `unwind`, or `flatten` instruction.
+
+Before submitting the exit, compute a visible-depth recovery estimate by sweeping visible bid depth across all levels for the requested size. Surface `best bid`, `best ask`, `tick_size`, estimated fill size, estimated unfilled size, estimated average price, and estimated exit value in the run output so the operator can see how much inventory the live book can absorb.
+
 ## Pre-Trade Checklist
 
 Before any live `run --yes-live`:

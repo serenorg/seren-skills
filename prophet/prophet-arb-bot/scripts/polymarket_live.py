@@ -1884,6 +1884,7 @@ class PolymarketPublisherTrader:
         tick_size: str,
         neg_risk: bool,
         fee_rate_bps: int,
+        post_only: bool = True,
     ) -> dict[str, Any]:
         from py_clob_client.clob_types import CreateOrderOptions
 
@@ -1906,7 +1907,7 @@ class PolymarketPublisherTrader:
             "order": signed_order.dict(),
             "owner": self._api_creds.api_key,
             "orderType": "GTC",
-            "postOnly": True,
+            "postOnly": post_only,
         }
         return self._call("POST", "/order", body=body)
 
@@ -2117,8 +2118,9 @@ class DirectClobTrader:
         tick_size: str,
         neg_risk: bool,
         fee_rate_bps: int,
+        post_only: bool = True,
     ) -> Any:
-        del tick_size, neg_risk, fee_rate_bps
+        del tick_size, neg_risk, fee_rate_bps, post_only
         from py_clob_client.clob_types import OrderArgs, OrderType
         from py_clob_client.order_builder.constants import BUY, SELL
 
@@ -3078,6 +3080,7 @@ def sell_held_inventory(
                 tick_size=sell_plan["tick_size"],
                 neg_risk=sell_plan["neg_risk"],
                 fee_rate_bps=sell_plan["fee_rate_bps"],
+                post_only=False,
             )
             sells.append(
                 {
