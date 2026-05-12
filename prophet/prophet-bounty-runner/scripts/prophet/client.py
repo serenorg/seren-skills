@@ -83,21 +83,28 @@ class MinimalProphetClient:
     # Authenticated reads — require Privy JWT passthrough
 
     def viewer(self, *, jwt: str) -> ViewerIdentity:
-        """`Query: viewer { id email }` — JWT validation + identity binding.
+        """`Query: viewer { user { id email } }` — JWT validation + identity binding.
 
         Plan §11.1 step 10, §17 schema. Called once after OTP acquisition;
         the returned `id` becomes `participant_identity.prophet_viewer_id`
         and is the per-user attribution key the operator's reconciler
         relies on (§3 ADR P0).
+
+        Issue #502: Prophet's live `Viewer` type does not expose `id` or
+        `email` directly — those fields moved under `Viewer.user`. The
+        legacy flat shape `viewer { id email }` is rejected with
+        `GRAPHQL_VALIDATION_FAILED` and surfaces as an opaque
+        "An unexpected error occurred" mask in the client response.
         """
         payload = self._post(
             jwt=jwt,
-            query="query Viewer { viewer { id email } }",
+            query="query Viewer { viewer { user { id email } } }",
             variables={},
         )
         viewer = ((payload or {}).get("data") or {}).get("viewer") or {}
-        viewer_id = viewer.get("id") or ""
-        viewer_email = viewer.get("email") or ""
+        user = viewer.get("user") or {}
+        viewer_id = user.get("id") or ""
+        viewer_email = user.get("email") or ""
         if not viewer_id or not viewer_email:
             raise ProphetSchemaError(
                 f"viewer query returned incomplete payload: id={viewer_id!r} email={viewer_email!r}"
