@@ -1,7 +1,0 @@
-{
-  "token": "eyJfixture-jwt-do-not-use-in-prod",
-  "expires_at": "2026-05-07T13:00:00Z",
-  "refresh_token_present": true,
-  "prophet_viewer_id": "viewer_fixture_001",
-  "viewer_email": "implementer@example.com"
-}
