@@ -48,8 +48,8 @@ ALLOWED_PROVIDERS = {"gmail", "outlook"}
 DEFAULT_BOUNTY_ID = "bounty_fixture_001"
 
 # Plan §3 ADR: every Prophet market must resolve before this instant.
-BOUNTY_DEADLINE = datetime(2026, 5, 11, 0, 0, 0, tzinfo=timezone.utc)
-BOUNTY_DEADLINE_ISO = "2026-05-11T00:00:00Z"
+BOUNTY_DEADLINE = datetime(2026, 5, 26, 0, 0, 0, tzinfo=timezone.utc)
+BOUNTY_DEADLINE_ISO = "2026-05-26T00:00:00Z"
 
 _CREATE_MARKET_MUTATION = (
     "mutation CreateMarket($source: PolymarketSourceInput!) { "
