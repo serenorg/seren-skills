@@ -32,34 +32,33 @@ _SUBMIT_REFERRAL_CODE_MUTATION = (
 )
 
 
-def bind_agentaccess(*, gateway: Any, jwt: str) -> None:
+def bind_agentaccess(*, transport: Any, jwt: str) -> None:
     """Idempotent submitReferralCode(AGENTACCESS) call.
 
     Re-runs after a successful first bind get an "already redeemed"-
     style error from Prophet which is treated as success. Auth or
     schema-drift errors propagate so the caller can surface them to
     the run row and, in the operator's case, alert.
+
+    Issue #493: routes directly to `app.prophetmarket.ai` via
+    `ProphetDirectTransport`. The previous `gateway.call("prophet-ai",
+    ...)` path is gone because the Seren publisher proxy reserves the
+    `Authorization` header for SEREN_API_KEY and Prophet ignores the
+    `Cookie: privy-token=*` workaround.
     """
-    result = gateway.call(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
-        body={
-            "query": _SUBMIT_REFERRAL_CODE_MUTATION,
-            "variables": {"code": AGENTACCESS_REFERRAL_CODE},
-        },
-        # Same auth shape as the rest of the prophet-ai gateway calls:
-        # SerenAPIKey on Authorization (gateway-side, applied by the
-        # publisher proxy), Privy JWT on Cookie. See
-        # otp_worker/token_acquirer.py::_query_viewer for the contract.
-        headers={"Cookie": f"privy-token={jwt}"},
-    )
-    errors = (result or {}).get("errors") or []
-    if not errors:
-        return
-    msg = (errors[0].get("message") or "").lower()
-    # Prophet wording can vary; any of these phrasings means the bind
-    # is in place from a prior run and the caller can proceed.
-    if any(token in msg for token in ("already", "duplicate", "exists", "redeemed")):
-        return
-    raise RuntimeError(f"submitReferralCode failed: {errors!r}")
+    from . import ProphetGraphQLError
+
+    try:
+        transport.post_graphql(
+            jwt=jwt,
+            query=_SUBMIT_REFERRAL_CODE_MUTATION,
+            variables={"code": AGENTACCESS_REFERRAL_CODE},
+            operation_name="SubmitReferralCode",
+        )
+    except ProphetGraphQLError as exc:
+        # Prophet wording can vary; any of these phrasings means the bind
+        # is in place from a prior run and the caller can proceed.
+        msg = str(exc).lower()
+        if any(token in msg for token in ("already", "duplicate", "exists", "redeemed")):
+            return
+        raise RuntimeError(f"submitReferralCode failed: {exc}") from exc

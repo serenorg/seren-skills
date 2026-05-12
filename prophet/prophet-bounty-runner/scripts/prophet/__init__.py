@@ -2,13 +2,17 @@
 
 Public surface (only these are imported by callers):
 
-  - MinimalProphetClient — wraps gateway.call('prophet-ai', ...)
+  - MinimalProphetClient — composes operations over a ProphetTransport.
+  - ProphetDirectTransport (transport.py) — direct HTTP to Prophet.
   - exceptions: ProphetUnauthorized, ProphetGraphQLError, ProphetSchemaError
 
-Plan §12.1, §12.2. The client never touches httpx or the Prophet web URL
-directly — it always goes through the gateway and the prophet-ai
-publisher. SEREN_API_KEY rides on the gateway-side auth; the Privy JWT
-is passed verbatim via the Authorization passthrough header.
+Issue #493: every authenticated Prophet call now goes directly to
+`https://app.prophetmarket.ai/api/graphql` with `Authorization: Bearer
+<Privy JWT>`. The previous `prophet-ai` Seren publisher hop was
+removed because the gateway reserves `Authorization` for SEREN_API_KEY
+billing auth — there is no way to ride a Privy JWT through that slot
+without colliding, and Prophet ignored the `Cookie: privy-token=*`
+workaround entirely.
 """
 
 from __future__ import annotations

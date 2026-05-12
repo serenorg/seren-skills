@@ -50,7 +50,13 @@ class AuthFacade:
         bounty_id: str,
         browser_session: BrowserSession,
         gateway: Any,
+        transport: Any = None,
     ) -> FreshJwt:
+        """`gateway` is used for the email-OTP inbox publisher
+        (gmail/outlook). `transport` is the direct-to-Prophet HTTP
+        client used for viewer-bind + affiliate bind after the JWT
+        lands. Issue #493.
+        """
         entry = self.cache.read()
 
         if entry.is_fresh():
@@ -72,6 +78,10 @@ class AuthFacade:
             # Refresh failed → fall through to cold-start.
 
         # Cold-start path: cache is needs_otp, missing, or refresh just failed.
+        if transport is None:
+            from prophet.transport import ProphetDirectTransport
+
+            transport = ProphetDirectTransport()
         acquired = self._acquirer(
             email=email,
             provider=provider,
@@ -79,6 +89,7 @@ class AuthFacade:
             bounty_id=bounty_id,
             browser_session=browser_session,
             gateway=gateway,
+            transport=transport,
             cache=self.cache,
         )
         return FreshJwt(

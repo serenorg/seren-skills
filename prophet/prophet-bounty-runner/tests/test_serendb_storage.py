@@ -128,7 +128,7 @@ def test_main_uses_serendb_storage_when_api_key_set(monkeypatch) -> None:
 
     storage_seen: dict[str, Any] = {}
 
-    def _stub_run_command(_request, *, gateway, storage):
+    def _stub_run_command(_request, *, gateway, storage, transport=None):
         storage_seen["instance"] = storage
         return {"status": "ok", "command": "status"}
 
@@ -161,7 +161,7 @@ def test_main_falls_back_to_in_memory_when_api_key_missing(monkeypatch) -> None:
 
     storage_seen: dict[str, Any] = {}
 
-    def _stub_run_command(_request, *, gateway, storage):
+    def _stub_run_command(_request, *, gateway, storage, transport=None):
         storage_seen["instance"] = storage
         return {"status": "ok", "command": "status"}
 

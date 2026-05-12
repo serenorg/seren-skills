@@ -77,6 +77,74 @@ class StubGateway:
         return result
 
 
+class StubProphetTransport:
+    """In-memory stand-in for `prophet.transport.ProphetDirectTransport`.
+
+    Issue #493: Prophet calls no longer go through the publisher gateway.
+    Tests register canned responses by GraphQL `operationName` (preferred)
+    or by a substring match on the query body, then assert on `calls`.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._by_operation: dict[str, Any] = {}
+        self._by_query_substring: list[tuple[str, Any]] = []
+        self._default_response: Any = None
+
+    def register(self, operation_name: str, response: Any) -> None:
+        self._by_operation[operation_name] = response
+
+    def register_by_query_substring(self, needle: str, response: Any) -> None:
+        self._by_query_substring.append((needle, response))
+
+    def register_default(self, response: Any) -> None:
+        self._default_response = response
+
+    def post_graphql(
+        self,
+        *,
+        jwt: str | None,
+        query: str,
+        variables: dict | None = None,
+        operation_name: str | None = None,
+    ) -> Any:
+        self.calls.append(
+            {
+                "jwt": jwt,
+                "query": query,
+                "variables": variables,
+                "operation_name": operation_name,
+            }
+        )
+        chosen: Any = None
+        if operation_name and operation_name in self._by_operation:
+            chosen = self._by_operation[operation_name]
+        else:
+            for needle, resp in self._by_query_substring:
+                if needle in query:
+                    chosen = resp
+                    break
+            if chosen is None:
+                for op, resp in self._by_operation.items():
+                    if op in query:
+                        chosen = resp
+                        break
+        if chosen is None:
+            chosen = self._default_response
+        if chosen is None:
+            raise AssertionError(
+                f"StubProphetTransport: no canned response for operation_name={operation_name!r}"
+            )
+        if isinstance(chosen, BaseException):
+            raise chosen
+        return chosen
+
+
 @pytest.fixture
 def stub_gateway() -> StubGateway:
     return StubGateway()
+
+
+@pytest.fixture
+def stub_transport() -> StubProphetTransport:
+    return StubProphetTransport()

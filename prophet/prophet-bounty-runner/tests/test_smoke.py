@@ -27,7 +27,7 @@ from conftest import load_fixture  # type: ignore[import-not-found]
 # helpers
 
 
-def _seed_happy_path(stub_gateway, stub_storage) -> None:
+def _seed_happy_path(stub_gateway, stub_storage, stub_transport=None) -> None:
     stub_gateway.register(
         "seren-bounty",
         "POST",
@@ -40,12 +40,10 @@ def _seed_happy_path(stub_gateway, stub_storage) -> None:
         "/markets?end_date_max=2026-05-11T00:00:00Z&closed=false&active=true&limit=100",
         load_fixture("polymarket_settling.json"),
     )
-    stub_gateway.register(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
-        load_fixture("prophet_create_market.json"),
-    )
+    # Issue #493: Prophet GraphQL is no longer routed through the gateway.
+    # Seed createMarket on the new transport seam when one is provided.
+    if stub_transport is not None:
+        stub_transport.register_default(load_fixture("prophet_create_market.json"))
     stub_gateway.register(
         "seren-bounty",
         "POST",
@@ -59,7 +57,7 @@ def _seed_happy_path(stub_gateway, stub_storage) -> None:
 
 
 def test_happy_path_run_creates_qualifying_markets_and_one_submission(
-    base_run_request, stub_gateway, stub_storage, monkeypatch
+    base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
     """Happy path emits 1..submit_limit markets and exactly one submission.
 
@@ -73,21 +71,25 @@ def test_happy_path_run_creates_qualifying_markets_and_one_submission(
         "agent.acquire_prophet_token_via_otp",
         lambda *_args, **_kw: load_fixture("prophet_otp_session.json"),
     )
-    _seed_happy_path(stub_gateway, stub_storage)
+    _seed_happy_path(stub_gateway, stub_storage, stub_transport=stub_transport)
 
-    result = run_command(base_run_request, gateway=stub_gateway, storage=stub_storage)
+    result = run_command(
+        base_run_request,
+        gateway=stub_gateway,
+        storage=stub_storage,
+        transport=stub_transport,
+    )
 
-    create_market_calls = stub_gateway.calls_to("prophet-ai", "POST", "/api/graphql")
     submission_calls = stub_gateway.calls_to(
         "seren-bounty", "POST", "/bounties/bounty_fixture_001/submission"
     )
     assert result["status"] == "ok"
-    assert 1 <= len(create_market_calls) <= base_run_request["submit_limit"]
+    assert 1 <= len(stub_transport.calls) <= base_run_request["submit_limit"]
     assert len(submission_calls) == 1
 
 
 def test_otp_failure_blocks_run_and_persists_blocked_run(
-    base_run_request, stub_gateway, stub_storage, monkeypatch
+    base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
     def _raise_otp(*_args, **_kw):
         raise RuntimeError("otp_email_not_received_within_90s")
@@ -100,53 +102,61 @@ def test_otp_failure_blocks_run_and_persists_blocked_run(
         load_fixture("bounty_join.json"),
     )
 
-    result = run_command(base_run_request, gateway=stub_gateway, storage=stub_storage)
+    result = run_command(
+        base_run_request,
+        gateway=stub_gateway,
+        storage=stub_storage,
+        transport=stub_transport,
+    )
 
-    create_market_calls = stub_gateway.calls_to("prophet-ai", "POST", "/api/graphql")
     blocked_runs = [r for r in stub_storage.runs if r.get("status") == "blocked_otp"]
     assert result["status"] == "blocked"
-    assert create_market_calls == []
+    assert stub_transport.calls == []
     assert len(blocked_runs) == 1
 
 
 def test_dry_run_does_not_call_prophet_create_market(
-    base_run_request, stub_gateway, stub_storage, monkeypatch
+    base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
     monkeypatch.setattr(
         "agent.acquire_prophet_token_via_otp",
         lambda *_args, **_kw: load_fixture("prophet_otp_session.json"),
     )
-    _seed_happy_path(stub_gateway, stub_storage)
+    _seed_happy_path(stub_gateway, stub_storage, stub_transport=stub_transport)
     request = {**base_run_request, "dry_run": True}
 
-    run_command(request, gateway=stub_gateway, storage=stub_storage)
+    run_command(
+        request, gateway=stub_gateway, storage=stub_storage, transport=stub_transport
+    )
 
-    create_market_calls = stub_gateway.calls_to("prophet-ai", "POST", "/api/graphql")
-    assert create_market_calls == []
+    assert stub_transport.calls == []
 
 
 def test_polymarket_source_resolving_after_deadline_is_filtered_out(
-    base_run_request, stub_gateway, stub_storage, monkeypatch
+    base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
     monkeypatch.setattr(
         "agent.acquire_prophet_token_via_otp",
         lambda *_args, **_kw: load_fixture("prophet_otp_session.json"),
     )
-    _seed_happy_path(stub_gateway, stub_storage)
+    _seed_happy_path(stub_gateway, stub_storage, stub_transport=stub_transport)
 
-    run_command(base_run_request, gateway=stub_gateway, storage=stub_storage)
+    run_command(
+        base_run_request,
+        gateway=stub_gateway,
+        storage=stub_storage,
+        transport=stub_transport,
+    )
 
-    create_market_calls = stub_gateway.calls_to("prophet-ai", "POST", "/api/graphql")
-    bodies = [c["body"] for c in create_market_calls]
     assert all(
-        "0xpoly-003" not in (b.get("variables", {}).get("source", {}).get("polymarket_market_id", ""))
-        for b in bodies
-        if isinstance(b, dict)
+        "0xpoly-003"
+        not in (c["variables"] or {}).get("source", {}).get("polymarket_market_id", "")
+        for c in stub_transport.calls
     )
 
 
 def test_status_command_does_not_call_polymarket_or_prophet(
-    stub_gateway, stub_storage
+    stub_gateway, stub_storage, stub_transport
 ) -> None:
     stub_gateway.register(
         "seren-bounty",
@@ -156,9 +166,10 @@ def test_status_command_does_not_call_polymarket_or_prophet(
     )
     request = {"command": "status", "json_output": True}
 
-    run_command(request, gateway=stub_gateway, storage=stub_storage)
+    run_command(
+        request, gateway=stub_gateway, storage=stub_storage, transport=stub_transport
+    )
 
     polymarket_calls = stub_gateway.calls_to("polymarket-data")
-    prophet_calls = stub_gateway.calls_to("prophet-ai")
     assert polymarket_calls == []
-    assert prophet_calls == []
+    assert stub_transport.calls == []

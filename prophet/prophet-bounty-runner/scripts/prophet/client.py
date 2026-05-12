@@ -1,4 +1,4 @@
-"""MinimalProphetClient — operation-specific helpers around prophet-ai.
+"""MinimalProphetClient — operation-specific helpers for Prophet GraphQL.
 
 Only the operations this skill actually makes are exposed:
 
@@ -16,13 +16,16 @@ Only the operations this skill actually makes are exposed:
                                           → createMarketWithBet
 
 Field-name validation: the exact field shapes for `Market.creator` and
-the create-chain inputs are confirmed via `schema_probe.py` against the
-live publisher; the client uses placeholders documented from plan §12.1
-and §16.1 that must match the captured fixture before Phase 14 acceptance.
+the create-chain inputs are confirmed via `schema_probe.py` against
+Prophet's live API; the client uses placeholders documented from plan
+§12.1 and §16.1 that must match the captured fixture before Phase 14
+acceptance.
 
-The client takes a `gateway` object with a `call(publisher, method,
-path, body, headers)` signature. The agent's gateway is the production
-implementation; tests inject a stub.
+Calls go directly to `https://app.prophetmarket.ai/api/graphql` via the
+injected `ProphetTransport` (see `transport.py`). The earlier
+`prophet-ai` Seren publisher hop was removed in #493 because Prophet's
+auth (Authorization: Bearer JWT) collided with the gateway's
+SEREN_API_KEY slot. Tests inject a StubProphetTransport.
 """
 
 from __future__ import annotations
@@ -36,9 +39,6 @@ from . import (
     ProphetSchemaError,
     ProphetUnauthorized,
 )
-
-PUBLISHER = "prophet-ai"
-GRAPHQL_PATH = "/api/graphql"
 
 # Bounty deadline that markets must resolve before to be eligible.
 # Plan §3 ADR + §16.1 post-create gate.
@@ -67,8 +67,17 @@ class ProphetMarketRef:
 
 
 class MinimalProphetClient:
-    def __init__(self, *, gateway: Any) -> None:
-        self.gateway = gateway
+    def __init__(self, *, transport: Any) -> None:
+        """Wrap a Prophet HTTP transport with operation-specific helpers.
+
+        `transport` must expose `post_graphql(*, jwt, query, variables,
+        operation_name=None) -> dict` and raise `ProphetUnauthorized` on
+        401 / `ProphetGraphQLError` on other transport or GraphQL
+        failures. The production implementation is
+        `prophet.transport.ProphetDirectTransport`; tests pass
+        `StubProphetTransport` from conftest.
+        """
+        self.transport = transport
 
     # ------------------------------------------------------------------
     # Authenticated reads — require Privy JWT passthrough
@@ -324,58 +333,21 @@ class MinimalProphetClient:
         return market_id
 
     # ------------------------------------------------------------------
-    # transport — uniform error handling
+    # transport delegation
 
     def _post(
         self, *, jwt: str | None, query: str, variables: dict[str, Any]
     ) -> dict[str, Any]:
-        headers: dict[str, str] = {}
-        if jwt:
-            headers["Authorization"] = f"Bearer {jwt}"
-
-        try:
-            response = self.gateway.call(
-                PUBLISHER,
-                "POST",
-                GRAPHQL_PATH,
-                body={"query": query, "variables": variables},
-                headers=headers,
-            )
-        except _StatusError as exc:
-            if exc.status == 401:
-                raise ProphetUnauthorized("prophet-ai returned 401") from exc
-            raise
-
-        # The gateway should already raise on non-2xx; if a stub or
-        # connector chooses to surface them as response payloads, treat
-        # them as auth failures or schema errors.
-        if isinstance(response, dict) and response.get("status") == 401:
-            raise ProphetUnauthorized("prophet-ai returned 401")
-
+        """Single seam through which every authenticated Prophet call
+        flows. The transport handles HTTP, 401 → ProphetUnauthorized,
+        and `errors[]` → ProphetGraphQLError. Anything that comes back
+        here must already be a dict with a populated `data` key.
+        """
+        response = self.transport.post_graphql(
+            jwt=jwt, query=query, variables=variables
+        )
         if not isinstance(response, dict):
             raise ProphetSchemaError(
-                f"prophet-ai returned non-dict payload: {type(response).__name__}"
+                f"prophet returned non-dict payload: {type(response).__name__}"
             )
-
-        errors = response.get("errors")
-        if errors:
-            # GraphQL errors. Surface the first message; tests assert on
-            # the exception type, not the message body.
-            first = errors[0] if isinstance(errors, list) and errors else {}
-            message = (
-                first.get("message") if isinstance(first, dict) else str(first)
-            ) or "unknown GraphQL error"
-            raise ProphetGraphQLError(f"prophet-ai GraphQL errors: {message}")
-
         return response
-
-
-class _StatusError(Exception):
-    """Internal sentinel; gateways may raise their own error types.
-
-    Tests stub the gateway directly and can raise this to simulate 401.
-    """
-
-    def __init__(self, status: int) -> None:
-        super().__init__(f"HTTP {status}")
-        self.status = status

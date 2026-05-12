@@ -134,6 +134,7 @@ def acquire_prophet_token_via_otp(
     seren_user_id: str = "",
     headless: bool = True,
     require_viewer_binding: bool = True,
+    transport: Any = None,
 ) -> dict:
     """Read the JWT supplied by the agent and bind it to a viewer_id.
 
@@ -143,18 +144,25 @@ def acquire_prophet_token_via_otp(
     `localStorage["privy:token"]`, and exports it as
     `PROPHET_SESSION_TOKEN` before invoking this script.
 
+    Issue #493: viewer-bind now uses `ProphetDirectTransport` (direct to
+    `app.prophetmarket.ai`) instead of the broken `prophet-ai` Seren
+    publisher hop. The `transport` kwarg is injected by `_cmd_run`;
+    tests pass a `StubProphetTransport`.
+
     Missing env var → `MissingSessionToken`. Viewer-bind failure →
     `PrivyAuthFailed`. Both surface as `status=blocked` with distinct
     reasons in `_cmd_run`.
 
     `provider`, `bounty_id`, `seren_user_id`, and `headless` are kept
     in the signature for backward-compat with existing test
-    monkeypatches; they are otherwise unused.
+    monkeypatches; they are otherwise unused. `gateway` is kept for
+    the same reason but Prophet calls now route through `transport`.
     """
     from otp_worker import PrivyAuthFailed
     from otp_worker.token_acquirer import _query_viewer
+    from prophet.transport import ProphetDirectTransport
 
-    del provider, bounty_id, seren_user_id, headless  # unused; see docstring
+    del provider, bounty_id, seren_user_id, headless, gateway  # see docstring
 
     jwt = (os.environ.get("PROPHET_SESSION_TOKEN") or "").strip()
     if not jwt:
@@ -165,8 +173,10 @@ def acquire_prophet_token_via_otp(
             "agent.py. See SKILL.md."
         )
 
+    if transport is None:
+        transport = ProphetDirectTransport()
     try:
-        viewer_id, viewer_email = _query_viewer(gateway=gateway, jwt=jwt)
+        viewer_id, viewer_email = _query_viewer(transport=transport, jwt=jwt)
     except Exception as exc:
         if require_viewer_binding:
             raise PrivyAuthFailed(
@@ -198,8 +208,17 @@ def acquire_prophet_token_via_otp(
     }
 
 
-def run_command(request: dict, *, gateway: Any, storage: Any) -> dict:
-    """Top-level entrypoint that the CLI and scheduled runs both call."""
+def run_command(
+    request: dict, *, gateway: Any, storage: Any, transport: Any = None
+) -> dict:
+    """Top-level entrypoint that the CLI and scheduled runs both call.
+
+    `gateway` is the Seren publisher gateway used for non-Prophet
+    publishers (gmail/outlook for OTP, seren-bounty for earnings,
+    polymarket-data for source discovery). `transport` is the
+    direct-to-Prophet transport introduced in #493; when None the
+    `_cmd_run` path constructs a default `ProphetDirectTransport`.
+    """
     req = normalize_request(request)
     cmd = req["command"]
 
@@ -207,7 +226,7 @@ def run_command(request: dict, *, gateway: Any, storage: Any) -> dict:
         return _cmd_status(req, gateway=gateway, storage=storage)
     if cmd == "setup":
         return _cmd_setup(req, gateway=gateway, storage=storage)
-    return _cmd_run(req, gateway=gateway, storage=storage)
+    return _cmd_run(req, gateway=gateway, storage=storage, transport=transport)
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +336,13 @@ def _auto_resolve_bounty_id(bounty_client: BountyClient) -> tuple[str, str]:
     return matched[0].get("id") or "", "auto_resolved"
 
 
-def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
+def _cmd_run(
+    req: dict, *, gateway: Any, storage: Any, transport: Any = None
+) -> dict:
+    from prophet.transport import ProphetDirectTransport
+
+    if transport is None:
+        transport = ProphetDirectTransport()
     bounty_client = BountyClient(gateway=gateway)
     pinned = (req.get("bounty_id") or "").strip()
     if pinned:
@@ -361,6 +386,7 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
             gateway=gateway,
             bounty_id=bounty_id,
             require_viewer_binding=not bool(req["dry_run"]),
+            transport=transport,
         )
     except MissingSessionToken as exc:
         storage.insert(
@@ -462,28 +488,26 @@ def _cmd_run(req: dict, *, gateway: Any, storage: Any) -> dict:
 
     # Step 6 — submit each surviving candidate via single-shot
     # createMarket. Phase 14 swaps this for the four-step chain.
+    # Issue #493: writes go directly to app.prophetmarket.ai via the
+    # transport (Authorization: Bearer <JWT>). The `prophet-ai` publisher
+    # hop is gone — its Authorization slot was reserved for SEREN_API_KEY
+    # billing auth and Prophet ignored the `Cookie` workaround entirely.
     created: list[MarketRecord] = []
     for cand in filtered:
-        body = {
-            "query": _CREATE_MARKET_MUTATION,
-            "variables": {
-                "source": {
-                    "polymarket_market_id": cand.polymarket_market_id,
-                    "question": cand.question,
-                    "category": cand.category,
-                    "resolution_date": cand.payload.get("source_resolution_date", ""),
-                }
-            },
+        variables = {
+            "source": {
+                "polymarket_market_id": cand.polymarket_market_id,
+                "question": cand.question,
+                "category": cand.category,
+                "resolution_date": cand.payload.get("source_resolution_date", ""),
+            }
         }
-        # Phase-14 live probe (2026-05-08): the seren `prophet-ai`
-        # publisher gateway requires the SerenAPIKey on `Authorization`
-        # for caller-auth/billing, so the user's Privy JWT rides on
-        # the `Cookie` header (`privy-token=<jwt>`) — the Prophet web
-        # app's native auth channel and a documented passthrough header.
-        headers = {"Cookie": f"privy-token={jwt}"} if jwt else {}
         try:
-            response = gateway.call(
-                "prophet-ai", "POST", "/api/graphql", body=body, headers=headers
+            response = transport.post_graphql(
+                jwt=jwt,
+                query=_CREATE_MARKET_MUTATION,
+                variables=variables,
+                operation_name="CreateMarket",
             )
         except Exception as exc:
             storage.insert(
@@ -760,8 +784,16 @@ def main() -> int:
         storage: Any = SerenDBStorage(gateway=gateway)
     else:
         storage = _InMemoryStorage()
+    # Issue #493: Prophet GraphQL calls now bypass the gateway and go
+    # directly to app.prophetmarket.ai. Construct the transport here so
+    # tests can override via the run_command kwarg.
+    from prophet.transport import ProphetDirectTransport
+
+    transport = ProphetDirectTransport()
     try:
-        result = run_command(request, gateway=gateway, storage=storage)
+        result = run_command(
+            request, gateway=gateway, storage=storage, transport=transport
+        )
     except Exception as exc:
         print(json.dumps({"status": "error", "error": str(exc), "command": request["command"]}))
         return 1

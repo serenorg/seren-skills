@@ -29,7 +29,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import ProphetGraphQLError, ProphetSchemaError
-from .client import GRAPHQL_PATH, PUBLISHER
 
 
 @dataclass
@@ -62,16 +61,21 @@ class ProphetOrder:
 
 
 class ProphetOrderClient:
-    """Order operations against prophet-ai.
+    """Order operations against Prophet.
 
-    Composition over inheritance: takes the same `gateway` seam used by
+    Composition over inheritance: takes the same `transport` seam used by
     `MinimalProphetClient` so tests can swap a stub. The two clients
-    share `PUBLISHER` and `GRAPHQL_PATH` constants so any future
-    publisher rename only needs one change.
+    share `prophet.transport.ProphetDirectTransport` as their HTTP path.
+
+    Issue #493: the previous `gateway.call("prophet-ai", ...)` hop was
+    removed because the Seren publisher proxy reserves the
+    `Authorization` header for SEREN_API_KEY billing auth — Prophet's
+    `Authorization: Bearer <JWT>` could not ride that slot through the
+    proxy. We now talk to `app.prophetmarket.ai` directly.
     """
 
-    def __init__(self, *, gateway: Any) -> None:
-        self.gateway = gateway
+    def __init__(self, *, transport: Any) -> None:
+        self.transport = transport
 
     # ------------------------------------------------------------------
     # Reads
@@ -358,7 +362,7 @@ class ProphetOrderClient:
         return bool(order.get("id"))
 
     # ------------------------------------------------------------------
-    # transport — uniform error handling. Mirrors MinimalProphetClient._post
+    # transport delegation. Mirrors MinimalProphetClient._post
 
     def _post(
         self,
@@ -367,31 +371,13 @@ class ProphetOrderClient:
         query: str,
         variables: dict[str, Any],
     ) -> dict[str, Any]:
-        headers: dict[str, str] = {}
-        if jwt:
-            headers["Authorization"] = f"Bearer {jwt}"
-
-        response = self.gateway.call(
-            PUBLISHER,
-            "POST",
-            GRAPHQL_PATH,
-            body={"query": query, "variables": variables},
-            headers=headers,
+        response = self.transport.post_graphql(
+            jwt=jwt, query=query, variables=variables
         )
-
         if not isinstance(response, dict):
             raise ProphetSchemaError(
-                f"prophet-ai returned non-dict payload: {type(response).__name__}"
+                f"prophet returned non-dict payload: {type(response).__name__}"
             )
-
-        errors = response.get("errors")
-        if errors:
-            first = errors[0] if isinstance(errors, list) and errors else {}
-            message = (
-                first.get("message") if isinstance(first, dict) else str(first)
-            ) or "unknown GraphQL error"
-            raise ProphetGraphQLError(f"prophet-ai GraphQL errors: {message}")
-
         return response
 
 

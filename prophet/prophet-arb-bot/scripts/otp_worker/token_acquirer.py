@@ -96,6 +96,7 @@ def acquire_token(
     bounty_id: str,
     browser_session: BrowserSession,
     gateway: Any,
+    transport: Any = None,
     cache: SessionCache | None = None,
     inbox_reader: InboxReader | None = None,
     sleep: Callable[[float], None] = time.sleep,
@@ -167,7 +168,12 @@ def acquire_token(
         raise PrivyAuthFailed("Privy did not set privy-refresh-token cookie")
 
     # Step 8: bind participant identity (P0 — plan §11.1 step 10, §3 ADR).
-    viewer_id, viewer_email = _query_viewer(gateway=gateway, jwt=jwt)
+    # Issue #493: direct-to-Prophet via ProphetDirectTransport.
+    if transport is None:
+        from prophet.transport import ProphetDirectTransport
+
+        transport = ProphetDirectTransport()
+    viewer_id, viewer_email = _query_viewer(transport=transport, jwt=jwt)
     if viewer_email.casefold() != email.casefold():
         raise IdentityMismatch(
             f"Prophet viewer.email {viewer_email!r} does not match "
@@ -183,7 +189,7 @@ def acquire_token(
     from prophet.affiliate import bind_agentaccess  # lazy import; avoids cycles
 
     try:
-        bind_agentaccess(gateway=gateway, jwt=jwt)
+        bind_agentaccess(transport=transport, jwt=jwt)
     except Exception as exc:
         # Don't fail the cold-start: if the bind genuinely failed
         # (auth/schema drift) the operator's reconciler will report
@@ -216,42 +222,25 @@ def acquire_token(
     )
 
 
-def _query_viewer(*, gateway: Any, jwt: str) -> tuple[str, str]:
-    """Call prophet-ai's `viewer { user { id email } }` and return (id, email).
+_VIEWER_QUERY = (
+    "query Viewer { viewer { user { id email } "
+    "walletBalance { availableCents totalCents "
+    "onChainUsdc safeAddress safeDeployed } } }"
+)
 
-    Fails closed with PrivyAuthFailed if Prophet rejects the JWT (most
-    commonly because the user has a Privy identity but no Prophet user
-    record bound yet). The valid recovery is for `_drive_onboarding_if_present`
-    upstream to drive Prophet's onboarding form via Playwright — Prophet's
-    `registerWithPrivy` mutation requires the full Privy cookie jar
-    (`privy-token` + `privy-session` + `privy-refresh-token`), which the
-    publisher proxy does not forward, so a server-side fallback cannot
-    create the user record.
+
+def _query_viewer(*, transport: Any, jwt: str) -> tuple[str, str]:
+    """Call Prophet's `viewer { user { id email } }` and return (id, email).
+
+    Issue #493: routes directly to `app.prophetmarket.ai` via
+    `ProphetDirectTransport` because the prophet-ai publisher hop is
+    structurally incompatible with Prophet's Authorization-Bearer auth.
+    Fails closed with PrivyAuthFailed on rejection — the agent re-runs
+    the modal stack to recover.
     """
     try:
-        result = gateway.call(
-            "prophet-ai",
-            "POST",
-            "/api/graphql",
-            body={
-                "query": (
-                    "query Viewer { viewer { user { id email } "
-                    "walletBalance { availableCents totalCents "
-                    "onChainUsdc safeAddress safeDeployed } } }"
-                ),
-                "variables": {},
-            },
-            # Phase-14 live probe (2026-05-08): Prophet's `Viewer` type
-            # has no top-level `id`/`email`; user identity lives at
-            # `viewer.user`. Wallet balance lives at `viewer.walletBalance`
-            # and gets folded into the participant_identity row so the
-            # deposit-recommendation step has the data it needs.
-            #
-            # Auth: gateway needs SerenAPIKey on `Authorization` for
-            # caller-auth/billing, so Privy JWT rides on the `Cookie`
-            # header (`privy-token=<jwt>`) — the Prophet web app's
-            # native auth channel and a documented passthrough header.
-            headers={"Cookie": f"privy-token={jwt}"},
+        result = transport.post_graphql(
+            jwt=jwt, query=_VIEWER_QUERY, variables={}
         )
     except Exception as exc:
         import os as _os, sys as _sys

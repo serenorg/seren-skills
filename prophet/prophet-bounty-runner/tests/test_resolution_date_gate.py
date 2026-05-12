@@ -27,7 +27,7 @@ from agent import run_command
 from conftest import load_fixture
 
 
-def _seed(stub_gateway, prophet_create_response) -> None:
+def _seed(stub_gateway, stub_transport, prophet_create_response) -> None:
     stub_gateway.register(
         "seren-bounty",
         "POST",
@@ -40,12 +40,8 @@ def _seed(stub_gateway, prophet_create_response) -> None:
         "/markets?end_date_max=2026-05-11T00:00:00Z&closed=false&active=true&limit=100",
         load_fixture("polymarket_settling.json"),
     )
-    stub_gateway.register(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
-        prophet_create_response,
-    )
+    # Issue #493: Prophet createMarket lives on the transport seam now.
+    stub_transport.register_default(prophet_create_response)
     stub_gateway.register(
         "seren-bounty",
         "POST",
@@ -62,14 +58,19 @@ def _otp(monkeypatch) -> None:
 
 
 def test_resolution_date_one_second_before_deadline_is_eligible(
-    base_run_request, stub_gateway, stub_storage, monkeypatch
+    base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
     response = deepcopy(load_fixture("prophet_create_market.json"))
     response["data"]["createMarket"]["resolutionDate"] = "2026-05-10T23:59:59Z"
     _otp(monkeypatch)
-    _seed(stub_gateway, response)
+    _seed(stub_gateway, stub_transport, response)
 
-    result = run_command(base_run_request, gateway=stub_gateway, storage=stub_storage)
+    result = run_command(
+        base_run_request,
+        gateway=stub_gateway,
+        storage=stub_storage,
+        transport=stub_transport,
+    )
 
     ineligible = [
         e for e in stub_storage.events
@@ -84,14 +85,19 @@ def test_resolution_date_one_second_before_deadline_is_eligible(
 
 
 def test_resolution_date_at_deadline_is_rejected(
-    base_run_request, stub_gateway, stub_storage, monkeypatch
+    base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
     response = deepcopy(load_fixture("prophet_create_market.json"))
     response["data"]["createMarket"]["resolutionDate"] = "2026-05-11T00:00:00Z"
     _otp(monkeypatch)
-    _seed(stub_gateway, response)
+    _seed(stub_gateway, stub_transport, response)
 
-    run_command(base_run_request, gateway=stub_gateway, storage=stub_storage)
+    run_command(
+        base_run_request,
+        gateway=stub_gateway,
+        storage=stub_storage,
+        transport=stub_transport,
+    )
 
     ineligible = [
         e for e in stub_storage.events

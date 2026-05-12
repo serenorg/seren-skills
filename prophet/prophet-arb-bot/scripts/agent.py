@@ -241,6 +241,7 @@ def _acquire_jwt(
     *,
     config: AgentConfig,
     gateway: HttpGateway,
+    transport: Any,
 ) -> tuple[str | None, str | None, str]:
     env_jwt = os.environ.get("PROPHET_SESSION_TOKEN", "").strip()
     if env_jwt:
@@ -266,6 +267,7 @@ def _acquire_jwt(
                 bounty_id=config.inputs.get("bounty_id") or "",
                 browser_session=session,
                 gateway=gateway,
+                transport=transport,
             )
         return fresh.jwt, fresh.prophet_viewer_id, fresh.source
     except (
@@ -284,8 +286,16 @@ def _acquire_jwt(
 
 
 def cmd_run(
-    *, config: AgentConfig, gateway: HttpGateway, yes_live: bool
+    *,
+    config: AgentConfig,
+    gateway: HttpGateway,
+    yes_live: bool,
+    transport: Any = None,
 ) -> CycleResult:
+    if transport is None:
+        from prophet.transport import ProphetDirectTransport
+
+        transport = ProphetDirectTransport()
     try:
         target = _resolve_target(config)
     except Exception as exc:
@@ -315,7 +325,9 @@ def cmd_run(
     )
     recorder.summary["polymarket_prices_fetched"] = len(polymarket_prices)
 
-    jwt, viewer_id, jwt_source = _acquire_jwt(config=config, gateway=gateway)
+    jwt, viewer_id, jwt_source = _acquire_jwt(
+        config=config, gateway=gateway, transport=transport
+    )
     if jwt is None:
         return CycleResult(
             status="blocked",
@@ -326,7 +338,7 @@ def cmd_run(
     if viewer_id:
         recorder.summary["prophet_viewer_id"] = viewer_id
 
-    order_client = ProphetOrderClient(gateway=gateway)
+    order_client = ProphetOrderClient(transport=transport)
 
     open_orders_by_pair: dict[tuple[str, str, str], ProphetOrder] = {}
     try:
@@ -456,7 +468,16 @@ def cmd_run(
 # Status
 
 
-def cmd_status(*, config: AgentConfig, gateway: HttpGateway) -> CycleResult:
+def cmd_status(
+    *,
+    config: AgentConfig,
+    gateway: HttpGateway,
+    transport: Any = None,
+) -> CycleResult:
+    if transport is None:
+        from prophet.transport import ProphetDirectTransport
+
+        transport = ProphetDirectTransport()
     try:
         target = _resolve_target(config)
     except Exception as exc:
@@ -471,12 +492,14 @@ def cmd_status(*, config: AgentConfig, gateway: HttpGateway) -> CycleResult:
         "recent_runs": list_recent_runs(target=target, limit=10),
     }
 
-    jwt, viewer_id, jwt_source = _acquire_jwt(config=config, gateway=gateway)
+    jwt, viewer_id, jwt_source = _acquire_jwt(
+        config=config, gateway=gateway, transport=transport
+    )
     payload["jwt_source"] = jwt_source
     if jwt is None:
         return CycleResult(status="ok", reason="status_db_only", payload=payload)
 
-    order_client = ProphetOrderClient(gateway=gateway)
+    order_client = ProphetOrderClient(transport=transport)
     try:
         live_orders = order_client.list_user_orders(jwt=jwt, status="OPEN")
         payload["open_orders_live"] = [
@@ -549,13 +572,22 @@ def main(argv: list[str] | None = None) -> int:
 
     config = AgentConfig.load(args.config)
     gateway = HttpGateway()
+    # Issue #493: Prophet GraphQL goes direct to app.prophetmarket.ai.
+    from prophet.transport import ProphetDirectTransport
+
+    transport = ProphetDirectTransport()
 
     if args.command == "setup":
         result = cmd_setup(config=config)
     elif args.command == "run":
-        result = cmd_run(config=config, gateway=gateway, yes_live=args.yes_live)
+        result = cmd_run(
+            config=config,
+            gateway=gateway,
+            yes_live=args.yes_live,
+            transport=transport,
+        )
     elif args.command == "status":
-        result = cmd_status(config=config, gateway=gateway)
+        result = cmd_status(config=config, gateway=gateway, transport=transport)
     else:
         parser.error(f"unknown command: {args.command}")
         return 2

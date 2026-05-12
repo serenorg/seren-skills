@@ -66,6 +66,80 @@ class StubGateway:
         return result
 
 
+class StubProphetTransport:
+    """In-memory stand-in for `prophet.transport.ProphetDirectTransport`.
+
+    Issue #493: tests previously asserted on
+    `stub_gateway.calls_to("prophet-ai", ...)` to verify that Prophet
+    was reached. Prophet calls no longer touch the gateway, so this
+    fixture replaces that seam.
+
+    Tests register canned responses keyed by GraphQL `operationName`.
+    Falls back to substring-matching the query body, then to the
+    registered default. Records every call so tests can assert that
+    Prophet was reached the expected number of times.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._by_operation: dict[str, Any] = {}
+        self._by_query_substring: list[tuple[str, Any]] = []
+        self._default_response: Any = None
+
+    def register(self, operation_name: str, response: Any) -> None:
+        """Register a canned response for a GraphQL operationName."""
+        self._by_operation[operation_name] = response
+
+    def register_by_query_substring(self, needle: str, response: Any) -> None:
+        """Register a canned response matched when the query body contains `needle`."""
+        self._by_query_substring.append((needle, response))
+
+    def register_default(self, response: Any) -> None:
+        self._default_response = response
+
+    def post_graphql(
+        self,
+        *,
+        jwt: str | None,
+        query: str,
+        variables: dict | None = None,
+        operation_name: str | None = None,
+    ) -> Any:
+        self.calls.append(
+            {
+                "jwt": jwt,
+                "query": query,
+                "variables": variables,
+                "operation_name": operation_name,
+            }
+        )
+        chosen: Any = None
+        if operation_name and operation_name in self._by_operation:
+            chosen = self._by_operation[operation_name]
+        else:
+            for needle, resp in self._by_query_substring:
+                if needle in query:
+                    chosen = resp
+                    break
+            if chosen is None:
+                # Default to operation_name-prefixed match by query content
+                # (queries usually start with `query <OperationName>` or
+                # `mutation <OperationName>`).
+                for op, resp in self._by_operation.items():
+                    if op in query:
+                        chosen = resp
+                        break
+        if chosen is None:
+            chosen = self._default_response
+        if chosen is None:
+            raise AssertionError(
+                f"StubProphetTransport: no canned response for operation_name={operation_name!r}"
+            )
+        if isinstance(chosen, BaseException):
+            raise chosen
+        return chosen
+
+
 class StubStorage:
     """In-memory stand-in for SerenDB persistence.
 
@@ -99,6 +173,11 @@ def stub_gateway() -> StubGateway:
 @pytest.fixture
 def stub_storage() -> StubStorage:
     return StubStorage()
+
+
+@pytest.fixture
+def stub_transport() -> StubProphetTransport:
+    return StubProphetTransport()
 
 
 @pytest.fixture
