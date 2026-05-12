@@ -271,6 +271,15 @@ class SerenDBStorage:
         cols = ", ".join(k for k, _ in items)
         vals = ", ".join(self._format_value(v) for _, v in items)
         sql = f"INSERT INTO {self.schema_name}.{table} ({cols}) VALUES ({vals})"
+        # Issue #496: per-table conflict handling. participant_identity is
+        # intentionally idempotent — every cron tick re-fires the bind for
+        # the same (bounty_id, seren_user_id). markets_created stays out of
+        # this dict on purpose: serendb_schema.sql lines 12-14 make a
+        # duplicate prophet_market_id a deliberate fail-closed signal, not
+        # a silent dedup.
+        conflict = _CONFLICT_CLAUSES.get(table)
+        if conflict:
+            sql = f"{sql} {conflict}"
         self._exec_query(sql)
 
     # ------------------------------------------------------------------
@@ -340,6 +349,16 @@ class SerenDBStorage:
             return str(v)
         s = str(v).replace("'", "''")
         return f"'{s}'"
+
+
+# Issue #496: per-table ON CONFLICT clauses for `_exec_insert`. Only
+# tables whose PK collision is genuinely idempotent appear here. Notably
+# absent: `markets_created` (PK collision is a fail-closed contract per
+# serendb_schema.sql lines 12-14) and `runs` (per-run UUID PK; handled
+# separately by `_upsert_runs`).
+_CONFLICT_CLAUSES: dict[str, str] = {
+    "participant_identity": "ON CONFLICT (bounty_id, seren_user_id) DO NOTHING",
+}
 
 
 _SCHEMA_COLUMNS: dict[str, set[str]] = {

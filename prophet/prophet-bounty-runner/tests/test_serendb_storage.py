@@ -275,6 +275,80 @@ def test_serendb_storage_bootstraps_schema_idempotently() -> None:
     )
 
 
+def test_participant_identity_insert_is_idempotent_but_markets_created_is_not(
+) -> None:
+    """Issue #496: re-binding the same operator to the same bounty must
+    not raise a PK collision. `participant_identity` has
+    PK(bounty_id, seren_user_id) and the binding is intended to be
+    idempotent — every cron tick re-fires this insert.
+
+    Scope guard: `markets_created` PK collisions are the canonical
+    'this market is already on the ledger' signal per the schema
+    comment, so duplicates there must continue to fail closed. A
+    blanket ON CONFLICT on `_exec_insert` would break that contract.
+
+    This single test pins both invariants:
+      - participant_identity INSERT carries
+        `ON CONFLICT (bounty_id, seren_user_id) DO NOTHING`
+      - markets_created INSERT carries NO `ON CONFLICT` clause
+    """
+    from serendb_storage import SerenDBStorage
+
+    fake = SerenDbFakeGateway()
+    storage = SerenDBStorage(gateway=fake, schema_name="prophet_bounty_runner_test")
+
+    storage.insert(
+        "participant_identity",
+        {
+            "bounty_id": "bounty_fixture_001",
+            "prophet_viewer_id": "viewer_1",
+            "prophet_email": "operator@example.com",
+            "captured_at": "2026-05-10T12:00:00Z",
+        },
+    )
+    storage.insert(
+        "markets_created",
+        {
+            "prophet_market_id": "m1",
+            "prophet_market_url": "/markets/m1",
+            "polymarket_source_url": "0xpoly1",
+            "resolves_at": "2026-05-10T12:00:00Z",
+            "prophet_viewer_id": "viewer_1",
+            "bounty_id": "bounty_fixture_001",
+        },
+    )
+
+    insert_sqls = [
+        (c.get("body") or {}).get("query", "")
+        for c in fake.query_calls()
+        if "insert into" in ((c.get("body") or {}).get("query", "").lower())
+    ]
+
+    pi_inserts = [s for s in insert_sqls if "participant_identity" in s.lower()]
+    mc_inserts = [s for s in insert_sqls if "markets_created" in s.lower()]
+    assert pi_inserts, "no participant_identity INSERT was emitted"
+    assert mc_inserts, "no markets_created INSERT was emitted"
+
+    for sql in pi_inserts:
+        assert "on conflict" in sql.lower(), (
+            "participant_identity INSERT is missing ON CONFLICT — re-binding the "
+            "same operator+bounty will raise a PK collision on every cron tick"
+        )
+        assert "(bounty_id, seren_user_id)" in sql.lower(), (
+            "participant_identity ON CONFLICT must target the composite PK"
+        )
+        assert "do nothing" in sql.lower(), (
+            "participant_identity ON CONFLICT must be DO NOTHING (idempotent bind)"
+        )
+
+    for sql in mc_inserts:
+        assert "on conflict" not in sql.lower(), (
+            "markets_created INSERT must NOT carry ON CONFLICT — the schema "
+            "comment makes duplicate prophet_market_id a fail-closed contract, "
+            "not a silent dedup"
+        )
+
+
 def test_serendb_storage_markets_created_reads_via_select() -> None:
     """`storage.markets_created` is read by `_load_prior_markets` and
     `_count_local_markets`. With SerenDB storage it must SELECT, so a
