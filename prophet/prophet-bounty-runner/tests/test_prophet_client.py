@@ -85,13 +85,22 @@ def test_raises_graphql_error_when_errors_field_populated() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 3: viewer happy path returns id + email
+# Test 3: viewer happy path returns id + email (issue #502 — nested shape)
+#
+# Prophet's live Viewer type does not expose `id` or `email` directly; they
+# live under `Viewer.user`. The fixture below mirrors the actual GraphQL
+# payload so the test guards against silent reversion to the broken
+# flat shape.
 
 
 def test_viewer_returns_id_and_email_on_success() -> None:
     transport = _StubTransport(
         response={
-            "data": {"viewer": {"id": "viewer_fixture_001", "email": "u@example.com"}}
+            "data": {
+                "viewer": {
+                    "user": {"id": "viewer_fixture_001", "email": "u@example.com"}
+                }
+            }
         }
     )
     client = MinimalProphetClient(transport=transport)
@@ -100,6 +109,40 @@ def test_viewer_returns_id_and_email_on_success() -> None:
 
     assert identity.id == "viewer_fixture_001"
     assert identity.email == "u@example.com"
+
+
+# ---------------------------------------------------------------------------
+# Test 3b (issue #502): canary — the query string must request the nested
+# `user { id email }` shape. The pre-fix code sent `viewer { id email }`,
+# which Prophet rejects with GRAPHQL_VALIDATION_FAILED on the live schema
+# because Viewer.id and Viewer.email do not exist. This test would have
+# caught the drift before it shipped.
+
+
+def test_viewer_query_uses_nested_user_shape() -> None:
+    transport = _StubTransport(
+        response={
+            "data": {
+                "viewer": {
+                    "user": {"id": "viewer_fixture_001", "email": "u@example.com"}
+                }
+            }
+        }
+    )
+    client = MinimalProphetClient(transport=transport)
+
+    client.viewer(jwt="eyJ.fresh.jwt")
+
+    assert len(transport.calls) == 1
+    query = transport.calls[0]["query"]
+    normalized = " ".join(query.split())
+    assert "viewer { user { id email } }" in normalized, (
+        f"viewer() must request the nested user shape; got: {normalized!r}"
+    )
+    assert "viewer { id email }" not in normalized, (
+        "viewer() must not use the legacy flat shape that Prophet "
+        "rejects with GRAPHQL_VALIDATION_FAILED"
+    )
 
 
 # ---------------------------------------------------------------------------
