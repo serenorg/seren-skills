@@ -10,6 +10,9 @@ on fail-closed paths and the load-bearing happy path:
   4. market() raises ProphetSchemaError on missing fields
                                                         (schema-drift guard)
 
+Issue #493: Prophet calls no longer go through the gateway; the client
+takes a `transport` with a `post_graphql` method. Tests stub it inline.
+
 Skipped per critical-only doctrine:
   - test_prophet_client_serializes_create_market_input  — input shape
     depends on schema_probe.py output, validated during Phase 14
@@ -30,20 +33,26 @@ from prophet import (  # noqa: E402
 from prophet.client import MinimalProphetClient  # noqa: E402
 
 
-class _StubGateway:
-    """Minimal gateway stub. Tests register a single canned response."""
+class _StubTransport:
+    """Minimal transport stub: tests register a single canned response
+    or a single canned exception."""
 
-    def __init__(self, response=None, raise_status: int | None = None) -> None:
+    def __init__(self, response=None, raise_exc: Exception | None = None) -> None:
         self.response = response
-        self.raise_status = raise_status
+        self.raise_exc = raise_exc
         self.calls: list[dict] = []
 
-    def call(self, publisher, method, path, body=None, headers=None):
+    def post_graphql(self, *, jwt, query, variables=None, operation_name=None):
         self.calls.append(
-            {"publisher": publisher, "method": method, "path": path, "body": body, "headers": headers}
+            {
+                "jwt": jwt,
+                "query": query,
+                "variables": variables,
+                "operation_name": operation_name,
+            }
         )
-        if self.raise_status == 401:
-            return {"status": 401, "error": "unauthorized"}
+        if self.raise_exc:
+            raise self.raise_exc
         return self.response
 
 
@@ -52,8 +61,8 @@ class _StubGateway:
 
 
 def test_viewer_raises_unauthorized_on_401() -> None:
-    gateway = _StubGateway(raise_status=401)
-    client = MinimalProphetClient(gateway=gateway)
+    transport = _StubTransport(raise_exc=ProphetUnauthorized("401"))
+    client = MinimalProphetClient(transport=transport)
 
     with pytest.raises(ProphetUnauthorized):
         client.viewer(jwt="eyJ.expired.jwt")
@@ -64,13 +73,12 @@ def test_viewer_raises_unauthorized_on_401() -> None:
 
 
 def test_raises_graphql_error_when_errors_field_populated() -> None:
-    gateway = _StubGateway(
-        response={
-            "data": None,
-            "errors": [{"message": "Field 'viewer' not found in schema"}],
-        }
+    transport = _StubTransport(
+        raise_exc=ProphetGraphQLError(
+            "prophet GraphQL errors: Field 'viewer' not found in schema"
+        )
     )
-    client = MinimalProphetClient(gateway=gateway)
+    client = MinimalProphetClient(transport=transport)
 
     with pytest.raises(ProphetGraphQLError, match="Field 'viewer'"):
         client.viewer(jwt="eyJ.fake.jwt")
@@ -81,12 +89,12 @@ def test_raises_graphql_error_when_errors_field_populated() -> None:
 
 
 def test_viewer_returns_id_and_email_on_success() -> None:
-    gateway = _StubGateway(
+    transport = _StubTransport(
         response={
             "data": {"viewer": {"id": "viewer_fixture_001", "email": "u@example.com"}}
         }
     )
-    client = MinimalProphetClient(gateway=gateway)
+    client = MinimalProphetClient(transport=transport)
 
     identity = client.viewer(jwt="eyJ.fresh.jwt")
 
@@ -101,7 +109,7 @@ def test_viewer_returns_id_and_email_on_success() -> None:
 def test_market_raises_schema_error_when_id_missing() -> None:
     # Successful 200 but Prophet returned a record without `id` —
     # could mean the market was deleted or the schema rotated field names.
-    gateway = _StubGateway(
+    transport = _StubTransport(
         response={
             "data": {
                 "market": {
@@ -112,7 +120,7 @@ def test_market_raises_schema_error_when_id_missing() -> None:
             }
         }
     )
-    client = MinimalProphetClient(gateway=gateway)
+    client = MinimalProphetClient(transport=transport)
 
     with pytest.raises(ProphetSchemaError):
         client.market(jwt="eyJ.fake.jwt", market_id="prophet_market_fixture_001")

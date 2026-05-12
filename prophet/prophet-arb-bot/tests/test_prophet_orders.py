@@ -25,8 +25,8 @@ from prophet import ProphetGraphQLError, ProphetSchemaError
 from prophet.orders import ProphetOrderClient, _parse_outcomes
 
 
-def test_place_order_validates_inputs(stub_gateway) -> None:
-    client = ProphetOrderClient(gateway=stub_gateway)
+def test_place_order_validates_inputs(stub_transport) -> None:
+    client = ProphetOrderClient(transport=stub_transport)
     with pytest.raises(ValueError, match="limit_price"):
         client.place_order(
             jwt="x",
@@ -63,18 +63,15 @@ def test_place_order_validates_inputs(stub_gateway) -> None:
             shares=0,
             limit_price=0.5,
         )
-    # Validation must run before any gateway call.
-    assert stub_gateway.calls == []
+    # Validation must run before any transport call.
+    assert stub_transport.calls == []
 
 
-def test_place_order_fails_closed_when_no_id(stub_gateway) -> None:
-    stub_gateway.register(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
+def test_place_order_fails_closed_when_no_id(stub_transport) -> None:
+    stub_transport.register_default(
         {"data": {"placeOrder": {"order": None}}},
     )
-    client = ProphetOrderClient(gateway=stub_gateway)
+    client = ProphetOrderClient(transport=stub_transport)
     with pytest.raises(ProphetSchemaError, match="placeOrder did not return an order.id"):
         client.place_order(
             jwt="x",
@@ -86,14 +83,15 @@ def test_place_order_fails_closed_when_no_id(stub_gateway) -> None:
         )
 
 
-def test_place_order_unwraps_graphql_errors(stub_gateway) -> None:
-    stub_gateway.register(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
-        {"errors": [{"message": "PlaceOrderInput.type required"}]},
+def test_place_order_unwraps_graphql_errors(stub_transport) -> None:
+    # Issue #493: top-level GraphQL `errors[]` is now surfaced by
+    # ProphetDirectTransport.post_graphql as ProphetGraphQLError; the
+    # client itself never sees the raw payload. Register the exception
+    # so the stub mimics the production transport's behavior.
+    stub_transport.register_default(
+        ProphetGraphQLError("PlaceOrderInput.type required"),
     )
-    client = ProphetOrderClient(gateway=stub_gateway)
+    client = ProphetOrderClient(transport=stub_transport)
     with pytest.raises(
         ProphetGraphQLError, match="PlaceOrderInput.type required"
     ):
@@ -107,7 +105,7 @@ def test_place_order_unwraps_graphql_errors(stub_gateway) -> None:
         )
 
 
-def test_place_order_sends_live_schema_input_shape(stub_gateway) -> None:
+def test_place_order_sends_live_schema_input_shape(stub_transport) -> None:
     """Pin the GraphQL input shape to the live Prophet schema (issue #477).
 
     PlaceOrderInput requires: marketId, outcome (YES|NO), type (LIMIT|MARKET),
@@ -116,10 +114,7 @@ def test_place_order_sends_live_schema_input_shape(stub_gateway) -> None:
     `limitPrice`/`shares` which Prophet rejects, and omitted the required
     `type` field entirely.
     """
-    stub_gateway.register(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
+    stub_transport.register_default(
         {
             "data": {
                 "placeOrder": {
@@ -138,7 +133,7 @@ def test_place_order_sends_live_schema_input_shape(stub_gateway) -> None:
             }
         },
     )
-    client = ProphetOrderClient(gateway=stub_gateway)
+    client = ProphetOrderClient(transport=stub_transport)
     order = client.place_order(
         jwt="x",
         market_id="m1",
@@ -148,7 +143,8 @@ def test_place_order_sends_live_schema_input_shape(stub_gateway) -> None:
         limit_price=0.5,
     )
 
-    body = stub_gateway.calls_to("prophet-ai", "POST", "/api/graphql")[0]["body"]
+    call = stub_transport.calls[0]
+    body = {"query": call["query"], "variables": call["variables"]}
     sent_input = body["variables"]["input"]
     # Required fields exactly as Prophet's PlaceOrderInput expects.
     assert sent_input["marketId"] == "m1"
@@ -172,17 +168,14 @@ def test_place_order_sends_live_schema_input_shape(stub_gateway) -> None:
     assert order.limit_price == 0.5  # priceBps 5000 -> 0.5
 
 
-def test_cancel_order_sends_input_object_and_inspects_errors(stub_gateway) -> None:
+def test_cancel_order_sends_input_object_and_inspects_errors(stub_transport) -> None:
     """Pin cancelOrder shape (issue #477).
 
     Live schema is `cancelOrder(input: CancelOrderInput!)` returning
     `CancelOrderPayload { order, errors }`. The previous guess used
     `cancelOrder(orderId: ID!)` and asked for a non-existent `ok` field.
     """
-    stub_gateway.register(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
+    stub_transport.register_default(
         {
             "data": {
                 "cancelOrder": {
@@ -192,10 +185,11 @@ def test_cancel_order_sends_input_object_and_inspects_errors(stub_gateway) -> No
             }
         },
     )
-    client = ProphetOrderClient(gateway=stub_gateway)
+    client = ProphetOrderClient(transport=stub_transport)
     ok = client.cancel_order(jwt="x", order_id="ord_1")
 
-    body = stub_gateway.calls_to("prophet-ai", "POST", "/api/graphql")[0]["body"]
+    call = stub_transport.calls[0]
+    body = {"query": call["query"], "variables": call["variables"]}
     assert body["variables"] == {"input": {"orderId": "ord_1"}}
     # Selection set must not request the non-existent `ok` field.
     assert " ok" not in body["query"]
@@ -203,12 +197,9 @@ def test_cancel_order_sends_input_object_and_inspects_errors(stub_gateway) -> No
     assert ok is True
 
 
-def test_cancel_order_returns_false_when_payload_has_errors(stub_gateway) -> None:
+def test_cancel_order_returns_false_when_payload_has_errors(stub_transport) -> None:
     """A non-empty errors[] on CancelOrderPayload means cancel did not happen."""
-    stub_gateway.register(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
+    stub_transport.register_default(
         {
             "data": {
                 "cancelOrder": {
@@ -218,11 +209,11 @@ def test_cancel_order_returns_false_when_payload_has_errors(stub_gateway) -> Non
             }
         },
     )
-    client = ProphetOrderClient(gateway=stub_gateway)
+    client = ProphetOrderClient(transport=stub_transport)
     assert client.cancel_order(jwt="x", order_id="ord_1") is False
 
 
-def test_list_user_orders_uses_viewer_orders_relay_shape(stub_gateway) -> None:
+def test_list_user_orders_uses_viewer_orders_relay_shape(stub_transport) -> None:
     """Pin the live `viewer.orders` Relay shape (issue #478).
 
     The previous query hit `Query.userOrders` which does not exist in
@@ -230,10 +221,7 @@ def test_list_user_orders_uses_viewer_orders_relay_shape(stub_gateway) -> None:
     The real path is `viewer.orders { edges { node { ... } } }` returning
     Order records with `market { id }`, `priceBps`, `quantityShares`.
     """
-    stub_gateway.register(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
+    stub_transport.register_default(
         {
             "data": {
                 "viewer": {
@@ -273,10 +261,11 @@ def test_list_user_orders_uses_viewer_orders_relay_shape(stub_gateway) -> None:
             }
         },
     )
-    client = ProphetOrderClient(gateway=stub_gateway)
+    client = ProphetOrderClient(transport=stub_transport)
     orders = client.list_user_orders(jwt="x", status="OPEN")
 
-    body = stub_gateway.calls_to("prophet-ai", "POST", "/api/graphql")[0]["body"]
+    call = stub_transport.calls[0]
+    body = {"query": call["query"], "variables": call["variables"]}
     # Walk viewer.orders.edges[].node, not the dead userOrders path.
     assert "viewer" in body["query"]
     assert "edges" in body["query"]
@@ -303,17 +292,14 @@ def test_list_user_orders_uses_viewer_orders_relay_shape(stub_gateway) -> None:
     assert orders[1].filled_shares == 1.0
 
 
-def test_list_user_orders_market_filter_is_client_side(stub_gateway) -> None:
+def test_list_user_orders_market_filter_is_client_side(stub_transport) -> None:
     """`market_id` is a client-side filter today — OrdersInput shape unknown.
 
     The agent dedupes by (market_id, outcome, side); the client must drop
     nodes whose market.id does not match the requested filter rather than
     relying on a server-side argument that we have not yet introspected.
     """
-    stub_gateway.register(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
+    stub_transport.register_default(
         {
             "data": {
                 "viewer": {
@@ -349,7 +335,7 @@ def test_list_user_orders_market_filter_is_client_side(stub_gateway) -> None:
             }
         },
     )
-    client = ProphetOrderClient(gateway=stub_gateway)
+    client = ProphetOrderClient(transport=stub_transport)
     orders = client.list_user_orders(jwt="x", market_id="mkt_b", status="OPEN")
     assert [o.order_id for o in orders] == ["ord_b"]
 

@@ -1,20 +1,22 @@
-"""One-shot live introspection of the prophet-ai GraphQL schema.
+"""One-shot live introspection of the Prophet GraphQL schema.
 
 Plan §12.3: do not skip. Run this once during Phase 14 acceptance with
 a fresh Privy JWT and write the result to
 `tests/fixtures/prophet_schema.json`. The client and tests assert
 against the captured fixture, not against guesses in the plan document.
 
+Issue #493: this probe now talks directly to `app.prophetmarket.ai`
+via `ProphetDirectTransport` — same path used by the production client.
+The earlier `publishers/prophet-ai/api/graphql` URL is gone for the
+reasons documented on #493 (publisher proxy reserves the
+`Authorization` slot for SEREN_API_KEY billing auth, so the Privy JWT
+cannot ride that slot through the proxy).
+
 Usage:
 
-    export SEREN_API_KEY=...
     export PROPHET_SESSION_TOKEN='eyJ...'   # fresh Privy JWT
     python3 scripts/prophet/schema_probe.py \\
         --output tests/fixtures/prophet_schema.json
-
-The probe only needs `Query.viewer`, `Query.market`, `Query.markets`,
-and the four create-chain mutation types — full schema introspection
-returns more than we need but is harmless to capture.
 """
 
 from __future__ import annotations
@@ -23,9 +25,12 @@ import argparse
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
+
+# Same scripts/ dir houses prophet/ — keep imports relative.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from prophet.transport import ProphetDirectTransport  # noqa: E402
 
 INTROSPECTION_QUERY = """
 query IntrospectProphet {
@@ -56,38 +61,23 @@ query IntrospectProphet {
 }
 """
 
-GATEWAY_URL = "https://api.serendb.com/publishers/prophet-ai/api/graphql"
 
+def fetch_schema(*, privy_jwt: str | None) -> dict:
+    """Fire the introspection query directly at Prophet.
 
-def fetch_schema(*, seren_api_key: str, privy_jwt: str | None) -> dict:
-    """Fire the introspection query through the gateway.
-
-    The gateway forwards SEREN_API_KEY for billing/auth and the
-    Authorization Bearer header through to Prophet for the JWT.
-    Introspection is a public read so the JWT is optional, but we pass
-    it when available so any auth-gated fields show up too.
+    Introspection is public so the JWT is optional, but we pass it when
+    available so any auth-gated fields show up too.
     """
-    headers = {
-        "Content-Type": "application/json",
-        "X-Seren-Api-Key": seren_api_key,
-    }
-    if privy_jwt:
-        headers["Authorization"] = f"Bearer {privy_jwt}"
-
-    body = json.dumps(
-        {"query": INTROSPECTION_QUERY, "variables": {}}
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        GATEWAY_URL, data=body, method="POST", headers=headers
-    )
+    transport = ProphetDirectTransport()
     try:
-        with urllib.request.urlopen(request, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        message = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(
-            f"prophet-ai introspection failed: HTTP {exc.code}\n{message}"
-        ) from exc
+        return transport.post_graphql(
+            jwt=privy_jwt,
+            query=INTROSPECTION_QUERY,
+            variables={},
+            operation_name="IntrospectProphet",
+        )
+    except Exception as exc:
+        raise SystemExit(f"prophet introspection failed: {exc}") from exc
 
 
 def main() -> int:
@@ -99,11 +89,6 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    seren_api_key = os.environ.get("SEREN_API_KEY")
-    if not seren_api_key:
-        print("error: SEREN_API_KEY environment variable is required", file=sys.stderr)
-        return 1
-
     privy_jwt = os.environ.get("PROPHET_SESSION_TOKEN")
     if not privy_jwt:
         print(
@@ -111,7 +96,7 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    schema = fetch_schema(seren_api_key=seren_api_key, privy_jwt=privy_jwt)
+    schema = fetch_schema(privy_jwt=privy_jwt)
     if "errors" in schema and schema["errors"]:
         print(
             f"error: introspection returned GraphQL errors:\n{json.dumps(schema['errors'], indent=2)}",

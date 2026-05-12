@@ -28,7 +28,7 @@ This validation gate prevents the cron and 12h local-pull poller from accruing c
 
 Mode A operator-arb. For each operator-supplied (prophet_market_id, polymarket_condition_id) pair the agent:
 
-1. Fetches Prophet's current YES/NO odds via the `prophet-ai` GraphQL publisher.
+1. Fetches Prophet's current YES/NO odds directly from `https://app.prophetmarket.ai/api/graphql` (#493: the previous `prophet-ai` Seren publisher hop is gone — see `scripts/prophet/transport.py`).
 2. Fetches Polymarket's current YES/NO mid-price via the `polymarket-data` publisher.
 3. Scores the spread `prophet_yes − polymarket_yes`. If the absolute spread exceeds the configured `min_spread` (default 3 ¢) and stays under `max_spread` (default 30 ¢), the agent emits a quoted limit order on Prophet that fades the drift.
 4. Optionally enriches each pair with `seren-polymarket-intelligence` correlation/volatility data; high polymarket volatility downgrades the opportunity to watchlist-only.
@@ -81,7 +81,7 @@ Before any live `run --yes-live`:
 1. Verify `SEREN_API_KEY` is loaded.
 2. Verify a fresh JWT is available — either via `PROPHET_SESSION_TOKEN` env or the bounty-runner's session cache.
 3. Verify `inputs.manual_pairs` has at least one entry (run `--command setup` first if not).
-4. Verify the live `prophet-ai` GraphQL publisher is reachable.
+4. Verify `https://app.prophetmarket.ai/api/graphql` is reachable (the prophet-ai publisher hop is gone — see #493).
 5. Verify the live `polymarket-data` publisher is reachable.
 6. If any check fails, fail closed with a structured `blocked` envelope and let the cron retry on the next tick.
 

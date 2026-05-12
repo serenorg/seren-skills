@@ -186,13 +186,17 @@ The agent may also adapt on the fly when selectors drift.
    surrounding quotes if present. The JWT must start with `eyJ`
    and contain two `.` separators.
 
-8. **Verify the JWT.** Call the `prophet-ai` publisher with
-   `POST /api/graphql`, body
-   `{"query":"query { viewer { user { id email } } }"}` and
-   header `Cookie: privy-token=<jwt>`. The response must contain
-   a non-null `viewer.user.id`. If null, return to step 6 (the
-   modal stack may not have completed) or step 3 (the JWT may be
-   wrong account).
+8. **Verify the JWT.** POST directly to
+   `https://app.prophetmarket.ai/api/graphql` with
+   `Authorization: Bearer <jwt>` and body
+   `{"query":"query { viewer { user { id email } } }"}`. The
+   response must contain a non-null `viewer.user.id`. If null,
+   return to step 6 (the modal stack may not have completed) or
+   step 3 (the JWT may be wrong account). Issue #493: the previous
+   `prophet-ai` Seren publisher hop was removed because the
+   gateway reserves `Authorization` for SEREN_API_KEY billing
+   auth and Prophet ignored the `Cookie: privy-token=*`
+   workaround entirely.
 
 9. **Export and shell out.**
    `PROPHET_SESSION_TOKEN=<jwt> python3 scripts/agent.py
@@ -366,15 +370,15 @@ python3 scripts/run_local_pull_runner.py --config config.json
 
 **JWT captured but `status=blocked, reason=blocked_otp`.**
 
-- The viewer-bind step (`viewer { user { id email } }`)
-  rejected the JWT. Most common cause: the modal stack did not
-  complete and the user has no Prophet user record yet. Re-run
-  step 6 of the runbook (Got it! → referral code → skip
-  deposit), then re-export `PROPHET_SESSION_TOKEN`. New-user
-  creation only works through the browser-driven modal stack;
-  the publisher proxy cannot create the record because Prophet's
-  `registerWithPrivy` mutation requires the full Privy cookie
-  jar that only the browser holds.
+- The viewer-bind step (`viewer { user { id email } }` against
+  `https://app.prophetmarket.ai/api/graphql`) rejected the JWT.
+  Most common cause: the modal stack did not complete and the
+  user has no Prophet user record yet. Re-run step 6 of the
+  runbook (Got it! → referral code → skip deposit), then
+  re-export `PROPHET_SESSION_TOKEN`. New-user creation only
+  works through the browser-driven modal stack because
+  Prophet's `registerWithPrivy` mutation requires the full
+  Privy cookie jar that only the browser holds.
 
 **Cron paused with no recent ticks.**
 

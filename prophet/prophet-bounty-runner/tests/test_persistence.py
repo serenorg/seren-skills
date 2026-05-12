@@ -27,7 +27,7 @@ from agent import run_command  # noqa: E402
 from conftest import load_fixture  # type: ignore[import-not-found]
 
 
-def _seed_happy_path(stub_gateway) -> None:
+def _seed_happy_path(stub_gateway, stub_transport=None) -> None:
     stub_gateway.register(
         "seren-bounty",
         "POST",
@@ -40,12 +40,9 @@ def _seed_happy_path(stub_gateway) -> None:
         "/markets?end_date_max=2026-05-11T00:00:00Z&closed=false&active=true&limit=100",
         load_fixture("polymarket_settling.json"),
     )
-    stub_gateway.register(
-        "prophet-ai",
-        "POST",
-        "/api/graphql",
-        load_fixture("prophet_create_market.json"),
-    )
+    # Issue #493: Prophet createMarket is now on the transport seam, not the gateway.
+    if stub_transport is not None:
+        stub_transport.register_default(load_fixture("prophet_create_market.json"))
     stub_gateway.register(
         "seren-bounty",
         "POST",
@@ -55,41 +52,48 @@ def _seed_happy_path(stub_gateway) -> None:
 
 
 def test_persist_run_writes_exactly_one_runs_row_per_invocation(
-    base_run_request, stub_gateway, stub_storage, monkeypatch
+    base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
     monkeypatch.setattr(
         "agent.acquire_prophet_token_via_otp",
         lambda *_args, **_kw: load_fixture("prophet_otp_session.json"),
     )
-    _seed_happy_path(stub_gateway)
+    _seed_happy_path(stub_gateway, stub_transport=stub_transport)
 
-    run_command(base_run_request, gateway=stub_gateway, storage=stub_storage)
+    run_command(
+        base_run_request,
+        gateway=stub_gateway,
+        storage=stub_storage,
+        transport=stub_transport,
+    )
 
     assert len(stub_storage.runs) == 1
 
 
 def test_persist_writes_one_markets_created_row_per_executed_create(
-    base_run_request, stub_gateway, stub_storage, monkeypatch
+    base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
     monkeypatch.setattr(
         "agent.acquire_prophet_token_via_otp",
         lambda *_args, **_kw: load_fixture("prophet_otp_session.json"),
     )
-    _seed_happy_path(stub_gateway)
+    _seed_happy_path(stub_gateway, stub_transport=stub_transport)
 
-    result = run_command(base_run_request, gateway=stub_gateway, storage=stub_storage)
-
-    create_market_calls = stub_gateway.calls_to(
-        "prophet-ai", "POST", "/api/graphql"
+    result = run_command(
+        base_run_request,
+        gateway=stub_gateway,
+        storage=stub_storage,
+        transport=stub_transport,
     )
-    assert len(stub_storage.markets_created) == len(create_market_calls)
+
+    assert len(stub_storage.markets_created) == len(stub_transport.calls)
     assert len(stub_storage.markets_created) == len(
         result["prophet_markets_created"]
     )
 
 
 def test_blocked_otp_run_persists_with_canonical_enum_value(
-    base_run_request, stub_gateway, stub_storage, monkeypatch
+    base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
     def _raise_otp(*_args, **_kw):
         raise RuntimeError("otp_email_not_received_within_90s")
@@ -102,7 +106,12 @@ def test_blocked_otp_run_persists_with_canonical_enum_value(
         load_fixture("bounty_join.json"),
     )
 
-    run_command(base_run_request, gateway=stub_gateway, storage=stub_storage)
+    run_command(
+        base_run_request,
+        gateway=stub_gateway,
+        storage=stub_storage,
+        transport=stub_transport,
+    )
 
     statuses = [r.get("status") for r in stub_storage.runs]
     assert statuses == ["blocked_otp"]
