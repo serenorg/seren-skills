@@ -126,6 +126,15 @@ python3 scripts/setup_cron.py delete --job-id <job_id>
 
 Transient failures (Prophet GraphQL down, polymarket-data 5xx, OTP not delivered) do **not** auto-pause; the cron keeps firing and seren-cron's execution_results table records the consecutive blocks for later inspection.
 
+## CLOB Exit Rules
+
+- `scripts/prophet/orders.py` via `placeOrder` is the canonical live execution path on Prophet.
+- For immediate sells, fetch the live Prophet order book for the market, use the market's current `tick_size`, and submit a marketable limit priced at the market minimum tick from the best bid. Do not hardcode `$0.001`; use the current `tick_size`.
+- Never place a passive sell above the best bid when the operator asked for an immediate exit.
+- Estimate recovery by sweeping visible bid levels (`price × size`) across the full displayed depth, not just the best bid.
+- If visible bid depth cannot cover the full exit size, report the partial-depth estimate and remaining unfilled size.
+- All Prophet orders are GTC (Good-Til-Cancelled) by default; immediate exits should price marketably at min-tick to minimize unfilled risk.
+
 ## Persistence
 
 The skill writes to SerenDB project=`prophet`, database=`prophet` (shared with the bounty-runner). On `--command setup` the agent resolves the project/database via the `seren-db` publisher's `/projects` + `/databases` endpoints, fetches a Postgres connection URI from `/projects/{id}/connection_uri`, and applies `serendb_schema.sql` over a `psycopg2` connection. Every cycle then writes opportunities and orders to that database.

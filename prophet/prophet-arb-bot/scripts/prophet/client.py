@@ -42,7 +42,8 @@ from . import (
 
 # Bounty deadline that markets must resolve before to be eligible.
 # Plan §3 ADR + §16.1 post-create gate.
-BOUNTY_RESOLUTION_DEADLINE_ISO = "2026-05-11T00:00:00Z"
+# Bumped to match bounty-runner deadline extension (#498 / #499).
+BOUNTY_RESOLUTION_DEADLINE_ISO = "2026-05-26T00:00:00Z"
 
 
 @dataclass
