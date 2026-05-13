@@ -56,6 +56,30 @@ class ViewerIdentity:
 
 
 @dataclass
+class ViewerCashBalance:
+    """Prophet protocol cash — the balance debited at bet-form confirm.
+
+    Issue #524: `viewer.cashBalance` is the protocol-tracked balance,
+    NOT on-chain wallet USDC. Prophet's `/wallet` UI shows this value;
+    the bounty-runner's Phase-15 UI submission flow debits
+    `DEFAULT_INITIAL_BET_USDC` from it at the bet-form confirm step.
+
+    Sibling skills already query this field:
+      - prophet-adversarial-auditor validates the Privy JWT against the
+        live `ViewerWalletBalance` operation on first-run setup.
+      - prophet-arb-bot's `placeOrder` mutation returns the same shape
+        on response (`cashBalance { availableCents totalCents }`).
+    """
+
+    available_cents: int
+    total_cents: int
+
+    @property
+    def available_usdc(self) -> float:
+        return self.available_cents / 100.0
+
+
+@dataclass
 class ProphetMarketRef:
     """Subset of fields the post-create gate inspects.
 
@@ -118,6 +142,38 @@ class MinimalProphetClient:
                 f"viewer query returned incomplete payload: id={viewer_id!r} email={viewer_email!r}"
             )
         return ViewerIdentity(id=viewer_id, email=viewer_email)
+
+    def cash_balance(self, *, jwt: str) -> ViewerCashBalance:
+        """`Query: viewer.cashBalance { availableCents totalCents }`.
+
+        Issue #524: the bounty-runner needs this preflight before
+        emitting `pending_ui_submission` candidates, because each
+        candidate's bet-form confirm step debits
+        `DEFAULT_INITIAL_BET_USDC` from this balance. Without the
+        preflight, every cron tick on an unfunded wallet wastes the
+        90-180s the agent spends per candidate on Validate + odds
+        calculation before discovering the cash shortfall.
+
+        The operation name `ViewerWalletBalance` is shared with
+        prophet-adversarial-auditor's first-run setup so cross-skill
+        schema fixtures stay aligned.
+        """
+        payload = self._post(
+            jwt=jwt,
+            query=(
+                "query ViewerWalletBalance {\n"
+                "  viewer { cashBalance { availableCents totalCents } }\n"
+                "}"
+            ),
+            variables={},
+            operation_name="ViewerWalletBalance",
+        )
+        viewer = ((payload or {}).get("data") or {}).get("viewer") or {}
+        cash = viewer.get("cashBalance") or {}
+        return ViewerCashBalance(
+            available_cents=int(cash.get("availableCents") or 0),
+            total_cents=int(cash.get("totalCents") or 0),
+        )
 
     # ------------------------------------------------------------------
     # Public reads — no JWT required, but we still pass it when present

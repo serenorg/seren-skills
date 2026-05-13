@@ -60,6 +60,7 @@ from persistence import (
     list_recent_runs,
     upsert_arb_pair,
 )
+from funds_preflight import evaluate_funds_preflight
 from polymarket.prices import fetch_market_prices
 from prophet import (
     ProphetClientError,
@@ -67,6 +68,7 @@ from prophet import (
     ProphetSchemaError,
     ProphetUnauthorized,
 )
+from prophet.client import MinimalProphetClient
 from prophet.orders import ProphetOrder, ProphetOrderClient
 from seren_cron_client import HttpGateway
 
@@ -416,8 +418,51 @@ def cmd_run(
             continue
         actionable.append(opp)
 
+    # Issue #524 — funds preflight. Skip the cheap-but-noisy
+    # `placeOrder` loop entirely if protocol cash can't fund the
+    # planned collateral. Only run when live execution is actually
+    # gated on (live_mode + yes_live); dry-run cycles short-circuit
+    # below in the placement loop without spending cash.
+    planned_orders = actionable[: config.max_orders_per_run]
+    if (config.live_mode and yes_live) and planned_orders:
+        balance_client = MinimalProphetClient(transport=transport)
+        try:
+            cash = balance_client.cash_balance(jwt=jwt)
+        except ProphetUnauthorized:
+            return CycleResult(
+                status="blocked",
+                reason="prophet_unauthorized",
+                payload=recorder.finish("blocked", "prophet_unauthorized"),
+            )
+        except (ProphetSchemaError, ProphetGraphQLError) as exc:
+            recorder.record_blocker(
+                f"cash_balance_failed:{type(exc).__name__}:{str(exc)[:120]}"
+            )
+            return CycleResult(
+                status="blocked",
+                reason="funds_preflight_unavailable",
+                payload=recorder.finish("blocked", "funds_preflight_unavailable"),
+            )
+
+        preflight = evaluate_funds_preflight(
+            opportunities=planned_orders,
+            available_usdc=cash.available_usdc,
+        )
+        if not preflight.ok:
+            recorder.record_blocker(
+                f"funds_insufficient_by_{preflight.deficit_usdc}_usdc"
+            )
+            payload = recorder.finish("blocked", "funds_insufficient")
+            payload["action"] = "deposit_required"
+            payload["deposit"] = preflight.to_deposit_envelope()
+            return CycleResult(
+                status="blocked",
+                reason="funds_insufficient",
+                payload=payload,
+            )
+
     submitted = 0
-    for opp in actionable[: config.max_orders_per_run]:
+    for opp in planned_orders:
         if not (config.live_mode and yes_live):
             recorder.record_blocker("dry_run_mode")
             continue

@@ -78,6 +78,14 @@ def test_run_emits_pending_ui_submission_after_dedup(
         "MarketsForDedup",
         {"data": {"markets": {"edges": []}}},
     )
+    # #524 funds preflight runs between dedup and the pending-emit
+    # loop. Seed a comfortably-funded balance so this Phase-15 test
+    # stays focused on the dedup -> pending handoff and doesn't
+    # double as a funds-preflight test.
+    stub_transport.register(
+        "ViewerWalletBalance",
+        {"data": {"viewer": {"cashBalance": {"availableCents": 10000, "totalCents": 10000}}}},
+    )
 
     result = run_command(
         base_run_request,

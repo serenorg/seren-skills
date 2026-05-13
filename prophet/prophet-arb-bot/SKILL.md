@@ -103,7 +103,78 @@ Before any live `run --yes-live`:
 3. Verify `inputs.manual_pairs` has at least one entry (run `--command setup` first if not).
 4. Verify `https://app.prophetmarket.ai/api/graphql` is reachable (the prophet-ai publisher hop is gone — see #493).
 5. Verify the live `polymarket-data` publisher is reachable.
-6. If any check fails, fail closed with a structured `blocked` envelope and let the cron retry on the next tick.
+6. **Funds preflight (#524):** after scoring, query `viewer.cashBalance.availableCents` once. If it cannot cover `sum(opp.size_usdc for opp in actionable[:max_orders_per_run])`, return a `status=blocked, reason=funds_insufficient, action=deposit_required` envelope before any `placeOrder` mutation fires. Skip preflight in dry-run cycles.
+7. If any check fails, fail closed with a structured `blocked` envelope and let the cron retry on the next tick.
+
+## Agent-driven deposit runbook
+
+Issue #524: every `placeOrder` LIMIT submission locks USDC collateral
+on Prophet's CTF order book. The Python runner runs a funds preflight
+after scoring and before the placement loop fires. If protocol cash
+can't cover the planned collateral, `cmd_run` returns:
+
+```json
+{
+  "status": "blocked",
+  "reason": "funds_insufficient",
+  "payload": {
+    "action": "deposit_required",
+    "deposit": {
+      "chain": "polygon",
+      "chain_id": 137,
+      "usdc_contract_polygon": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+      "available_usdc": 0.0,
+      "needed_usdc": 12.0,
+      "deficit_usdc": 12.0
+    }
+  }
+}
+```
+
+When this envelope lands, the agent (Claude in Seren Desktop) drives
+Prophet's deposit UI before the next tick.
+
+### Two cash sources
+
+Prophet protocol cash (`viewer.cashBalance.availableCents`) is funded
+by USDC deposited into the operator's Safe on Polygon (chainId 137):
+
+1. **On-chain USDC exists but not yet deposited.** Query the Polygon
+   native USDC contract `0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359`
+   for the operator's Safe via the `seren-polygon` publisher
+   (`eth_call` → `balanceOf(address)`). If on-chain ≥ deficit, drive
+   Prophet's `/wallet → Deposit` UI to move it into protocol cash.
+
+2. **No on-chain USDC available.** Surface the Safe address and
+   `deficit_usdc`. Stop and let the operator fund externally.
+
+### Selector + constants
+
+```text
+PROPHET_WALLET_URL             = "https://app.prophetmarket.ai/wallet"
+DEPOSIT_BUTTON_SELECTOR        = 'button:has-text("Deposit")'
+DEPOSIT_AMOUNT_INPUT_SELECTOR  = 'input[data-testid="deposit-amount-input"]'
+DEPOSIT_CONFIRM_BUTTON         = 'button:has-text("Confirm")'
+```
+
+### Sequence
+
+1. Read `deposit.safe_wallet_address` (when surfaced) from the blocked envelope.
+2. Query on-chain USDC at that address via `seren-polygon`.
+3. If on-chain USDC < `deposit.deficit_usdc`, surface and stop.
+4. Otherwise navigate to `PROPHET_WALLET_URL`, click Deposit, fill
+   the amount = `deficit_usdc`, click Confirm, accept the Privy
+   signing prompt.
+5. Poll `viewer.cashBalance.availableCents` until the deposit lands.
+6. Re-run `agent.py --command run --json-output`.
+
+### Cron behavior
+
+`funds_insufficient` is **not** auto-paused like the publisher 402
+low-SerenBucks case. The cron keeps firing; each tick re-checks the
+balance. This is correct when the operator funds externally between
+ticks. The blocker `funds_insufficient_by_<deficit>_usdc` is recorded
+on the run so the operator can see the gap without re-running.
 
 ## `placeOrder` is server-signed (#505 Phase 15)
 

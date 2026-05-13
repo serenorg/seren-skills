@@ -119,6 +119,18 @@ def _get_now() -> datetime:
 DEFAULT_TOPIC_SLUG = "general"
 DEFAULT_INITIAL_BET_USDC = 1
 
+# Issue #524 — funds preflight. Prophet runs on Polygon mainnet
+# (chainId 137 — verified live via `wagmi.store` in the app's
+# localStorage on 2026-05-13). Native USDC on Polygon is Circle's
+# canonical contract; the bridged `USDC.e` at 0x2791...4174 is the
+# legacy variant and not what Prophet's deposit UI accepts today.
+# These constants are surfaced in the `deposit_required` blocked
+# envelope so the agent's deposit runbook can query on-chain USDC
+# via the `seren-polygon` publisher without a second introspection.
+DEPOSIT_CHAIN = "polygon"
+DEPOSIT_CHAIN_ID = 137
+DEPOSIT_USDC_CONTRACT_POLYGON = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
+
 
 def _category_to_slug(category: str) -> str:
     """Best-effort categorySlug derived from polymarket category.
@@ -700,6 +712,135 @@ def _cmd_run(
     filtered = [
         c for c in filtered if c.question.strip().casefold() not in existing_questions
     ]
+
+    # Step 5.6 — funds preflight (issue #524). Phase-15's bet-form
+    # confirm step debits `DEFAULT_INITIAL_BET_USDC` from Prophet's
+    # protocol cash per candidate. Compute the exact USDC the agent
+    # would need to confirm `submit_limit` markets, then read the
+    # balance once. Short-circuit with `action=deposit_required` if
+    # the wallet can't cover it; otherwise the agent's UI runbook
+    # burns 90-180s of Validate+odds-calc per candidate before failing
+    # at the bet form. Fail-closed on schema/transport errors so a
+    # silent Prophet outage doesn't auto-pause the cron through the
+    # wrong code path.
+    candidates_to_submit = filtered[: req["submit_limit"]]
+    needed_usdc = float(len(candidates_to_submit) * DEFAULT_INITIAL_BET_USDC)
+    if needed_usdc > 0:
+        try:
+            cash = prophet_client.cash_balance(jwt=jwt)
+        except (ProphetSchemaError, ProphetGraphQLError) as exc:
+            storage.insert(
+                "runs",
+                {
+                    "bounty_id": bounty_id,
+                    "command": "run",
+                    "status": "blocked_funds_preflight_unavailable",
+                    "market_count": 0,
+                    "dry_run": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            return {
+                "status": "blocked",
+                "command": "run",
+                "bounty_id": bounty_id,
+                "referral_code": join.referral_code,
+                "reason": "funds_preflight_unavailable",
+                "blockers": [f"cash_balance_failed:{type(exc).__name__}:{exc}"],
+                "filtered_for_headroom": filtered_for_headroom,
+                "prophet_markets_created": [],
+                "pending_ui_submission": [],
+                "bounty_submission": {"status": "not_attempted", "submission_id": ""},
+                "prophet_auth": {
+                    "method": "otp",
+                    "source": auth_source,
+                    "viewer_id": viewer_id,
+                },
+            }
+        except ProphetUnauthorized as exc:
+            storage.insert(
+                "runs",
+                {
+                    "bounty_id": bounty_id,
+                    "command": "run",
+                    "status": "blocked_auth",
+                    "market_count": 0,
+                    "dry_run": False,
+                    "error": f"cash_balance_unauthorized: {exc}",
+                },
+            )
+            return {
+                "status": "blocked",
+                "command": "run",
+                "bounty_id": bounty_id,
+                "referral_code": join.referral_code,
+                "reason": "prophet_unauthorized",
+                "blockers": [f"cash_balance_unauthorized:{exc}"],
+                "filtered_for_headroom": filtered_for_headroom,
+                "prophet_markets_created": [],
+                "pending_ui_submission": [],
+                "bounty_submission": {"status": "not_attempted", "submission_id": ""},
+                "prophet_auth": {
+                    "method": "otp",
+                    "source": auth_source,
+                    "viewer_id": viewer_id,
+                },
+            }
+
+        if cash.available_usdc < needed_usdc:
+            deficit_usdc = round(needed_usdc - cash.available_usdc, 2)
+            storage.insert(
+                "events",
+                {
+                    "event_type": "prophet.funds_insufficient_for_seed_bets",
+                    "bounty_id": bounty_id,
+                    "available_usdc": cash.available_usdc,
+                    "needed_usdc": needed_usdc,
+                    "deficit_usdc": deficit_usdc,
+                    "submit_limit": req["submit_limit"],
+                    "candidates_held": len(candidates_to_submit),
+                },
+            )
+            storage.insert(
+                "runs",
+                {
+                    "bounty_id": bounty_id,
+                    "command": "run",
+                    "status": "blocked_funds_insufficient",
+                    "market_count": 0,
+                    "dry_run": False,
+                },
+            )
+            return {
+                "status": "blocked",
+                "command": "run",
+                "bounty_id": bounty_id,
+                "referral_code": join.referral_code,
+                "reason": "funds_insufficient",
+                "action": "deposit_required",
+                "deposit": {
+                    "chain": DEPOSIT_CHAIN,
+                    "chain_id": DEPOSIT_CHAIN_ID,
+                    "usdc_contract_polygon": DEPOSIT_USDC_CONTRACT_POLYGON,
+                    "available_usdc": cash.available_usdc,
+                    "needed_usdc": needed_usdc,
+                    "deficit_usdc": deficit_usdc,
+                },
+                "candidates_held": len(candidates_to_submit),
+                "filtered_for_headroom": filtered_for_headroom,
+                "prophet_markets_created": [],
+                "pending_ui_submission": [],
+                "blockers": [
+                    f"protocol_cash_short_by_{deficit_usdc}_usdc"
+                ],
+                "bounty_submission": {"status": "not_attempted", "submission_id": ""},
+                "prophet_auth": {
+                    "method": "otp",
+                    "source": auth_source,
+                    "viewer_id": viewer_id,
+                },
+            }
+
     # Phase 15 (#505): handoff to the agent for UI-driven submission.
     # See the module-level docstring for why createMarketWithBet has to
     # go through the browser. Each candidate becomes a row in
