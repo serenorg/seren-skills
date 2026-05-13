@@ -85,17 +85,16 @@ class ProphetOrderClient:
     def market_prices(self, *, jwt: str | None, market_id: str) -> ProphetMarketPrices:
         """Live odds snapshot for an arb scoring pass.
 
-        Schema guess (Phase 2 / §3 ADR):
-          Market.outcomes is an array of `{name, price}` objects where
-          `name` is "Yes" / "No" (or platform synonyms) and `price` is a
-          0-1 probability. The bounty-runner's `MarketById` query exposed
-          `slug`/`resolutionDate`; we extend that with `outcomes` here.
+        Live schema (#512, captured 2026-05-13): ``Market`` exposes prices
+        directly as ``yesPriceBps`` / ``noPriceBps`` (Int, 0-10000 basis
+        points), matching the convention used by ``PlaceOrderInput.priceBps``.
+        The previous ``outcomes { name price }`` shape was removed by
+        Prophet — querying it now returns a GraphQL validation error and
+        zero scoring.
 
-        Until the fixture lands the response shape is treated tolerantly —
-        we read whichever of `outcomes`, `prices`, or `odds` the publisher
-        actually returns. A schema rejection raises ProphetSchemaError so
-        the agent can flag the run as blocked instead of trading on stale
-        data.
+        Fail-closed: missing ``yesPriceBps`` / ``noPriceBps`` raises
+        ``ProphetSchemaError`` rather than silently scoring on zeros (the
+        defect that hid #512 in the first place).
         """
         query = """
         query MarketPrices($id: ID!) {
@@ -103,7 +102,8 @@ class ProphetOrderClient:
             id
             slug
             resolutionDate
-            outcomes { name price }
+            yesPriceBps
+            noPriceBps
           }
         }
         """
@@ -111,13 +111,18 @@ class ProphetOrderClient:
         market = ((payload or {}).get("data") or {}).get("market") or {}
         if not market.get("id"):
             raise ProphetSchemaError(f"market({market_id}) returned no record")
-        outcomes = market.get("outcomes")
-        yes_price, no_price = _parse_outcomes(outcomes)
+        yes_bps = market.get("yesPriceBps")
+        no_bps = market.get("noPriceBps")
+        if not isinstance(yes_bps, int) or not isinstance(no_bps, int):
+            raise ProphetSchemaError(
+                f"market({market_id}) missing yesPriceBps/noPriceBps — "
+                f"schema may have drifted"
+            )
         return ProphetMarketPrices(
             market_id=market.get("id") or "",
             slug=market.get("slug") or "",
-            yes_price=yes_price,
-            no_price=no_price,
+            yes_price=yes_bps / 10000.0,
+            no_price=no_bps / 10000.0,
             resolution_date=market.get("resolutionDate") or "",
         )
 
