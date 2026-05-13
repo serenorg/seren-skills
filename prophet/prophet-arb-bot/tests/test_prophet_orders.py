@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 
 from prophet import ProphetGraphQLError, ProphetSchemaError
-from prophet.orders import ProphetOrderClient, _parse_outcomes
+from prophet.orders import ProphetOrderClient
 
 
 def test_place_order_validates_inputs(stub_transport) -> None:
@@ -340,16 +340,54 @@ def test_list_user_orders_market_filter_is_client_side(stub_transport) -> None:
     assert [o.order_id for o in orders] == ["ord_b"]
 
 
-def test_market_prices_parses_dict_outcome_shape() -> None:
-    yes, no = _parse_outcomes({"yes": 0.62, "no": 0.38})
-    assert (yes, no) == (0.62, 0.38)
-    yes, no = _parse_outcomes(
-        [
-            {"name": "Yes", "price": 0.55},
-            {"name": "No", "price": 0.45},
-        ]
+def test_market_prices_reads_yes_no_price_bps(stub_transport) -> None:
+    """Live-bug regression (#512, continuation of #505).
+
+    Prophet's `Market` no longer exposes ``outcomes { name price }``.
+    The production schema now returns ``yesPriceBps`` / ``noPriceBps``
+    as Int (0-10000 basis points), matching the convention used by
+    ``PlaceOrderInput.priceBps``. Convert by dividing by 10000.
+    """
+    stub_transport.register(
+        "MarketPrices",
+        {
+            "data": {
+                "market": {
+                    "id": "0a0e0287",
+                    "slug": "btc-up-or-down",
+                    "resolutionDate": "2026-05-13T15:00:00Z",
+                    "yesPriceBps": 5380,
+                    "noPriceBps": 4620,
+                }
+            }
+        },
     )
-    assert (yes, no) == (0.55, 0.45)
-    # Unknown shape returns zeros — caller flags as untradable.
-    yes, no = _parse_outcomes("nonsense")
-    assert (yes, no) == (0.0, 0.0)
+    client = ProphetOrderClient(transport=stub_transport)
+    prices = client.market_prices(jwt="x", market_id="0a0e0287")
+    assert prices.market_id == "0a0e0287"
+    assert prices.slug == "btc-up-or-down"
+    assert prices.resolution_date == "2026-05-13T15:00:00Z"
+    assert abs(prices.yes_price - 0.5380) < 1e-9
+    assert abs(prices.no_price - 0.4620) < 1e-9
+
+
+def test_market_prices_raises_when_pricebps_missing(stub_transport) -> None:
+    """Fail-closed: if the live schema drifts again, raise rather than
+    silently scoring on zero prices (the bug that hid #512 in the first
+    place).
+    """
+    stub_transport.register(
+        "MarketPrices",
+        {
+            "data": {
+                "market": {
+                    "id": "0a0e0287",
+                    "slug": "btc-up-or-down",
+                    "resolutionDate": "2026-05-13T15:00:00Z",
+                }
+            }
+        },
+    )
+    client = ProphetOrderClient(transport=stub_transport)
+    with pytest.raises(ProphetSchemaError, match="PriceBps"):
+        client.market_prices(jwt="x", market_id="0a0e0287")
