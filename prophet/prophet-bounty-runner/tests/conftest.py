@@ -50,7 +50,7 @@ def seed_prophet_chain_happy_path(
     # without doubling as funds-preflight tests.
     stub_transport.register(
         "ViewerWalletBalance",
-        {"data": {"viewer": {"cashBalance": {"availableCents": 10000, "totalCents": 10000}}}},
+        {"data": {"viewer": {"walletBalance": {"availableCents": 10000, "totalCents": 10000}}}},
     )
     stub_transport.register(
         "InitiateMarket",

@@ -44,7 +44,7 @@ class _StubOpp:
 def test_cash_balance_decodes_viewer_wallet_balance_payload(stub_transport) -> None:
     stub_transport.register(
         "ViewerWalletBalance",
-        {"data": {"viewer": {"cashBalance": {"availableCents": 4242, "totalCents": 4242}}}},
+        {"data": {"viewer": {"walletBalance": {"availableCents": 4242, "totalCents": 4242}}}},
     )
     client = MinimalProphetClient(transport=stub_transport)
 

@@ -138,26 +138,24 @@ class MinimalProphetClient:
         return ViewerIdentity(id=viewer_id, email=viewer_email)
 
     def cash_balance(self, *, jwt: str) -> ViewerCashBalance:
-        """`Query: viewer.cashBalance { availableCents totalCents }`.
+        """`Query: viewer.walletBalance { availableCents totalCents }`.
 
-        Issue #524: the arb-bot needs this preflight before the
-        `placeOrder` loop fires, because each LIMIT submission locks
-        USDC collateral. Sibling skills (prophet-adversarial-auditor,
-        prophet-bounty-runner) use the same operation name so cross-
-        skill schema fixtures stay aligned.
+        Issue #524 / #526: the field on `Viewer` is `walletBalance` —
+        `cashBalance` is the field on `placeOrder` mutation results.
+        Easy collision; live-validated 2026-05-13.
         """
         payload = self._post(
             jwt=jwt,
             query=(
                 "query ViewerWalletBalance {\n"
-                "  viewer { cashBalance { availableCents totalCents } }\n"
+                "  viewer { walletBalance { availableCents totalCents } }\n"
                 "}"
             ),
             variables={},
             operation_name="ViewerWalletBalance",
         )
         viewer = ((payload or {}).get("data") or {}).get("viewer") or {}
-        cash = viewer.get("cashBalance") or {}
+        cash = viewer.get("walletBalance") or {}
         return ViewerCashBalance(
             available_cents=int(cash.get("availableCents") or 0),
             total_cents=int(cash.get("totalCents") or 0),
