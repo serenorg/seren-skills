@@ -167,7 +167,13 @@ class MinimalProphetClient:
           }
         }
         """
-        filter_: dict[str, Any] = {"status": "ACTIVE"}
+        # MarketStatus enum values per the captured schema fixture are
+        # OPEN | RESOLVED | RESOLVED_YES | RESOLVED_NO | CANCELLED |
+        # PENDING_RESOLUTION | RESOLVED_UNCERTAIN | RESOLUTION_FAILED |
+        # PENDING_BLOCKCHAIN. There is no `ACTIVE` value — sending one
+        # crashes the run with GRAPHQL_VALIDATION_FAILED. Live-confirmed
+        # against mainnet 2026-05-13 (#505 Phase 15 follow-up).
+        filter_: dict[str, Any] = {"status": "OPEN"}
         if resolving_before_iso:
             filter_["resolvingBefore"] = resolving_before_iso
         payload = self._post(
