@@ -20,7 +20,7 @@ import pytest
 
 from agent import run_command  # noqa: E402  (red until phase 10 implements)
 
-from conftest import load_fixture  # type: ignore[import-not-found]
+from conftest import load_fixture, seed_prophet_chain_happy_path  # type: ignore[import-not-found]
 
 
 # ---------------------------------------------------------------------------
@@ -40,10 +40,10 @@ def _seed_happy_path(stub_gateway, stub_storage, stub_transport=None) -> None:
         "/markets?end_date_max=2026-05-26T00:00:00Z&closed=false&active=true&limit=100",
         load_fixture("polymarket_settling.json"),
     )
-    # Issue #493: Prophet GraphQL is no longer routed through the gateway.
-    # Seed createMarket on the new transport seam when one is provided.
+    # Phase-14a (#505): Prophet writes are the four-step chain plus
+    # the post-create re-fetch, not the obsolete single-shot createMarket.
     if stub_transport is not None:
-        stub_transport.register_default(load_fixture("prophet_create_market.json"))
+        seed_prophet_chain_happy_path(stub_transport)
     stub_gateway.register(
         "seren-bounty",
         "POST",
@@ -83,8 +83,14 @@ def test_happy_path_run_creates_qualifying_markets_and_one_submission(
     submission_calls = stub_gateway.calls_to(
         "seren-bounty", "POST", "/bounties/bounty_fixture_001/submission"
     )
+    # Phase-14a (#505): each market = 5 chain operations + 1 post-create
+    # MarketById query. Counting InitiateMarket calls anchors on
+    # "submission attempts" rather than the multiplier.
+    initiate_calls = [
+        c for c in stub_transport.calls if c.get("operation_name") == "InitiateMarket"
+    ]
     assert result["status"] == "ok"
-    assert 1 <= len(stub_transport.calls) <= base_run_request["submit_limit"]
+    assert 1 <= len(initiate_calls) <= base_run_request["submit_limit"]
     assert len(submission_calls) == 1
 
 
@@ -148,10 +154,18 @@ def test_polymarket_source_resolving_after_deadline_is_filtered_out(
         transport=stub_transport,
     )
 
+    # Phase-14a (#505): the chain's InitiateMarket carries the candidate
+    # `question`, not the polymarket_market_id, so deadline filtering is
+    # verified by checking no `0xpoly-003`-derived question reaches the
+    # chain. The poly-003 fixture question is the one explicitly tagged
+    # "Resolves AFTER deadline".
+    initiate_calls = [
+        c for c in stub_transport.calls if c.get("operation_name") == "InitiateMarket"
+    ]
     assert all(
-        "0xpoly-003"
-        not in (c["variables"] or {}).get("source", {}).get("polymarket_market_id", "")
-        for c in stub_transport.calls
+        "AFTER deadline"
+        not in ((c["variables"] or {}).get("input") or {}).get("question", "")
+        for c in initiate_calls
     )
 
 

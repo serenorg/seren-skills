@@ -100,6 +100,7 @@ class MinimalProphetClient:
             jwt=jwt,
             query="query Viewer { viewer { user { id email } } }",
             variables={},
+            operation_name="Viewer",
         )
         viewer = ((payload or {}).get("data") or {}).get("viewer") or {}
         user = viewer.get("user") or {}
@@ -137,6 +138,7 @@ class MinimalProphetClient:
             jwt=jwt,
             query=query,
             variables={"input": {"limit": limit, "status": "active"}},
+            operation_name="MarketsForDedup",
         )
         markets = ((payload or {}).get("data") or {}).get("markets")
         if not isinstance(markets, list):
@@ -171,7 +173,12 @@ class MinimalProphetClient:
           }
         }
         """
-        payload = self._post(jwt=jwt, query=query, variables={"id": market_id})
+        payload = self._post(
+            jwt=jwt,
+            query=query,
+            variables={"id": market_id},
+            operation_name="MarketById",
+        )
         market = ((payload or {}).get("data") or {}).get("market") or {}
         if not market.get("id"):
             raise ProphetSchemaError(
@@ -229,6 +236,7 @@ class MinimalProphetClient:
                     "resolutionDate": resolution_date_iso,
                 }
             },
+            operation_name="InitiateMarket",
         )
         draft_id = (
             ((init_payload or {}).get("data") or {})
@@ -249,6 +257,7 @@ class MinimalProphetClient:
             }
             """,
             variables={"draftId": draft_id},
+            operation_name="StartOddsCalculation",
         )
         session_id = (
             ((start_payload or {}).get("data") or {})
@@ -273,6 +282,7 @@ class MinimalProphetClient:
                 }
                 """,
                 variables={"id": session_id},
+                operation_name="OddsCalculationSession",
             )
             session = (
                 ((poll or {}).get("data") or {}).get("oddsCalculationSession") or {}
@@ -300,6 +310,7 @@ class MinimalProphetClient:
             }
             """,
             variables={"draftId": draft_id, "betUsdc": initial_bet_usdc},
+            operation_name="MarketCreationOrderParams",
         )
         order_params = (
             ((params_payload or {}).get("data") or {})
@@ -327,6 +338,7 @@ class MinimalProphetClient:
                     "odds": odds,
                 }
             },
+            operation_name="CreateMarketWithBet",
         )
         market = (
             ((create_payload or {}).get("data") or {})
@@ -343,15 +355,28 @@ class MinimalProphetClient:
     # transport delegation
 
     def _post(
-        self, *, jwt: str | None, query: str, variables: dict[str, Any]
+        self,
+        *,
+        jwt: str | None,
+        query: str,
+        variables: dict[str, Any],
+        operation_name: str | None = None,
     ) -> dict[str, Any]:
         """Single seam through which every authenticated Prophet call
         flows. The transport handles HTTP, 401 → ProphetUnauthorized,
         and `errors[]` → ProphetGraphQLError. Anything that comes back
         here must already be a dict with a populated `data` key.
+
+        `operation_name` is forwarded as the GraphQL `operationName`
+        field so that Prophet's request logs (and test stubs) can
+        attribute calls to the specific chain step that issued them.
+        Callers pass the exact name they declared in the query body.
         """
         response = self.transport.post_graphql(
-            jwt=jwt, query=query, variables=variables
+            jwt=jwt,
+            query=query,
+            variables=variables,
+            operation_name=operation_name,
         )
         if not isinstance(response, dict):
             raise ProphetSchemaError(
