@@ -98,6 +98,18 @@ DEFAULT_BOUNTY_ID = "bounty_fixture_001"
 BOUNTY_DEADLINE = datetime(2026, 5, 24, 0, 0, 0, tzinfo=timezone.utc)
 BOUNTY_DEADLINE_ISO = "2026-05-24T00:00:00Z"
 
+
+def _get_now() -> datetime:
+    """Return the UTC instant Polymarket discovery should treat as "now".
+
+    Indirected through a module-level function so tests can pin it via
+    monkeypatch. Without the pin, the `end_date_min` URL parameter the
+    discovery module sends would drift every minute and break the
+    StubGateway exact-path match.
+    """
+    return datetime.now(timezone.utc)
+
+
 # Phase-14a chain defaults (#505). The chain input shape is still
 # best-guess until the live schema probe lands; these constants are
 # the values the agent passes when the candidate doesn't carry an
@@ -514,10 +526,15 @@ def _cmd_run(
         },
     )
 
-    # Step 3 — Polymarket source discovery (plan §14). The deadline gate
-    # here is what removes out-of-window markets like the
-    # `0xpoly-003` row in the smoke fixture.
-    sources = discover_polymarket_sources(gateway=gateway, deadline=BOUNTY_DEADLINE)
+    # Step 3 — Polymarket source discovery (plan §14). Both gates here
+    # gate out-of-window markets: the deadline gate drops far-future
+    # rows (e.g. `0xpoly-003` in the smoke fixture), and the
+    # past-cutoff gate (anchored on `_get_now()`) drops UMA-stuck
+    # rows whose `endDate` is months in the past — see the discovery
+    # module docstring for the live-probe evidence.
+    sources = discover_polymarket_sources(
+        gateway=gateway, deadline=BOUNTY_DEADLINE, now=_get_now()
+    )
 
     # Step 4 — generate / score / filter candidates (plan §15).
     candidates = generate_candidates(sources, n=req["candidate_limit"])
