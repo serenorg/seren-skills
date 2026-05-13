@@ -51,11 +51,50 @@ _DEFAULT_LIMIT = 500
 
 @dataclass
 class PolymarketSource:
+    """Normalized Polymarket source row for the candidate generator.
+
+    Issue #520: a Polymarket child market like
+    ``"Map 3: Odd/Even Total Rounds?"`` carries zero context — teams,
+    tournament, and date all live under ``events[0].title`` /
+    ``groupItemTitle`` / ``slug``. Prophet's ``Validate Question`` step
+    rejects ambiguous strings, so discovery must enrich the question
+    here rather than ship the bare child predicate downstream.
+
+    Round-trip contract: ``polymarket_market_id`` is the on-chain CTF
+    ``conditionId`` — the durable settlement key the bounty reconciler
+    matches against. It is **not** Gamma's lookup key. Gamma's
+    ``/markets/<id>`` and ``?id=<id>`` endpoints 422 on conditionId; the
+    only round-trippable filter is ``?condition_ids=<conditionId>``
+    (plural) — see ``prophet-arb-bot/scripts/polymarket/prices.py`` for
+    the live-probed shape. ``polymarket_gamma_id`` is Gamma's integer
+    market id, exposed here for any future code that does a by-id
+    Gamma lookup.
+    """
+
     polymarket_market_id: str
     question: str
     resolution_date: datetime
     category: str | None
     settled: bool
+    polymarket_gamma_id: str | None = None
+    slug: str | None = None
+    event_title: str | None = None
+    event_slug: str | None = None
+    group_item_title: str | None = None
+
+    @property
+    def display_question(self) -> str:
+        """Prophet-ready question with parent-series context.
+
+        Prefers ``events[0].title + ": " + (groupItemTitle or question)``
+        — the shape Polymarket itself uses to render the child market in
+        its UI. Falls back to the bare ``question`` when no event context
+        is present (e.g. standalone single-market events).
+        """
+        leaf = self.group_item_title or self.question
+        if self.event_title:
+            return f"{self.event_title}: {leaf}"
+        return self.question
 
 
 def discover_polymarket_sources(
@@ -114,13 +153,19 @@ def discover_polymarket_sources(
         # markets have surfaced live (see module docstring).
         if resolution_date <= now_utc:
             continue
-        market_id = raw.get("conditionId") or raw.get("id") or raw.get("polymarket_market_id")
+        # Issue #520: `polymarket_market_id` is the CTF conditionId — the
+        # durable settlement key — NOT Gamma's `id`. The two are distinct
+        # and must not be conflated; see the PolymarketSource docstring.
+        market_id = raw.get("conditionId") or raw.get("polymarket_market_id")
         question = raw.get("question")
         if not isinstance(market_id, str) or not market_id:
             continue
         if not isinstance(question, str) or not question:
             continue
         category = _extract_category(raw)
+        gamma_id_raw = raw.get("id")
+        gamma_id = str(gamma_id_raw) if gamma_id_raw not in (None, "") else None
+        event_title, event_slug = _extract_event_fields(raw)
         keepers.append(
             PolymarketSource(
                 polymarket_market_id=market_id,
@@ -128,6 +173,11 @@ def discover_polymarket_sources(
                 resolution_date=resolution_date,
                 category=category,
                 settled=False,
+                polymarket_gamma_id=gamma_id,
+                slug=_safe_str(raw.get("slug")),
+                event_title=event_title,
+                event_slug=event_slug,
+                group_item_title=_safe_str(raw.get("groupItemTitle")),
             )
         )
     return keepers
@@ -159,6 +209,24 @@ def _extract_category(raw: dict[str, Any]) -> str | None:
             if isinstance(cat, str) and cat:
                 return cat
     return None
+
+
+def _extract_event_fields(raw: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Return ``(events[0].title, events[0].slug)`` if present.
+
+    Issue #520: the parent series context Prophet's ``Validate Question``
+    needs lives here, not on the child market row.
+    """
+    events = raw.get("events")
+    if isinstance(events, list) and events:
+        first = events[0]
+        if isinstance(first, dict):
+            return _safe_str(first.get("title")), _safe_str(first.get("slug"))
+    return None, None
+
+
+def _safe_str(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _parse_resolution_date(value: Any) -> datetime | None:

@@ -44,13 +44,23 @@ def generate_candidates(
     for source in polymarket_sources:
         if len(keepers) >= n:
             break
+        # Issue #520: ship the enriched display question (event title +
+        # group item title) into the candidate, not the bare child
+        # predicate. Prophet's `/create` Validate Question step rejects
+        # ambiguous strings without parent-series context.
         keepers.append(
             Candidate(
                 polymarket_market_id=source.polymarket_market_id,
-                question=source.question,
+                question=source.display_question,
                 category=source.category or "uncategorized",
                 payload={
                     "source_resolution_date": source.resolution_date.isoformat(),
+                    "polymarket_gamma_id": source.polymarket_gamma_id,
+                    "polymarket_slug": source.slug,
+                    "event_title": source.event_title,
+                    "event_slug": source.event_slug,
+                    "group_item_title": source.group_item_title,
+                    "raw_question": source.question,
                 },
             )
         )
