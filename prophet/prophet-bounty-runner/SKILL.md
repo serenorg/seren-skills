@@ -331,9 +331,11 @@ python3 scripts/run_local_pull_runner.py --config config.json
 
 - Prophet is **mainnet** software. Markets created by this skill
   are real markets on Prophet's production deployment, settled
-  in real USDC. The skill submits real `createMarket` mutations
-  under the user's Privy account; bad submissions are visible to
-  other Prophet users.
+  in real USDC. The skill submits real markets via the four-step
+  `initiateMarket → startOddsCalculation → oddsCalculationSession
+  → marketCreationOrderParams → createMarketWithBet` chain under
+  the user's Privy account ([#505](https://github.com/serenorg/seren-skills/issues/505));
+  bad submissions are visible to other Prophet users.
 - Bounty earnings are subject to a **90-day hold** during which
   the operator can claw back fraudulent or invalid markets. A
   market that the operator clawbacks does not pay.

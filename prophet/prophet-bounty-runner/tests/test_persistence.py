@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from agent import run_command  # noqa: E402
 
-from conftest import load_fixture  # type: ignore[import-not-found]
+from conftest import load_fixture, seed_prophet_chain_happy_path  # type: ignore[import-not-found]
 
 
 def _seed_happy_path(stub_gateway, stub_transport=None) -> None:
@@ -40,9 +40,9 @@ def _seed_happy_path(stub_gateway, stub_transport=None) -> None:
         "/markets?end_date_max=2026-05-26T00:00:00Z&closed=false&active=true&limit=100",
         load_fixture("polymarket_settling.json"),
     )
-    # Issue #493: Prophet createMarket is now on the transport seam, not the gateway.
+    # Phase-14a (#505): chain + post-create re-fetch, not single-shot.
     if stub_transport is not None:
-        stub_transport.register_default(load_fixture("prophet_create_market.json"))
+        seed_prophet_chain_happy_path(stub_transport)
     stub_gateway.register(
         "seren-bounty",
         "POST",
@@ -86,7 +86,12 @@ def test_persist_writes_one_markets_created_row_per_executed_create(
         transport=stub_transport,
     )
 
-    assert len(stub_storage.markets_created) == len(stub_transport.calls)
+    # Phase-14a (#505): one persisted row per `InitiateMarket` call, not
+    # per transport call (each chain attempt is now 5 ops + 1 re-fetch).
+    initiate_calls = [
+        c for c in stub_transport.calls if c.get("operation_name") == "InitiateMarket"
+    ]
+    assert len(stub_storage.markets_created) == len(initiate_calls)
     assert len(stub_storage.markets_created) == len(
         result["prophet_markets_created"]
     )

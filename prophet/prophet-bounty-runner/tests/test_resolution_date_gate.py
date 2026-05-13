@@ -21,13 +21,11 @@ Two boundary cases pinned here:
 
 from __future__ import annotations
 
-from copy import deepcopy
-
 from agent import run_command
-from conftest import load_fixture
+from conftest import load_fixture, seed_prophet_chain_happy_path
 
 
-def _seed(stub_gateway, stub_transport, prophet_create_response) -> None:
+def _seed(stub_gateway, stub_transport, *, resolution_date_iso: str) -> None:
     stub_gateway.register(
         "seren-bounty",
         "POST",
@@ -40,8 +38,13 @@ def _seed(stub_gateway, stub_transport, prophet_create_response) -> None:
         "/markets?end_date_max=2026-05-26T00:00:00Z&closed=false&active=true&limit=100",
         load_fixture("polymarket_settling.json"),
     )
-    # Issue #493: Prophet createMarket lives on the transport seam now.
-    stub_transport.register_default(prophet_create_response)
+    # Phase-14a (#505): the post-create eligibility gate keys off the
+    # `MarketById` re-fetch response, not the chain's terminal
+    # `createMarketWithBet`. Seeding the chain with a boundary
+    # `resolution_date_iso` exercises the deadline guard.
+    seed_prophet_chain_happy_path(
+        stub_transport, resolution_date_iso=resolution_date_iso
+    )
     stub_gateway.register(
         "seren-bounty",
         "POST",
@@ -60,10 +63,8 @@ def _otp(monkeypatch) -> None:
 def test_resolution_date_one_second_before_deadline_is_eligible(
     base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
-    response = deepcopy(load_fixture("prophet_create_market.json"))
-    response["data"]["createMarket"]["resolutionDate"] = "2026-05-25T23:59:59Z"
     _otp(monkeypatch)
-    _seed(stub_gateway, stub_transport, response)
+    _seed(stub_gateway, stub_transport, resolution_date_iso="2026-05-25T23:59:59Z")
 
     result = run_command(
         base_run_request,
@@ -87,10 +88,8 @@ def test_resolution_date_one_second_before_deadline_is_eligible(
 def test_resolution_date_at_deadline_is_rejected(
     base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
 ) -> None:
-    response = deepcopy(load_fixture("prophet_create_market.json"))
-    response["data"]["createMarket"]["resolutionDate"] = "2026-05-26T00:00:00Z"
     _otp(monkeypatch)
-    _seed(stub_gateway, stub_transport, response)
+    _seed(stub_gateway, stub_transport, resolution_date_iso="2026-05-26T00:00:00Z")
 
     run_command(
         base_run_request,

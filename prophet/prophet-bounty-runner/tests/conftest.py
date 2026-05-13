@@ -20,6 +20,71 @@ def load_fixture(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
 
 
+def seed_prophet_chain_happy_path(
+    stub_transport,
+    *,
+    market_id: str = "prophet_market_fixture_001",
+    slug: str = "btc-100k-may-10-2026",
+    resolution_date_iso: str = "2026-05-10T23:59:00Z",
+    creator_viewer_id: str = "viewer_fixture_001",
+) -> None:
+    """Register a self-consistent four-step chain + post-create re-fetch.
+
+    Phase-14a (#505) wires `MinimalProphetClient.create_market_chain`
+    into the submission loop, so every smoke / persistence / boundary
+    test now needs five chain operations plus the `MarketById`
+    post-create query. Tests can override `resolution_date_iso` or
+    `creator_viewer_id` to exercise the eligibility gates.
+    """
+    stub_transport.register(
+        "InitiateMarket",
+        {"data": {"initiateMarket": {"draftId": f"draft_{market_id}"}}},
+    )
+    stub_transport.register(
+        "StartOddsCalculation",
+        {"data": {"startOddsCalculation": {"sessionId": f"session_{market_id}"}}},
+    )
+    stub_transport.register(
+        "OddsCalculationSession",
+        {
+            "data": {
+                "oddsCalculationSession": {
+                    "status": "COMPLETED",
+                    "odds": {"yes": 0.5, "no": 0.5},
+                }
+            }
+        },
+    )
+    stub_transport.register(
+        "MarketCreationOrderParams",
+        {
+            "data": {
+                "marketCreationOrderParams": {
+                    "params": {"orderType": "INITIAL", "betUsdc": 1}
+                }
+            }
+        },
+    )
+    stub_transport.register(
+        "CreateMarketWithBet",
+        {"data": {"createMarketWithBet": {"market": {"id": market_id}}}},
+    )
+    stub_transport.register(
+        "MarketById",
+        {
+            "data": {
+                "market": {
+                    "id": market_id,
+                    "slug": slug,
+                    "url": f"https://app.prophetmarket.ai/market/{slug}",
+                    "resolutionDate": resolution_date_iso,
+                    "creator": {"id": creator_viewer_id},
+                }
+            }
+        },
+    )
+
+
 class StubGateway:
     """In-memory stand-in for the Seren publisher gateway.
 

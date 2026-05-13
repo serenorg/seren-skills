@@ -98,6 +98,8 @@ SEREN_API_KEY=... PROPHET_SESSION_TOKEN='eyJ...' \
 
 This writes `tests/fixtures/prophet_schema.json`. A follow-on PR will replace the best-guess shape with whatever the fixture pins.
 
+Tracked in [#505](https://github.com/serenorg/seren-skills/issues/505) (Phase 14b — pin order shapes from captured fixture). The companion `prophet-bounty-runner` Phase 14a chain migration landed under the same issue; this skill's `cmd_run` already implements the same fail-closed `blockers[]` UX (`scripts/agent.py:348-357,376-380,433-441`).
+
 ## Continuous Runs (seren-cron)
 
 Default schedule is `0 * * * *` (every hour, on the hour, UTC). The schedule lives in `seren-cron`; a long-lived local poller on the user's machine claims due ticks and runs `agent.py --command run` locally.
