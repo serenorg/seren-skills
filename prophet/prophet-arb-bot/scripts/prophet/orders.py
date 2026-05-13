@@ -1,26 +1,28 @@
-"""Prophet order operations — best-guess GraphQL for placeOrder / cancelOrder.
+"""Prophet order operations — live-validated GraphQL (#505 Phase 15).
 
-prophet-bounty-runner only ships market creation. The arb-bot needs the
+prophet-bounty-runner only ships market creation. The arb-bot ships the
 trading half: place limit orders, cancel them, list outstanding orders,
-and read live odds. The exact GraphQL shape for these mutations has not
-been introspected yet (see plan §3 ADR — `prophet_order_schema.json`
-fixture is a follow-on PR).
+and read live odds.
 
-Until the fixture lands, every mutation here is a *best guess* derived
-from prophet's published web app behavior:
+The mutation shapes were live-validated against Prophet's production
+GraphQL endpoint (2026-05-13) and pinned against the captured schema
+fixture `tests/fixtures/prophet_schema.json`. They are **not** best
+guesses any more:
 
-  - `placeOrder(input: PlaceOrderInput!)` mirrors the four-step
-    `createMarketWithBet` shape used by the bounty-runner: a single
-    input object carrying market id, outcome, side, shares, limit price.
-  - `cancelOrder(orderId: ID!)` follows the standard CRUD-mutation shape.
-  - `userOrders(marketId: ID, status: OrderStatus)` mirrors `markets()`
-    in the bounty-runner.
+  - `placeOrder(input: PlaceOrderInput!)` is **server-signed**. Unlike
+    `createMarketWithBet`, `PlaceOrderInput` does NOT carry a
+    `SignedOrderInput` — Prophet's backend signs the CTF order on
+    behalf of the user via Privy session signers. Just the Privy JWT
+    is sufficient. Fields: `{marketId, outcome, type, side, priceBps,
+    quantity, timeInForce}`.
+  - `cancelOrder(input: CancelOrderInput!)` likewise needs only the
+    JWT; CancelOrderInput is `{orderId: ID!}`.
+  - `userOrders(marketId: ID, status: OrderStatus)` is unchanged.
 
-If the live schema rejects any of these calls, the gateway raises
-`ProphetGraphQLError` with the GraphQL `errors[0].message`. Callers must
-treat that as a hard fail-closed signal — do NOT retry with a different
-shape blindly. The probe-schema CLI flag in agent.py captures the live
-introspection so the next revision can pin field names exactly.
+If the live schema returns an unexpected error the gateway still
+raises `ProphetGraphQLError` and `ProphetSchemaError` for callers to
+treat as hard fail-closed signals — but a re-introspection is the
+right remediation, not a shape rewrite.
 """
 
 from __future__ import annotations

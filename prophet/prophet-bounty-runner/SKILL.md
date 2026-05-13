@@ -206,6 +206,70 @@ The agent may also adapt on the fly when selectors drift.
 The Privy JWT lifetime is ~1 hour. Re-run this runbook before
 each bounty cycle (the cron operator does this on every tick).
 
+## Agent-driven UI submission runbook
+
+Phase 15 (#505): `createMarketWithBet` requires an in-browser Privy
+signing prompt that no headless API can drive. After
+`scripts/agent.py --command run` returns its envelope, every entry
+under `pending_ui_submission` becomes one Playwright sequence the
+agent (Claude in Seren Desktop) executes against
+`https://app.prophetmarket.ai/create`.
+
+### Selector + constants
+
+```text
+PROPHET_CREATE_URL              = "https://app.prophetmarket.ai/create"
+ASK_PROPHET_TEXTAREA            = 'textarea[data-testid="market-prompt-input"]'
+VALIDATE_QUESTION_BUTTON        = 'button[data-testid="validate-question-button"]'
+CREATE_MARKET_BUTTON            = 'button[data-testid="create-market-button"]'
+VALIDATION_ERROR_CONTAINER      = '[data-testid="validation-error"]'
+GOT_IT_BUTTON                   = 'button:has-text("Got it!")'
+ODDS_CALC_PROGRESS_SELECTOR     = 'text=/[0-9]+ of [0-9]+ models completed/'
+```
+
+Bet-form and confirm-button selectors are captured at the time the
+agent observes them (Prophet rotates these periodically; the agent
+adapts via `playwright_evaluate` against the live DOM).
+
+### Sequence (per `pending_ui_submission` entry)
+
+1. Reuse the cached Privy JWT (`localStorage["privy:token"]`); if
+   absent, run the **Agent-driven OTP runbook** first.
+2. `playwright_navigate(PROPHET_CREATE_URL)` and click
+   `GOT_IT_BUTTON` if the preview overlay is present.
+3. Fill `ASK_PROPHET_TEXTAREA` with `entry.question`.
+4. Click `VALIDATE_QUESTION_BUTTON`. Poll for either the
+   normalized title (success) or `VALIDATION_ERROR_CONTAINER` —
+   the most common error is a resolution date outside the
+   `[2026-05-11, 2026-05-24]` window. If validation fails, record
+   `prophet.market_validate_failed` against `entry` and move on.
+5. Click `CREATE_MARKET_BUTTON`. Poll
+   `ODDS_CALC_PROGRESS_SELECTOR` until `6 of 6 models completed`
+   (typical 60–120s; the 6th model is occasionally slow).
+6. The bet form appears. Fill the YES/NO outcome and the
+   `entry.initial_bet_usdc` amount, click the confirm button,
+   accept the in-browser Privy signing prompt. Prophet debits
+   `initial_bet_usdc` from the operator's Safe at this step
+   (verified by Phase 15 live audit).
+7. Capture the new `prophet_market_id` from the redirected URL
+   (`/market/<id>` or `/market/<slug>`).
+8. Persist by running:
+   ```bash
+   PROPHET_SESSION_TOKEN=$JWT python3 scripts/agent.py \
+     --command record-created-market \
+     --polymarket-market-id "$POLYMARKET_ID" \
+     --prophet-market-id "$PROPHET_ID"
+   ```
+   *(Note: `record-created-market` is a follow-on revision; until
+   it lands, the agent records the result by writing directly into
+   the skill-owned SerenDB `markets_created` table.)*
+
+If the bet form fails to render after a 180s odds-calc timeout,
+abandon the candidate and record
+`prophet.market_odds_calc_timeout`. The cron's next tick will not
+retry this candidate automatically — the operator decides whether
+to re-queue it manually.
+
 ## Email + OTP Setup
 
 The skill reads OTPs from the user's inbox via the `gmail` or
@@ -331,20 +395,30 @@ python3 scripts/run_local_pull_runner.py --config config.json
 
 - Prophet is **mainnet** software. Markets created by this skill
   are real markets on Prophet's production deployment, settled
-  in real USDC. The skill submits real markets via the four-step
-  `initiateMarket → startOddsCalculation → oddsCalculationSession
-  → marketCreationOrderParams → createMarketWithBet` chain under
-  the user's Privy account ([#505](https://github.com/serenorg/seren-skills/issues/505));
-  bad submissions are visible to other Prophet users.
-- **Phase 14c follow-up.** The captured schema fixture at
-  `tests/fixtures/prophet_schema.json` shows
-  `CreateMarketWithBetInput` requires a `signedOrder: SignedOrderInput!`
-  — an EIP-712 signed `OrderParams` struct. Until the bounty-runner
-  gains operator-wallet signing capability, the chain's final
-  `createMarketWithBet` step will be rejected by Prophet and surface
-  as `reason=prophet_schema_drift` via the Phase 14a fail-closed UX.
-  Phase 14b (this PR) shipped the §14.3 dedup pre-filter and the
-  authoritative schema fixture; Phase 14c is the wallet-signing work.
+  in real USDC. Bad submissions are visible to other Prophet users.
+- **Phase 15 architecture (#505).** Live audit (2026-05-13) showed
+  `createMarketWithBet` requires a **client-signed**
+  `SignedOrderInput` that only the in-browser Privy SDK can produce —
+  there is no agent-accessible API for signing on the user's behalf.
+  The Python subprocess therefore stops at
+  `marketCreationOrderParams` and emits the candidate set under
+  `pending_ui_submission` in the run envelope. The agent (running
+  in Seren Desktop with `mcp__playwright__*` tools) drives the
+  Prophet `/create` UI to finalize each market: question →
+  `Validate Question` (initiateMarket) → `Create Market`
+  (startOddsCalculation, ~60–120s) → bet form → confirm (Privy
+  signing prompt). See the **Agent-driven UI submission runbook**
+  section below for the full selector sequence.
+- Prophet's `/create` UI enforces a resolution-date window of
+  `[2026-05-11, 2026-05-24]`. The skill's `BOUNTY_DEADLINE_ISO` is
+  pinned to `2026-05-24` so candidates that would be rejected at
+  `Validate Question` are dropped in `discover_polymarket_sources`
+  before they reach the agent.
+- Discovery now samples up to **500 settling Polymarket markets**
+  per run (`_DEFAULT_LIMIT` in `scripts/polymarket/discovery.py`)
+  so the tight window has enough qualifiers to choose from.
+  `submit_limit` still caps how many of those candidates flow into
+  `pending_ui_submission` per run.
 - Bounty earnings are subject to a **90-day hold** during which
   the operator can claw back fraudulent or invalid markets. A
   market that the operator clawbacks does not pay.
