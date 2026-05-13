@@ -35,7 +35,16 @@ def seed_prophet_chain_happy_path(
     test now needs five chain operations plus the `MarketById`
     post-create query. Tests can override `resolution_date_iso` or
     `creator_viewer_id` to exercise the eligibility gates.
+
+    Phase-14b (#505) wires the `MarketsForDedup` pre-filter before the
+    chain. The default response here is the empty-connection shape so
+    no candidate is dropped — tests exercising the duplicate path
+    override `MarketsForDedup` with a populated `edges` list.
     """
+    stub_transport.register(
+        "MarketsForDedup",
+        {"data": {"markets": {"edges": []}}},
+    )
     stub_transport.register(
         "InitiateMarket",
         {"data": {"initiateMarket": {"draftId": f"draft_{market_id}"}}},

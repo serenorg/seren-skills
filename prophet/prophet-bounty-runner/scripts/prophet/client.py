@@ -116,36 +116,73 @@ class MinimalProphetClient:
     # Public reads — no JWT required, but we still pass it when present
 
     def markets_for_dedup(
-        self, *, jwt: str | None = None, limit: int = 200
+        self,
+        *,
+        jwt: str | None = None,
+        first: int = 200,
+        resolving_before_iso: str | None = None,
     ) -> list[dict[str, Any]]:
         """List currently-listed Prophet markets for the dedup pre-filter.
 
         Plan §14.3 mandates this before any candidate is submitted; if
         the publisher is unavailable the run blocks rather than fails open.
-        Returns the raw `markets` array; callers normalize question/slug.
+
+        Query shape (pinned against `tests/fixtures/prophet_schema.json`,
+        captured live 2026-05-13 — see #505 Phase 14b):
+
+            Query.markets(input: MarketsInput): MarketConnection!
+            input MarketsInput {
+              first: Int, after: String, last: Int, before: String,
+              filter: MarketFilter, sort: MarketSort
+            }
+            input MarketFilter {
+              status: MarketStatus, creatorId: ID, search: String,
+              resolvingBefore: Time, resolvingAfter: Time,
+              categorySlug: String, topicSlug: String
+            }
+            type MarketConnection {
+              edges: [MarketEdge!]!, pageInfo: PageInfo!, totalCount: Int!
+            }
+            type MarketEdge { node: Market!, cursor: String! }
+
+        Returns the flattened list of `node` records so callers can read
+        `question` / `slug` / `resolutionDate` without re-walking the
+        connection envelope.
         """
         query = """
         query MarketsForDedup($input: MarketsInput) {
           markets(input: $input) {
-            id
-            slug
-            question
-            resolutionDate
+            edges {
+              node {
+                id
+                slug
+                question
+                resolutionDate
+              }
+            }
           }
         }
         """
+        filter_: dict[str, Any] = {"status": "ACTIVE"}
+        if resolving_before_iso:
+            filter_["resolvingBefore"] = resolving_before_iso
         payload = self._post(
             jwt=jwt,
             query=query,
-            variables={"input": {"limit": limit, "status": "active"}},
+            variables={"input": {"first": first, "filter": filter_}},
             operation_name="MarketsForDedup",
         )
-        markets = ((payload or {}).get("data") or {}).get("markets")
-        if not isinstance(markets, list):
+        connection = ((payload or {}).get("data") or {}).get("markets") or {}
+        edges = connection.get("edges")
+        if not isinstance(edges, list):
             raise ProphetSchemaError(
-                "markets query did not return a list — schema may have drifted"
+                "markets query did not return a connection — schema may have drifted"
             )
-        return markets
+        return [
+            edge.get("node") or {}
+            for edge in edges
+            if isinstance(edge, dict)
+        ]
 
     def market(self, *, jwt: str, market_id: str) -> ProphetMarketRef:
         """Re-fetch a single Prophet market after createMarketWithBet.

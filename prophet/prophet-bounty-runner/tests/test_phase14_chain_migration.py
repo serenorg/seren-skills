@@ -117,6 +117,13 @@ def test_cmd_run_chain_schema_error_blocks_run_and_populates_blockers(
         lambda *_args, **_kw: load_fixture("prophet_otp_session.json"),
     )
     _seed_polymarket_and_bounty(stub_gateway)
+    # Phase-14b (#505): dedup must pass before the chain runs. Seed the
+    # MarketsForDedup default (no duplicates) so the run reaches the
+    # chain — the chain error is what this test exercises.
+    stub_transport.register(
+        "MarketsForDedup",
+        {"data": {"markets": {"edges": []}}},
+    )
     stub_transport.register(
         "InitiateMarket",
         ProphetSchemaError("InitiateMarketInput unknown — schema drift"),
