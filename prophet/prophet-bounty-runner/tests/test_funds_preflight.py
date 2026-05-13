@@ -63,7 +63,7 @@ def _seed_cash_balance(stub_transport, *, available_cents: int, total_cents: int
         {
             "data": {
                 "viewer": {
-                    "cashBalance": {
+                    "walletBalance": {
                         "availableCents": available_cents,
                         "totalCents": total_cents if total_cents is not None else available_cents,
                     }
@@ -82,7 +82,7 @@ def test_cash_balance_decodes_viewer_wallet_balance_payload(stub_transport) -> N
     """
     stub_transport.register(
         "ViewerWalletBalance",
-        {"data": {"viewer": {"cashBalance": {"availableCents": 1234, "totalCents": 5678}}}},
+        {"data": {"viewer": {"walletBalance": {"availableCents": 1234, "totalCents": 5678}}}},
     )
     client = MinimalProphetClient(transport=stub_transport)
 

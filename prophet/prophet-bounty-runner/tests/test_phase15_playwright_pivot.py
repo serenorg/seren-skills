@@ -84,7 +84,7 @@ def test_run_emits_pending_ui_submission_after_dedup(
     # double as a funds-preflight test.
     stub_transport.register(
         "ViewerWalletBalance",
-        {"data": {"viewer": {"cashBalance": {"availableCents": 10000, "totalCents": 10000}}}},
+        {"data": {"viewer": {"walletBalance": {"availableCents": 10000, "totalCents": 10000}}}},
     )
 
     result = run_command(

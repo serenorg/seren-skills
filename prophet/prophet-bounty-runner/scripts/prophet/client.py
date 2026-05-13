@@ -59,16 +59,20 @@ class ViewerIdentity:
 class ViewerCashBalance:
     """Prophet protocol cash — the balance debited at bet-form confirm.
 
-    Issue #524: `viewer.cashBalance` is the protocol-tracked balance,
-    NOT on-chain wallet USDC. Prophet's `/wallet` UI shows this value;
-    the bounty-runner's Phase-15 UI submission flow debits
-    `DEFAULT_INITIAL_BET_USDC` from it at the bet-form confirm step.
+    Issue #524 / #526: the GraphQL field on `Viewer` is
+    `walletBalance: WalletBalance!`, NOT `cashBalance`. Live audit
+    against `https://app.prophetmarket.ai/api/graphql` (2026-05-13):
 
-    Sibling skills already query this field:
-      - prophet-adversarial-auditor validates the Privy JWT against the
-        live `ViewerWalletBalance` operation on first-run setup.
-      - prophet-arb-bot's `placeOrder` mutation returns the same shape
-        on response (`cashBalance { availableCents totalCents }`).
+        Cannot query field "cashBalance" on type "Viewer".
+        Did you mean "balance" or "walletBalance"?
+
+    `Viewer.balance: Balance!` exists too but has a separate shape and
+    is meant for portfolio-level totals. The `cashBalance` field that
+    sibling skills mention lives on the `placeOrder` mutation result,
+    not on `Viewer` — easy collision; the live introspection settles it.
+
+    The dataclass name keeps `Cash` for caller readability — semantics
+    are unchanged, only the wire path moves to `viewer.walletBalance`.
     """
 
     available_cents: int
@@ -144,32 +148,27 @@ class MinimalProphetClient:
         return ViewerIdentity(id=viewer_id, email=viewer_email)
 
     def cash_balance(self, *, jwt: str) -> ViewerCashBalance:
-        """`Query: viewer.cashBalance { availableCents totalCents }`.
+        """`Query: viewer.walletBalance { availableCents totalCents }`.
 
-        Issue #524: the bounty-runner needs this preflight before
-        emitting `pending_ui_submission` candidates, because each
-        candidate's bet-form confirm step debits
-        `DEFAULT_INITIAL_BET_USDC` from this balance. Without the
-        preflight, every cron tick on an unfunded wallet wastes the
-        90-180s the agent spends per candidate on Validate + odds
-        calculation before discovering the cash shortfall.
-
-        The operation name `ViewerWalletBalance` is shared with
-        prophet-adversarial-auditor's first-run setup so cross-skill
-        schema fixtures stay aligned.
+        Issue #524 / #526: the operation name stays `ViewerWalletBalance`
+        for cross-skill alignment with prophet-adversarial-auditor's
+        first-run setup, but the field path on `Viewer` is
+        `walletBalance`, not `cashBalance` — the latter is the field on
+        `placeOrder` mutation results. Live-validated against Prophet
+        production 2026-05-13.
         """
         payload = self._post(
             jwt=jwt,
             query=(
                 "query ViewerWalletBalance {\n"
-                "  viewer { cashBalance { availableCents totalCents } }\n"
+                "  viewer { walletBalance { availableCents totalCents } }\n"
                 "}"
             ),
             variables={},
             operation_name="ViewerWalletBalance",
         )
         viewer = ((payload or {}).get("data") or {}).get("viewer") or {}
-        cash = viewer.get("cashBalance") or {}
+        cash = viewer.get("walletBalance") or {}
         return ViewerCashBalance(
             available_cents=int(cash.get("availableCents") or 0),
             total_cents=int(cash.get("totalCents") or 0),
