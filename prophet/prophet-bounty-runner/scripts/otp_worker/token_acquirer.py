@@ -68,7 +68,10 @@ def _query_viewer(*, transport: Any, jwt: str) -> tuple[str, str]:
     user = viewer.get("user") or {}
     viewer_id = user.get("id") or ""
     viewer_email = user.get("email") or ""
-    if not viewer_id or not viewer_email:
+    # Issue #518: wallet-only Prophet accounts (MetaMask, WalletConnect)
+    # have no email; bind on viewer_id alone. The bounty reconciler
+    # attributes by creator.id, not email.
+    if not viewer_id:
         errors = (result or {}).get("errors") or []
         msg = errors[0].get("message", "viewer null") if errors else "viewer payload incomplete"
         raise PrivyAuthFailed(f"viewer payload empty: {msg}")

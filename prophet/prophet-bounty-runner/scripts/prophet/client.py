@@ -110,7 +110,10 @@ class MinimalProphetClient:
         user = viewer.get("user") or {}
         viewer_id = user.get("id") or ""
         viewer_email = user.get("email") or ""
-        if not viewer_id or not viewer_email:
+        # Issue #518: wallet-only Prophet accounts (MetaMask, WalletConnect)
+        # have no email; bind on viewer_id alone. The bounty reconciler
+        # attributes by creator.id, not email.
+        if not viewer_id:
             raise ProphetSchemaError(
                 f"viewer query returned incomplete payload: id={viewer_id!r} email={viewer_email!r}"
             )
