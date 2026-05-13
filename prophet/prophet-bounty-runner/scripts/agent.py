@@ -187,6 +187,17 @@ def normalize_request(request: dict) -> dict:
     if not 1 <= out["submit_limit"] <= 8:
         raise ValueError("submit_limit out of range [1,8]")
 
+    # Issue #522: minimum_ui_headroom_seconds defaults to 600s (10 min)
+    # to cover Validate Question + odds calc + bet form + Privy signing
+    # prompt with a buffer. 0 disables the filter (useful for testing
+    # against past-fixture data); 86400 (24h) is the upper bound to keep
+    # configuration sane.
+    out["minimum_ui_headroom_seconds"] = int(
+        out.get("minimum_ui_headroom_seconds", 600)
+    )
+    if not 0 <= out["minimum_ui_headroom_seconds"] <= 86400:
+        raise ValueError("minimum_ui_headroom_seconds out of range [0,86400]")
+
     out["dry_run"] = bool(out.get("dry_run", DEFAULT_DRY_RUN))
     out["json_output"] = bool(out.get("json_output", False))
 
@@ -526,14 +537,24 @@ def _cmd_run(
         },
     )
 
-    # Step 3 — Polymarket source discovery (plan §14). Both gates here
+    # Step 3 — Polymarket source discovery (plan §14). Three gates here
     # gate out-of-window markets: the deadline gate drops far-future
-    # rows (e.g. `0xpoly-003` in the smoke fixture), and the
-    # past-cutoff gate (anchored on `_get_now()`) drops UMA-stuck
-    # rows whose `endDate` is months in the past — see the discovery
-    # module docstring for the live-probe evidence.
+    # rows (e.g. `0xpoly-003` in the smoke fixture), the past-cutoff
+    # gate (anchored on `_get_now()`) drops UMA-stuck rows whose
+    # `endDate` is months in the past (see the discovery module
+    # docstring for the live-probe evidence), and issue #522's
+    # execution-headroom gate drops rows resolving inside the
+    # Phase-15 UI submission window so `pending_ui_submission` stays
+    # actionable. Filtered headroom rows are surfaced in the envelope
+    # so the operator can see what was dropped without it blocking
+    # the run.
+    filtered_for_headroom: list[dict] = []
     sources = discover_polymarket_sources(
-        gateway=gateway, deadline=BOUNTY_DEADLINE, now=_get_now()
+        gateway=gateway,
+        deadline=BOUNTY_DEADLINE,
+        now=_get_now(),
+        minimum_headroom_seconds=req["minimum_ui_headroom_seconds"],
+        filtered_for_headroom=filtered_for_headroom,
     )
 
     # Step 4 — generate / score / filter candidates (plan §15).
@@ -561,6 +582,7 @@ def _cmd_run(
             "dry_run": True,
             "polymarket_sources_considered": len(sources),
             "candidates_generated": len(filtered),
+            "filtered_for_headroom": filtered_for_headroom,
             "prophet_markets_created": [],
             "bounty_submission": {"status": "not_attempted", "submission_id": ""},
             "prophet_auth": {
@@ -621,6 +643,7 @@ def _cmd_run(
             ],
             "polymarket_sources_considered": len(sources),
             "candidates_generated": len(filtered),
+            "filtered_for_headroom": filtered_for_headroom,
             "prophet_markets_created": [],
             "bounty_submission": {"status": "not_attempted", "submission_id": ""},
             "prophet_auth": {
@@ -648,6 +671,7 @@ def _cmd_run(
             "referral_code": join.referral_code,
             "reason": "prophet_unauthorized",
             "blockers": [f"markets_for_dedup_unauthorized:{exc}"],
+            "filtered_for_headroom": filtered_for_headroom,
             "prophet_markets_created": [],
             "bounty_submission": {"status": "not_attempted", "submission_id": ""},
             "prophet_auth": {
@@ -727,6 +751,7 @@ def _cmd_run(
         "referral_code": join.referral_code,
         "polymarket_sources_considered": len(sources),
         "candidates_generated": len(filtered),
+        "filtered_for_headroom": filtered_for_headroom,
         "prophet_auth": {
             "method": "otp",
             "source": auth_source,
@@ -811,6 +836,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--candidate-limit", type=int, default=12)
     parser.add_argument("--submit-limit", type=int, default=3)
+    parser.add_argument(
+        "--minimum-ui-headroom-seconds",
+        dest="minimum_ui_headroom_seconds",
+        type=int,
+        default=600,
+        help=(
+            "Drop candidates resolving inside this many seconds of `now`. "
+            "Sized to cover Validate + odds calc + bet form + Privy "
+            "signing prompt. 0 disables. See issue #522."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json-output", action="store_true")
     return parser.parse_args()
@@ -856,6 +892,7 @@ def main() -> int:
         "email_provider": args.email_provider,
         "candidate_limit": args.candidate_limit,
         "submit_limit": args.submit_limit,
+        "minimum_ui_headroom_seconds": args.minimum_ui_headroom_seconds,
         "dry_run": args.dry_run,
         "json_output": args.json_output,
     }
