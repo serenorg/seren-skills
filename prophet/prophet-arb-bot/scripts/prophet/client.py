@@ -52,6 +52,29 @@ class ViewerIdentity:
 
 
 @dataclass
+class ViewerCashBalance:
+    """Prophet protocol cash — debited at placeOrder collateral-lock.
+
+    Issue #524: each `placeOrder` LIMIT order locks `priceBps/10000 *
+    quantity_shares` USDC of protocol cash. Without a preflight, every
+    cron tick on an unfunded wallet attempts N orders that all reject
+    with insufficient funds; this flag flips the cycle to a structured
+    `deposit_required` block instead.
+
+    Operation name (`ViewerWalletBalance`) matches what
+    prophet-adversarial-auditor and prophet-bounty-runner use, so the
+    captured schema fixtures stay aligned across skills.
+    """
+
+    available_cents: int
+    total_cents: int
+
+    @property
+    def available_usdc(self) -> float:
+        return self.available_cents / 100.0
+
+
+@dataclass
 class ProphetMarketRef:
     """Subset of fields the post-create gate inspects.
 
@@ -113,6 +136,32 @@ class MinimalProphetClient:
                 f"viewer query returned incomplete payload: id={viewer_id!r} email={viewer_email!r}"
             )
         return ViewerIdentity(id=viewer_id, email=viewer_email)
+
+    def cash_balance(self, *, jwt: str) -> ViewerCashBalance:
+        """`Query: viewer.cashBalance { availableCents totalCents }`.
+
+        Issue #524: the arb-bot needs this preflight before the
+        `placeOrder` loop fires, because each LIMIT submission locks
+        USDC collateral. Sibling skills (prophet-adversarial-auditor,
+        prophet-bounty-runner) use the same operation name so cross-
+        skill schema fixtures stay aligned.
+        """
+        payload = self._post(
+            jwt=jwt,
+            query=(
+                "query ViewerWalletBalance {\n"
+                "  viewer { cashBalance { availableCents totalCents } }\n"
+                "}"
+            ),
+            variables={},
+            operation_name="ViewerWalletBalance",
+        )
+        viewer = ((payload or {}).get("data") or {}).get("viewer") or {}
+        cash = viewer.get("cashBalance") or {}
+        return ViewerCashBalance(
+            available_cents=int(cash.get("availableCents") or 0),
+            total_cents=int(cash.get("totalCents") or 0),
+        )
 
     # ------------------------------------------------------------------
     # Public reads — no JWT required, but we still pass it when present
@@ -346,15 +395,27 @@ class MinimalProphetClient:
     # transport delegation
 
     def _post(
-        self, *, jwt: str | None, query: str, variables: dict[str, Any]
+        self,
+        *,
+        jwt: str | None,
+        query: str,
+        variables: dict[str, Any],
+        operation_name: str | None = None,
     ) -> dict[str, Any]:
         """Single seam through which every authenticated Prophet call
         flows. The transport handles HTTP, 401 → ProphetUnauthorized,
         and `errors[]` → ProphetGraphQLError. Anything that comes back
         here must already be a dict with a populated `data` key.
+
+        `operation_name` is forwarded so Prophet's request logs and
+        test stubs can attribute calls to specific operations. Optional
+        for backward compat with callers that haven't been migrated.
         """
         response = self.transport.post_graphql(
-            jwt=jwt, query=query, variables=variables
+            jwt=jwt,
+            query=query,
+            variables=variables,
+            operation_name=operation_name,
         )
         if not isinstance(response, dict):
             raise ProphetSchemaError(

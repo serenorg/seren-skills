@@ -45,6 +45,13 @@ def seed_prophet_chain_happy_path(
         "MarketsForDedup",
         {"data": {"markets": {"edges": []}}},
     )
+    # Issue #524 funds preflight: a comfortably-funded balance keeps
+    # legacy happy-path tests focused on what they were written for
+    # without doubling as funds-preflight tests.
+    stub_transport.register(
+        "ViewerWalletBalance",
+        {"data": {"viewer": {"cashBalance": {"availableCents": 10000, "totalCents": 10000}}}},
+    )
     stub_transport.register(
         "InitiateMarket",
         {"data": {"initiateMarket": {"draftId": f"draft_{market_id}"}}},
