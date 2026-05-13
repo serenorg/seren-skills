@@ -6,10 +6,14 @@ bounty-runner's `markets_created` table; we just need a thin wrapper to
 fetch the current YES/NO price for a known conditionId.
 
 The polymarket-data publisher exposes Gamma API at the publisher root.
-A single market can be looked up at `/markets/{conditionId}` (or via the
-filter `?id=<conditionId>` depending on Gamma vintage). The Polymarket
-order book has a "midpoint" we read as our reference price; if midpoint
-is missing we fall back to the most recent trade price.
+Gamma rejects the by-id forms `/markets/<conditionId>` and
+`?id=<conditionId>` with HTTP 422 (`id is invalid` — Gamma's `id` is
+the internal integer market id, not the on-chain conditionId). The
+only working filter for conditionId is `?condition_ids=<conditionId>`
+(plural), which always returns a list — even for single-id queries.
+Live-bug regression (2026-05-13): the prior fetch chain failed
+silently, so the arb-bot reported `polymarket_prices_fetched=0` with
+no blocker entry and never quoted.
 """
 
 from __future__ import annotations
@@ -40,19 +44,15 @@ def fetch_market_price(
     if not condition_id:
         return None
     try:
-        # Gamma serves `/markets/<conditionId>` for direct lookup. Some
-        # publisher vintages prefer the filter form `/markets?id=...`;
-        # try direct first, fall back on 404.
+        # Gamma's by-conditionId filter is `?condition_ids=<id>`
+        # (plural). The single-id forms (`/markets/<id>` and
+        # `?id=<id>`) both 422 against Gamma's current vintage. See
+        # the module docstring for the live-probe details.
         response = gateway.call(
-            PUBLISHER, "GET", f"/markets/{condition_id}", body=None
+            PUBLISHER, "GET", f"/markets?condition_ids={condition_id}", body=None
         )
     except Exception:
-        try:
-            response = gateway.call(
-                PUBLISHER, "GET", f"/markets?id={condition_id}&limit=1", body=None
-            )
-        except Exception:
-            return None
+        return None
 
     market = _extract_market(response, condition_id)
     if market is None:
