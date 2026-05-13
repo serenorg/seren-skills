@@ -44,7 +44,7 @@ The skill acquires the Prophet session token automatically via Playwright using 
 5. Extract the JWT and pass it as `PROPHET_SESSION_TOKEN`
 
 **Important:**
-- Always use the email OTP path (wallet connect and Google OAuth do not work in Playwright)
+- Playwright cannot drive wallet-connect or Google OAuth (the browser-extension popups are out-of-frame), so this automated runbook uses the email-OTP path. Wallet-only Prophet accounts (MetaMask / WalletConnect) ARE supported at runtime — connect your wallet manually in your own browser, copy the JWT from `localStorage["privy:token"]`, and export it as `PROPHET_SESSION_TOKEN`. The viewer-bind treats `viewer.user.email` as optional and attributes by `viewer.user.id` alone (#518).
 - The token is a JWT starting with `eyJ...` and expires after ~1 hour
 - The `privy-session` cookie alone is not sufficient for authenticated GraphQL access
 
