@@ -74,6 +74,26 @@ Without both, the cycle still scores opportunities and emits the decision rows i
 
 When the user gives a direct exit instruction (`sell`, `close`, `exit`, `unwind`, `flatten`), execute the exit path immediately. Cancel every open prophet order surfaced by `--command status` and ask only the minimum clarifying question if the user also wants to liquidate held positions (which cannot be force-sold on Prophet without an offsetting order).
 
+## CLOB Exit Rules
+
+The arb-bot is a passive quoter — it submits LIMIT orders that rest on Prophet's CTF order book and waits for fills. It does not place marketable taker orders. The exit posture follows from that:
+
+- **Cancel-only on emergency exit.** The arb-bot does not submit a marketable sell to flatten inventory. The emergency path walks `viewer.orders` and cancels every open order surfaced. Held YES/NO positions stay on book and must be unwound by the operator out-of-band — Prophet has no force-close for the maker side.
+- **Quotes are snapped to Prophet's `tick_size`.** Prices are submitted via `PlaceOrderInput.priceBps` (Int, 0–10000 basis points). Prophet's implicit `tick size` is 1 bp ($0.0001). Quotes that violate the tick are rejected at submission.
+- **Never quote a passive sell above the best bid for an immediate exit.** Because the arb-bot's only exit primitive is `cancel_all`, there is no "passive sell at best bid" path on the user's behalf. If the user wants to liquidate YES at the best bid, they use Prophet's UI directly; the arb-bot will not sweep visible bid depth across the full book to flatten.
+- **Visible-book recovery is not estimated.** The arb-bot does not size taker exits; it never reads the full book to walk levels, so `estimated_fill_size` / `estimated_exit_value` numbers are not produced.
+
+## Emergency Exit
+
+The emergency-exit path is `cancel_all` over `viewer.orders` — no marketable sells, no position liquidation:
+
+1. Stop emitting new orders for the cycle.
+2. Walk every open order surfaced by `--command status` and cancel each via `cancelOrder`.
+3. Report the cancellation count and any errors in the run envelope.
+4. Leave held YES/NO positions alone — Prophet's CTF settles on resolution, not on demand.
+
+If the user needs immediate exposure removal (close all / unwind / flatten), they must liquidate via the Prophet UI manually. The arb-bot intentionally refuses to submit marketable sells on the user's behalf.
+
 ## Pre-Trade Checklist
 
 Before any live `run --yes-live`:
