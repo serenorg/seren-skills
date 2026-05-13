@@ -67,7 +67,18 @@ class Opportunity:
     health_warnings: list[str] = field(default_factory=list)
 
     def is_actionable(self) -> bool:
-        return self.size_usdc >= 1.0 and not self.health_warnings
+        """Whether the agent should submit this opportunity as an order.
+
+        The threshold decision is owned by ``score_pair`` — sizes below
+        ``config.min_trade_size_usdc`` are already zeroed there. So this
+        helper only needs to confirm that the score emitted a positive
+        size and no health warnings tripped a panic exit.
+
+        Historic bug (fixed): this used to hard-code ``size_usdc >= 1.0``,
+        which silently blocked legitimate trades whenever the operator
+        configured ``min_trade_size_usdc`` below $1.
+        """
+        return self.size_usdc > 0 and not self.health_warnings
 
 
 def score_pair(
