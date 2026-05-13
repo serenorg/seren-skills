@@ -6,7 +6,7 @@ that does not unambiguously satisfy the deadline gate must NOT propagate
 forward, because creating an out-of-window market on Prophet costs the user
 gas and time and earns nothing from the bounty.
 
-  1. Deadline filter — markets resolving on/after 2026-05-26T00:00:00Z are
+  1. Deadline filter — markets resolving on/after 2026-05-24T00:00:00Z are
      dropped (the bounty's hard deadline; anything later cannot resolve in
      time to earn).
   2. Settled filter — already-settled Polymarket markets are dropped (no
@@ -30,12 +30,12 @@ from polymarket.discovery import (  # type: ignore[import-not-found]
 from conftest import load_fixture  # type: ignore[import-not-found]
 
 
-DEADLINE = datetime(2026, 5, 26, 0, 0, 0, tzinfo=timezone.utc)
+DEADLINE = datetime(2026, 5, 24, 0, 0, 0, tzinfo=timezone.utc)
 
 
 _LIVE_PATH = (
-    "/markets?end_date_max=2026-05-26T00:00:00Z"
-    "&closed=false&active=true&limit=100"
+    "/markets?end_date_max=2026-05-24T00:00:00Z"
+    "&closed=false&active=true&limit=500"
 )
 
 

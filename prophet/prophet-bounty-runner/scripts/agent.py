@@ -38,19 +38,25 @@ concrete changes landed against the fixture:
     `.resolvingBefore`). The legacy `{limit, status}` flat shape was
     schema-drift from a pre-Phase-14 placeholder.
 
-Phase 14c follow-up (#505 still open after this PR): the captured
-fixture shows `CreateMarketWithBetInput` requires a
-`signedOrder: SignedOrderInput!` — an EIP-712 signed `OrderParams`
-struct. Until the bounty-runner gains operator-wallet signing
-capability (eth-account + EIP-712 typed-data signing of the
-`OrderParams` returned by `marketCreationOrderParams`), the chain's
-final `createMarketWithBet` step remains structurally broken. Phase
-14a's fail-closed UX guarantees this break surfaces as
-`reason=prophet_schema_drift` rather than as silent zero-output.
+Phase 15 (#505): the live audit (2026-05-13) showed Prophet uses two
+asymmetric signing models. `placeOrder` is **server-signed** — Prophet
+signs CTF orders on behalf of the user via Privy session signers; the
+arb-bot calls it with the JWT alone. `createMarketWithBet` is
+**client-signed** — Prophet's UI invokes the in-browser Privy SDK to
+sign the `OrderParams` typed-data the user can see and confirm. There
+is no agent-accessible API to drive that signing prompt headlessly.
 
-The arb-bot's `placeOrder` / `cancelOrder` / `userOrders` shapes have
-been verified against the captured fixture and require no code
-changes; they live in `prophet-arb-bot/scripts/prophet/orders.py`.
+The bounty-runner therefore stops at `marketCreationOrderParams` and
+emits a `pending_ui_submission` envelope. The agent (running in Seren
+Desktop with `mcp__playwright__*` tools) drives the Prophet web UI to
+finalize each market: navigate to `/create`, fill the question, await
+odds calc, fill the bet amount, accept the in-browser Privy signing
+prompt. See SKILL.md → Agent-driven UI submission runbook.
+
+The arb-bot's `placeOrder` / `cancelOrder` / `userOrders` shapes are
+live-validated against the captured fixture (#505 Phase 15 live test)
+and need no client-side signing; they live in
+`prophet-arb-bot/scripts/prophet/orders.py`.
 """
 
 from __future__ import annotations
@@ -64,7 +70,7 @@ from pathlib import Path
 from typing import Any
 
 from bounty.client import BountyClient
-from bounty.reconciler import MarketRecord, SubmissionReconciler
+from bounty.reconciler import MarketRecord  # SubmissionReconciler.fold moves to record_created_market in a follow-on PR
 from candidates import filter_candidates, generate_candidates, score_candidates
 from expected_bounty_spec import CUSTOMER_SLUG as EXPECTED_CUSTOMER_SLUG
 from expected_bounty_spec import validate_bounty as _validate_bounty_spec
@@ -84,8 +90,13 @@ ALLOWED_PROVIDERS = {"gmail", "outlook"}
 DEFAULT_BOUNTY_ID = "bounty_fixture_001"
 
 # Plan §3 ADR: every Prophet market must resolve before this instant.
-BOUNTY_DEADLINE = datetime(2026, 5, 26, 0, 0, 0, tzinfo=timezone.utc)
-BOUNTY_DEADLINE_ISO = "2026-05-26T00:00:00Z"
+# Phase 15 (#505): tightened from 2026-05-26 to 2026-05-24 because
+# Prophet's `/create` UI enforces `[2026-05-11, 2026-05-24]` as the
+# early-access resolution window. Submitting a market that resolves
+# 2026-05-24 .. 2026-05-25 will be rejected by `initiateMarket` with a
+# user-visible "Please try a different question" error.
+BOUNTY_DEADLINE = datetime(2026, 5, 24, 0, 0, 0, tzinfo=timezone.utc)
+BOUNTY_DEADLINE_ISO = "2026-05-24T00:00:00Z"
 
 # Phase-14a chain defaults (#505). The chain input shape is still
 # best-guess until the live schema probe lands; these constants are
@@ -152,10 +163,15 @@ def normalize_request(request: dict) -> dict:
         )
     out["email_provider"] = provider
 
-    out["candidate_limit"] = int(out.get("candidate_limit", 12))
+    # Phase 15 (#505): candidate_limit bumped to 500 so the discovery
+    # pass samples enough Polymarket markets to find qualifiers in the
+    # tight [2026-05-11, 2026-05-24] resolution window. submit_limit
+    # stays small — it caps how many of those candidates we hand off to
+    # the agent for UI submission per run.
+    out["candidate_limit"] = int(out.get("candidate_limit", 500))
     out["submit_limit"] = int(out.get("submit_limit", 3))
-    if not 1 <= out["candidate_limit"] <= 25:
-        raise ValueError("candidate_limit out of range [1,25]")
+    if not 1 <= out["candidate_limit"] <= 500:
+        raise ValueError("candidate_limit out of range [1,500]")
     if not 1 <= out["submit_limit"] <= 8:
         raise ValueError("submit_limit out of range [1,8]")
 
@@ -537,28 +553,20 @@ def _cmd_run(
             },
         }
 
-    # Step 6 — submit each surviving candidate via the four-step
-    # create-market chain (#505 Phase 14a). The chain is implemented in
-    # `MinimalProphetClient.create_market_chain` and replaces the
-    # obsolete `createMarket(source: PolymarketSourceInput!)` mutation
-    # that Prophet retired on mainnet.
+    # Step 6 — Phase 15 (#505): the four-step write chain
+    # (`createMarketWithBet`) is no longer driven from Python. Live
+    # audit (2026-05-13) confirmed `CreateMarketWithBetInput.signedOrder`
+    # requires an in-browser Privy signing prompt that no
+    # agent-accessible API can produce. Each surviving candidate is
+    # therefore emitted under `pending_ui_submission` and the agent
+    # (Seren Desktop with `mcp__playwright__*`) drives the Prophet
+    # `/create` UI per the SKILL.md runbook.
     #
-    # Fail-closed UX (#505):
-    #   - `ProphetUnauthorized` from any chain step ends the run with
-    #     `reason=prophet_unauthorized` (JWT expired mid-run).
-    #   - `ProphetSchemaError` / `ProphetGraphQLError` accumulate into
-    #     `blockers[]` and persist the existing
-    #     `prophet.create_market_failed` event. If zero markets are
-    #     created and any chain blocker fired, the run envelope reports
-    #     `status=blocked, reason=prophet_schema_drift` so the cron's
-    #     auto-pause path can act on it instead of quietly burning ticks.
-    #   - Eligibility-gate rejections (creator-id mismatch, late
-    #     resolutionDate) keep the existing event-row semantics and do
-    #     NOT block the run — they are expected business-rule outcomes,
-    #     not schema drift.
-    #
-    # Issue #493: writes still go directly to app.prophetmarket.ai via
-    # the transport (Authorization: Bearer <JWT>).
+    # The Prophet client is still needed for the dedup pre-filter
+    # below; the chain methods on it (`create_market_chain`, `market`)
+    # remain implemented but are no longer called from `_cmd_run`.
+    # Issue #493: dedup reads still go directly to app.prophetmarket.ai
+    # via the transport (Authorization: Bearer <JWT>).
     prophet_client = MinimalProphetClient(transport=transport)
 
     # Step 5.5 — Plan §14.3 dedup pre-filter (#505 Phase 14b). Prophet's
@@ -651,240 +659,46 @@ def _cmd_run(
     filtered = [
         c for c in filtered if c.question.strip().casefold() not in existing_questions
     ]
-    created: list[MarketRecord] = []
-    chain_blockers: list[str] = []
-    chain_unauthorized = False
-    for cand in filtered:
+    # Phase 15 (#505): handoff to the agent for UI-driven submission.
+    # See the module-level docstring for why createMarketWithBet has to
+    # go through the browser. Each candidate becomes a row in
+    # `pending_ui_submission`; the agent reads it, drives the Prophet
+    # web UI per the SKILL.md runbook, and reports back via
+    # `record_created_market(...)`.
+    pending_ui_submission: list[dict] = []
+    for cand in filtered[: req["submit_limit"]]:
         resolution_date_iso = cand.payload.get("source_resolution_date", "")
-        try:
-            new_market_id = prophet_client.create_market_chain(
-                jwt=jwt,
-                question=cand.question,
-                category_slug=_category_to_slug(cand.category),
-                topic_slug=DEFAULT_TOPIC_SLUG,
-                resolution_date_iso=resolution_date_iso,
-                initial_bet_usdc=DEFAULT_INITIAL_BET_USDC,
-            )
-        except ProphetUnauthorized as exc:
-            chain_unauthorized = True
-            chain_blockers.append(
-                f"prophet_unauthorized:{cand.polymarket_market_id}:{exc}"
-            )
-            storage.insert(
-                "events",
-                {
-                    "event_type": "prophet.create_market_failed",
-                    "polymarket_market_id": cand.polymarket_market_id,
-                    "error": f"unauthorized: {exc}",
-                },
-            )
-            # JWT is dead — no further chain calls will succeed.
-            break
-        except (ProphetSchemaError, ProphetGraphQLError) as exc:
-            chain_blockers.append(
-                f"create_market_chain_failed:{cand.polymarket_market_id}:"
-                f"{type(exc).__name__}:{exc}"
-            )
-            storage.insert(
-                "events",
-                {
-                    "event_type": "prophet.create_market_failed",
-                    "polymarket_market_id": cand.polymarket_market_id,
-                    "error": f"{type(exc).__name__}: {exc}",
-                },
-            )
-            continue
-
-        # Post-create re-fetch is now an explicit query — the chain's
-        # createMarketWithBet returns only `market.id`. We need
-        # `slug`, `resolutionDate`, and `creator.id` for the eligibility
-        # gates and the persisted MarketRecord.
-        try:
-            market_ref = prophet_client.market(jwt=jwt, market_id=new_market_id)
-        except ProphetUnauthorized as exc:
-            chain_unauthorized = True
-            chain_blockers.append(
-                f"prophet_unauthorized:{new_market_id}:{exc}"
-            )
-            storage.insert(
-                "events",
-                {
-                    "event_type": "prophet.create_market_failed",
-                    "polymarket_market_id": cand.polymarket_market_id,
-                    "error": f"post_create_unauthorized: {exc}",
-                },
-            )
-            break
-        except (ProphetSchemaError, ProphetGraphQLError) as exc:
-            chain_blockers.append(
-                f"market_refetch_failed:{new_market_id}:"
-                f"{type(exc).__name__}:{exc}"
-            )
-            storage.insert(
-                "events",
-                {
-                    "event_type": "prophet.create_market_postfetch_missed",
-                    "polymarket_market_id": cand.polymarket_market_id,
-                    "prophet_market_id": new_market_id,
-                    "error": f"{type(exc).__name__}: {exc}",
-                },
-            )
-            continue
-
-        creator_id = market_ref.creator_viewer_id
-        resolution_date = market_ref.resolution_date
-
-        # Eligibility gate (a): creator binds to participant viewer_id.
-        if viewer_id and creator_id and creator_id != viewer_id:
-            storage.insert(
-                "events",
-                {
-                    "event_type": "prophet.market_creator_mismatch",
-                    "prophet_market_id": market_ref.market_id,
-                    "expected_viewer_id": viewer_id,
-                    "actual_creator_id": creator_id,
-                },
-            )
-            continue
-
-        # Eligibility gate (b): resolution date strictly before deadline.
-        if resolution_date and resolution_date >= BOUNTY_DEADLINE_ISO:
-            storage.insert(
-                "events",
-                {
-                    "event_type": "prophet.market_resolution_date_ineligible",
-                    "prophet_market_id": market_ref.market_id,
-                    "resolution_date": resolution_date,
-                },
-            )
-            continue
-
-        record = MarketRecord(
-            prophet_market_id=market_ref.market_id,
-            prophet_market_url=market_ref.url or market_ref.slug,
-            polymarket_source_url=cand.polymarket_market_id,
-            resolution_date_iso=resolution_date,
-            prophet_viewer_id=creator_id or viewer_id,
-            created_at_iso=_now_iso(),
-        )
-        created.append(record)
-        storage.insert(
-            "markets_created",
-            {
-                "prophet_market_id": record.prophet_market_id,
-                "prophet_market_url": record.prophet_market_url,
-                "polymarket_source_url": record.polymarket_source_url,
-                "resolves_at": record.resolution_date_iso,
-                "prophet_viewer_id": record.prophet_viewer_id,
-                "bounty_id": bounty_id,
-            },
-        )
-
-    # Phase 14a fail-closed UX (#505): a JWT failure mid-chain or a run
-    # that produced no markets while any chain step raised needs to
-    # surface to the cron, not return a misleading `status: ok` with an
-    # empty `prophet_markets_created` list. Eligibility-gate rejections
-    # (which are business-rule outcomes, not schema drift) flow through
-    # the events table only and do NOT contribute to `chain_blockers`.
-    if chain_unauthorized:
-        # `runs.status` is enum-constrained (serendb_schema.sql §17.2);
-        # `blocked_auth` is the canonical value for any Prophet/Privy
-        # auth failure. The specific cause rides on `reason` in the
-        # envelope so the operator dashboard can still attribute it.
-        storage.insert(
-            "runs",
-            {
-                "bounty_id": bounty_id,
-                "command": "run",
-                "status": "blocked_auth",
-                "market_count": len(created),
-                "dry_run": False,
-                "error": "; ".join(chain_blockers)[:500],
-            },
-        )
-        return {
-            "status": "blocked",
-            "command": "run",
+        entry = {
+            "polymarket_market_id": cand.polymarket_market_id,
+            "question": cand.question,
+            "category": cand.category,
+            "category_slug": _category_to_slug(cand.category),
+            "resolution_date_iso": resolution_date_iso,
+            "initial_bet_usdc": DEFAULT_INITIAL_BET_USDC,
             "bounty_id": bounty_id,
-            "referral_code": join.referral_code,
-            "reason": "prophet_unauthorized",
-            "blockers": chain_blockers,
-            "prophet_markets_created": [
-                {
-                    "prophet_market_id": m.prophet_market_id,
-                    "prophet_market_url": m.prophet_market_url,
-                    "polymarket_source_url": m.polymarket_source_url,
-                    "resolves_at": m.resolution_date_iso,
-                }
-                for m in created
-            ],
-            "bounty_submission": {"status": "not_attempted", "submission_id": ""},
-            "prophet_auth": {
-                "method": "otp",
-                "source": auth_source,
-                "viewer_id": viewer_id,
-            },
+            "prophet_viewer_id": viewer_id,
         }
-    if chain_blockers and not created:
-        # `runs.status` enum (serendb_schema.sql §17.2) does not yet
-        # carry a dedicated `blocked_prophet_schema_drift` value;
-        # `blocked_publisher` is the closest canonical match (Prophet
-        # GraphQL is the misbehaving downstream). The specific cause
-        # rides on `reason` in the envelope so the operator dashboard
-        # can still attribute it.
+        pending_ui_submission.append(entry)
         storage.insert(
-            "runs",
+            "events",
             {
-                "bounty_id": bounty_id,
-                "command": "run",
-                "status": "blocked_publisher",
-                "market_count": 0,
-                "dry_run": False,
-                "error": "; ".join(chain_blockers)[:500],
+                "event_type": "prophet.market_pending_ui_submission",
+                **entry,
             },
         )
-        return {
-            "status": "blocked",
-            "command": "run",
-            "bounty_id": bounty_id,
-            "referral_code": join.referral_code,
-            "reason": "prophet_schema_drift",
-            "blockers": chain_blockers,
-            "polymarket_sources_considered": len(sources),
-            "candidates_generated": len(filtered),
-            "prophet_markets_created": [],
-            "bounty_submission": {"status": "not_attempted", "submission_id": ""},
-            "prophet_auth": {
-                "method": "otp",
-                "source": auth_source,
-                "viewer_id": viewer_id,
-            },
-        }
 
-    # Step 7 — fold prior markets and post one cumulative submission.
-    submission_id = ""
-    if created:
-        prior = _load_prior_markets(storage, bounty_id=bounty_id, exclude=created)
-        body_text = SubmissionReconciler().fold(
-            current_viewer_id=viewer_id,
-            prior_markets=prior,
-            current_run_markets=created,
-        )
-        submission = bounty_client.submit(bounty_id, body_text)
-        submission_id = (submission or {}).get("submission_id", "")
-
-    # Step 8 — persist the run row last so its status reflects what
-    # actually happened above. Zero-market runs are still `succeeded`
-    # per the §17.2 enum (the pipeline completed without error; the
-    # market_count column distinguishes empty days from active ones).
-    run_status = "succeeded"
+    # Step 8 — persist the run row. Phase 15 (#505): zero markets are
+    # ever created inside the Python subprocess now (the chain stops at
+    # marketCreationOrderParams). `market_count=0` reflects that; the
+    # agent reports back via `record_created_market` after each UI
+    # submission, which increments `markets_created` separately.
     storage.insert(
         "runs",
         {
             "bounty_id": bounty_id,
             "command": "run",
-            "status": run_status,
-            "market_count": len(created),
+            "status": "succeeded",
+            "market_count": 0,
             "dry_run": False,
         },
     )
@@ -901,19 +715,12 @@ def _cmd_run(
             "source": auth_source,
             "viewer_id": viewer_id,
         },
-        "prophet_markets_created": [
-            {
-                "prophet_market_id": m.prophet_market_id,
-                "prophet_market_url": m.prophet_market_url,
-                "polymarket_source_url": m.polymarket_source_url,
-                "resolves_at": m.resolution_date_iso,
-            }
-            for m in created
-        ],
-        "blockers": chain_blockers,
+        "prophet_markets_created": [],
+        "pending_ui_submission": pending_ui_submission,
+        "blockers": [],
         "bounty_submission": {
-            "status": "submitted" if submission_id else "not_attempted",
-            "submission_id": submission_id,
+            "status": "deferred_to_ui_submission",
+            "submission_id": "",
         },
     }
 

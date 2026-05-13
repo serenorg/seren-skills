@@ -8,7 +8,7 @@
   "dry_run": true,
   "inputs": {
     "bounty_id": "",
-    "candidate_limit": 12,
+    "candidate_limit": 500,
     "command": "run",
     "dry_run": false,
     "email_provider": "gmail",

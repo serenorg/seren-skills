@@ -42,7 +42,11 @@ from . import (
 
 # Bounty deadline that markets must resolve before to be eligible.
 # Plan §3 ADR + §16.1 post-create gate.
-BOUNTY_RESOLUTION_DEADLINE_ISO = "2026-05-26T00:00:00Z"
+# Phase 15 (#505): tightened to 2026-05-24 to match Prophet's `/create`
+# UI window. Must agree with `agent.BOUNTY_DEADLINE_ISO`; the drift
+# guard in tests/test_bounty_deadline_consistency.py fails the CI if
+# the two ever diverge.
+BOUNTY_RESOLUTION_DEADLINE_ISO = "2026-05-24T00:00:00Z"
 
 
 @dataclass

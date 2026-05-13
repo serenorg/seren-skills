@@ -37,7 +37,7 @@ def _seed_happy_path(stub_gateway, stub_transport=None) -> None:
     stub_gateway.register(
         "polymarket-data",
         "GET",
-        "/markets?end_date_max=2026-05-26T00:00:00Z&closed=false&active=true&limit=100",
+        "/markets?end_date_max=2026-05-24T00:00:00Z&closed=false&active=true&limit=500",
         load_fixture("polymarket_settling.json"),
     )
     # Phase-14a (#505): chain + post-create re-fetch, not single-shot.
@@ -70,31 +70,14 @@ def test_persist_run_writes_exactly_one_runs_row_per_invocation(
     assert len(stub_storage.runs) == 1
 
 
-def test_persist_writes_one_markets_created_row_per_executed_create(
-    base_run_request, stub_gateway, stub_storage, stub_transport, monkeypatch
-) -> None:
-    monkeypatch.setattr(
-        "agent.acquire_prophet_token_via_otp",
-        lambda *_args, **_kw: load_fixture("prophet_otp_session.json"),
-    )
-    _seed_happy_path(stub_gateway, stub_transport=stub_transport)
-
-    result = run_command(
-        base_run_request,
-        gateway=stub_gateway,
-        storage=stub_storage,
-        transport=stub_transport,
-    )
-
-    # Phase-14a (#505): one persisted row per `InitiateMarket` call, not
-    # per transport call (each chain attempt is now 5 ops + 1 re-fetch).
-    initiate_calls = [
-        c for c in stub_transport.calls if c.get("operation_name") == "InitiateMarket"
-    ]
-    assert len(stub_storage.markets_created) == len(initiate_calls)
-    assert len(stub_storage.markets_created) == len(
-        result["prophet_markets_created"]
-    )
+# Phase 15 (#505): `markets_created` rows are no longer written inside
+# `_cmd_run` — the chain stops at `marketCreationOrderParams` and the
+# agent records the result via a separate `record_created_market`
+# command after driving the Prophet UI. The
+# `test_persist_writes_one_markets_created_row_per_executed_create`
+# regression is therefore deleted; see
+# `test_phase15_playwright_pivot.py` for the pending_ui_submission
+# equivalent.
 
 
 def test_blocked_otp_run_persists_with_canonical_enum_value(

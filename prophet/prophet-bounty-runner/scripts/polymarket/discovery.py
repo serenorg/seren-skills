@@ -32,7 +32,10 @@ PUBLISHER = "polymarket-data"
 # arbitrary rows; we narrow to deadline-eligible open markets server-side
 # so the response we filter is already pre-trimmed.
 _BASE_PATH = "/markets"
-_DEFAULT_LIMIT = 100
+# Phase 15 (#505): bumped from 100 to 500 so the discovery pass has
+# enough headroom to find qualifiers inside Prophet's tight
+# [2026-05-11, 2026-05-24] resolution window.
+_DEFAULT_LIMIT = 500
 
 
 @dataclass

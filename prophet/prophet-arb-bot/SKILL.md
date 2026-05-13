@@ -85,18 +85,37 @@ Before any live `run --yes-live`:
 5. Verify the live `polymarket-data` publisher is reachable.
 6. If any check fails, fail closed with a structured `blocked` envelope and let the cron retry on the next tick.
 
-## Best-Guess `placeOrder` Notice
+## `placeOrder` is server-signed (#505 Phase 15)
 
-The Prophet `placeOrder` mutation has not yet been live-introspected against the canonical schema; the input shape in `scripts/prophet/orders.py` is a best-guess derived from the bounty-runner's `createMarketWithBet` pattern. If the live schema rejects the call, `ProphetSchemaError` is raised, the order is marked `blocked`, and the agent records the GraphQL error in the JSON envelope's `blockers` array so the operator can update the mutation shape and re-deploy.
+The Prophet `placeOrder` mutation is **server-signed**. Unlike
+`createMarketWithBet` (which requires a client-signed
+`SignedOrderInput`), `PlaceOrderInput` carries no signature — Prophet's
+backend signs the CTF order on behalf of the user via the user's Privy
+embedded wallet. Just the Privy JWT in the `Authorization` header is
+sufficient.
 
-To capture the live schema and pin field names, run:
+The mutation shape is live-validated against Prophet's production
+GraphQL endpoint (2026-05-13) and pinned in
+`tests/fixtures/prophet_schema.json`:
+
+```graphql
+mutation PlaceOrder($input: PlaceOrderInput!) {
+  placeOrder(input: $input) {
+    order { id status side outcome type priceBps quantityShares filledShares remainingShares }
+    cashBalance { availableCents totalCents }
+    errors { field message code }
+  }
+}
+```
+
+`PlaceOrderInput = {marketId, outcome, type, side, priceBps, quantity, timeInForce}`.
+
+If Prophet drifts the schema later, capture the new shape with:
 
 ```bash
 SEREN_API_KEY=... PROPHET_SESSION_TOKEN='eyJ...' \
   python3 scripts/agent.py --command probe-schema
 ```
-
-This writes `tests/fixtures/prophet_schema.json`. A follow-on PR will replace the best-guess shape with whatever the fixture pins.
 
 ## Continuous Runs (seren-cron)
 
@@ -173,7 +192,6 @@ python3 scripts/run_local_pull_runner.py --config config.json
 ## Disclaimers
 
 - Prophet is **mainnet** software. Orders submitted by this skill trade real USDC against real counterparties on Prophet's production deployment. Bad orders are not reversible; review your `min_spread` / `kelly_fraction` / `max_trade_size_usdc` before flipping `live_mode=true`.
-- The `placeOrder` GraphQL shape is a best guess until the schema fixture lands. If a live order is rejected, the agent fails closed; if a live order is accepted at a price the operator did not expect, the operator carries that risk.
 - This skill does not provide financial advice. Trading prediction markets is regulated differently across jurisdictions; the user is responsible for ensuring participation is legal where they live.
 
 ## Troubleshooting
@@ -192,7 +210,7 @@ python3 scripts/run_local_pull_runner.py --config config.json
 
 **`blockers` contains `place_order_failed:ProphetSchemaError`.**
 
-- The best-guess `placeOrder` mutation shape was rejected by Prophet's live schema. Run `agent.py --command probe-schema` to capture the live introspection, update `scripts/prophet/orders.py` to match, and re-deploy.
+- Prophet's `placeOrder` mutation drifted. Run `agent.py --command probe-schema` to capture the live introspection, diff against `tests/fixtures/prophet_schema.json`, and update `scripts/prophet/orders.py` to match the new shape.
 
 **`blockers` contains `duplicate_open_order:...`.**
 
