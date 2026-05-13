@@ -8,8 +8,8 @@ import polymarket_live
 def test_marketable_exit_uses_tick_size_best_bid_and_visible_depth(monkeypatch) -> None:
     raw_book = {
         "bids": [
-            {"price": "0.42", "size": "1.5"},
             {"price": "0.40", "size": "2.0"},
+            {"price": "0.42", "size": "1.5"},
         ],
         "asks": [{"price": "0.45", "size": "4.0"}],
         "tick_size": "0.001",
@@ -26,15 +26,15 @@ def test_marketable_exit_uses_tick_size_best_bid_and_visible_depth(monkeypatch) 
         lambda *_args, **_kwargs: 0,
     )
 
-    plan = polymarket_live.build_marketable_sell_order("token-1", 3.5)
+    plan = polymarket_live.build_marketable_sell_order("token-1", 2.5)
 
     assert plan["price"] == 0.001
     assert plan["tick_size"] == "0.001"
     assert plan["best_bid"] == 0.42
     assert plan["best_ask"] == 0.45
-    assert plan["estimated_fill_size"] == 3.5
+    assert plan["estimated_fill_size"] == 2.5
     assert plan["estimated_unfilled_size"] == 0.0
-    assert plan["estimated_exit_value_usd"] == 1.43
+    assert plan["estimated_exit_value_usd"] == 1.03
     assert plan["execution_style"] == "marketable-limit-min-tick"
 
 

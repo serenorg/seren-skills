@@ -277,6 +277,12 @@ def _book_levels(payload: Any, side: str) -> list[tuple[float, float]]:
             size = 0.0
         if price > 0.0 and size > 0.0:
             levels.append((price, size))
+
+    if side.upper() == "SELL":
+        levels.sort(key=lambda level: level[0], reverse=True)
+    else:
+        levels.sort(key=lambda level: level[0])
+
     return levels
 
 
