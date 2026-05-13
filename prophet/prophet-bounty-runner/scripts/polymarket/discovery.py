@@ -1,7 +1,7 @@
 """Polymarket source discovery — plan §14.
 
 Fetches the settling-markets feed from the polymarket-data publisher and
-applies four fail-closed filters before any row reaches candidate
+applies five fail-closed filters before any row reaches candidate
 generation:
 
   - deadline gate: resolution_date < deadline (strict <, not <=).
@@ -19,6 +19,17 @@ generation:
     parameter and a client-side guard catch this: server side
     narrows the response, client side fails closed if Gamma drops
     the filter at the source.
+  - execution-headroom gate (issue #522): rows whose `resolution_date
+    - now < minimum_headroom_seconds` are dropped. Phase-15 UI
+    submission needs Validate Question + odds calc (60-120s,
+    occasionally slower) + bet form + Privy signing prompt -
+    realistically 90-180s minimum. Candidates resolving inside that
+    window guarantee the seed bet is burned for nothing. Default
+    headroom is 0 (no filter) so existing callers stay backward
+    compatible; `_cmd_run` opts in via `minimum_ui_headroom_seconds`.
+    Dropped rows are appended to the caller-supplied
+    `filtered_for_headroom` sink so the operator can see what was
+    filtered without blocking the run.
   - settled gate: settled=True rows are skipped (no value mirroring an
     already-finalized market).
   - parseable date gate: rows missing or with malformed resolution_date
@@ -102,6 +113,8 @@ def discover_polymarket_sources(
     gateway: Any,
     deadline: datetime,
     now: datetime | None = None,
+    minimum_headroom_seconds: int = 0,
+    filtered_for_headroom: list[dict] | None = None,
 ) -> list[PolymarketSource]:
     """Fetch settling-markets feed and return the in-window subset.
 
@@ -109,6 +122,17 @@ def discover_polymarket_sources(
     instant deterministically. Production callers pass
     `datetime.now(timezone.utc)`; tests pin a fixed value so the
     generated URL is stable enough to stub.
+
+    `minimum_headroom_seconds` (issue #522): when > 0, drop rows whose
+    `resolution_date - now` is less than this threshold. Default 0 is
+    a no-op so existing callers stay backward compatible. The
+    operator-facing default is set by `_cmd_run` via the
+    `minimum_ui_headroom_seconds` input (600s).
+
+    `filtered_for_headroom`: when provided, the function appends one
+    dict per dropped row in the shape `{polymarket_market_id,
+    headroom_seconds, resolution_date_iso}` so the run envelope can
+    surface what was filtered without blocking.
     """
     deadline_utc = _ensure_utc(deadline)
     now_utc = _ensure_utc(now) if now is not None else datetime.now(timezone.utc)
@@ -153,6 +177,35 @@ def discover_polymarket_sources(
         # markets have surfaced live (see module docstring).
         if resolution_date <= now_utc:
             continue
+        # Issue #522: execution-headroom gate. Phase-15 UI submission
+        # cannot clear a candidate resolving inside `Validate +
+        # odds_calc + bet + Privy signing` (~90-180s realistically), so
+        # dropping these here keeps `pending_ui_submission` actionable.
+        # `minimum_headroom_seconds=0` is a no-op (backward compat with
+        # callers that haven't opted in).
+        if minimum_headroom_seconds > 0:
+            headroom = (resolution_date - now_utc).total_seconds()
+            if headroom < minimum_headroom_seconds:
+                if filtered_for_headroom is not None:
+                    candidate_id = (
+                        raw.get("conditionId") or raw.get("polymarket_market_id") or ""
+                    )
+                    # Preserve the publisher's raw ISO string so the
+                    # envelope echoes back exactly what Gamma reported.
+                    raw_iso = (
+                        raw.get("endDate")
+                        or raw.get("endDateIso")
+                        or raw.get("resolution_date")
+                        or ""
+                    )
+                    filtered_for_headroom.append(
+                        {
+                            "polymarket_market_id": candidate_id,
+                            "headroom_seconds": int(headroom),
+                            "resolution_date_iso": raw_iso,
+                        }
+                    )
+                continue
         # Issue #520: `polymarket_market_id` is the CTF conditionId — the
         # durable settlement key — NOT Gamma's `id`. The two are distinct
         # and must not be conflated; see the PolymarketSource docstring.

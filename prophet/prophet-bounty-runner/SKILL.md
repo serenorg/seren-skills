@@ -233,6 +233,19 @@ adapts via `playwright_evaluate` against the live DOM).
 
 ### Sequence (per `pending_ui_submission` entry)
 
+0. **Re-check execution headroom (issue #522).** Between the Python
+   runner emitting `pending_ui_submission` and this Playwright
+   sequence firing, seconds pass. Before driving any UI, compute
+   `headroom = entry.resolution_date_iso - now()` and silently
+   skip-and-advance to the next entry if `headroom <
+   minimum_ui_headroom_seconds` (default 600s; the same value Python
+   used at discovery time). Do **not** prompt the operator — this is
+   automation, not a question. Record one
+   `prophet.market_headroom_skipped` event so the run summary
+   reflects the drop, then continue. The Phase-15 UI flow needs
+   ~90–180s minimum (Validate ~10s + odds calc 60–120s + bet form +
+   Privy prompt); a candidate inside the floor will lose the seed
+   bet for nothing.
 1. Reuse the cached Privy JWT (`localStorage["privy:token"]`); if
    absent, run the **Agent-driven OTP runbook** first.
 2. `playwright_navigate(PROPHET_CREATE_URL)` and click

@@ -185,3 +185,57 @@ def test_polymarket_source_dataclass_carries_normalized_fields(stub_gateway) -> 
     assert source_001.resolution_date == datetime(2026, 5, 10, 23, 59, 0, tzinfo=timezone.utc)
     assert source_001.category == "crypto"
     assert source_001.settled is False
+
+
+def test_market_inside_minimum_headroom_is_excluded_and_surfaced(stub_gateway) -> None:
+    """Issue #522: candidates whose `resolution_date - now < headroom` are
+    dropped before reaching `pending_ui_submission`.
+
+    The Phase-15 UI submission flow needs Validate Question (~10s) + odds
+    calc (60-120s, occasionally slower) + bet form + Privy signing
+    prompt — realistically 90-180s minimum. Passing a candidate with
+    less headroom guarantees the seed bet is burned for nothing when
+    the market resolves before the agent clears the prompt. Operator
+    visibility into the drop matters: a separate sink list carries
+    `{polymarket_market_id, headroom_seconds, resolution_date_iso}` so
+    the run envelope can report what was filtered without blocking.
+    """
+    _seed_polymarket(
+        stub_gateway,
+        {
+            "sources": [
+                {
+                    # 300s headroom from NOW — under the 600s floor.
+                    "polymarket_market_id": "0xpoly-tight",
+                    "question": "Will it resolve in 5 minutes?",
+                    "resolution_date": "2026-05-08T00:05:00Z",
+                    "category": "crypto",
+                    "settled": False,
+                },
+                {
+                    # 3600s headroom — comfortably above the floor.
+                    "polymarket_market_id": "0xpoly-comfortable",
+                    "question": "Will it resolve in an hour?",
+                    "resolution_date": "2026-05-08T01:00:00Z",
+                    "category": "crypto",
+                    "settled": False,
+                },
+            ]
+        },
+    )
+
+    sink: list[dict] = []
+    sources = discover_polymarket_sources(
+        gateway=stub_gateway,
+        deadline=DEADLINE,
+        now=NOW,
+        minimum_headroom_seconds=600,
+        filtered_for_headroom=sink,
+    )
+
+    ids = {s.polymarket_market_id for s in sources}
+    assert ids == {"0xpoly-comfortable"}
+    assert len(sink) == 1
+    assert sink[0]["polymarket_market_id"] == "0xpoly-tight"
+    assert sink[0]["headroom_seconds"] == 300
+    assert sink[0]["resolution_date_iso"] == "2026-05-08T00:05:00Z"

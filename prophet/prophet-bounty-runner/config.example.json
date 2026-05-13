@@ -13,6 +13,7 @@
     "dry_run": false,
     "email_provider": "gmail",
     "json_output": false,
+    "minimum_ui_headroom_seconds": 600,
     "prophet_email": "",
     "submit_limit": 3
   },
