@@ -336,6 +336,15 @@ python3 scripts/run_local_pull_runner.py --config config.json
   → marketCreationOrderParams → createMarketWithBet` chain under
   the user's Privy account ([#505](https://github.com/serenorg/seren-skills/issues/505));
   bad submissions are visible to other Prophet users.
+- **Phase 14c follow-up.** The captured schema fixture at
+  `tests/fixtures/prophet_schema.json` shows
+  `CreateMarketWithBetInput` requires a `signedOrder: SignedOrderInput!`
+  — an EIP-712 signed `OrderParams` struct. Until the bounty-runner
+  gains operator-wallet signing capability, the chain's final
+  `createMarketWithBet` step will be rejected by Prophet and surface
+  as `reason=prophet_schema_drift` via the Phase 14a fail-closed UX.
+  Phase 14b (this PR) shipped the §14.3 dedup pre-filter and the
+  authoritative schema fixture; Phase 14c is the wallet-signing work.
 - Bounty earnings are subject to a **90-day hold** during which
   the operator can claw back fraudulent or invalid markets. A
   market that the operator clawbacks does not pay.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 10 + Phase 14a — end-to-end orchestration (plan §16).
+"""Phase 10 + Phase 14a + Phase 14b — end-to-end orchestration (plan §16).
 
 Wires the modules from phases 5–9 (OTP worker, Prophet client, bounty
 client, polymarket discovery, candidate generator) into the three
@@ -16,18 +16,41 @@ retired on mainnet is gone. The submission loop now drives
       → marketCreationOrderParams
       → createMarketWithBet
 
-The chain's input shapes (InitiateMarketInput, CreateMarketWithBetInput,
-the polling status/odds field names) remain best-guess until a live
-schema probe runs against a fresh Privy JWT — see #505 for the
-follow-up that pins them. The migration in this PR fixes the *wiring*
-and *fail-closed UX*: any chain failure surfaces into the run
-envelope's `blockers[]` array and downgrades `status` to `blocked`
-when zero markets were created, so the cron's auto-pause path sees
-the break instead of silently burning ticks.
+The chain's wiring and fail-closed UX landed in Phase 14a: any chain
+failure surfaces into the run envelope's `blockers[]` array and
+downgrades `status` to `blocked` when zero markets were created, so
+the cron's auto-pause path sees the break instead of silently burning
+ticks.
 
-Plan §14.3 mandatory dedup against existing Prophet markets is still
-deferred — the smoke fixture does not register a `markets` response,
-so calling `markets_for_dedup` would fail in tests today (#505).
+Issue #505 (Phase 14b) — captured the live Prophet GraphQL schema to
+`tests/fixtures/prophet_schema.json` (2026-05-13, 126 types). Two
+concrete changes landed against the fixture:
+
+  - **Plan §14.3 dedup pre-filter.** Before the chain submission loop
+    fires, `_cmd_run` calls `markets_for_dedup` and drops every
+    candidate whose `question` is already listed on Prophet (case-
+    insensitive exact match). If Prophet's markets query is
+    unreachable the run fails closed with
+    `reason=prophet_dedup_unavailable` — fail-open here would risk
+    duplicate creations that reconciliation refuses to credit.
+  - **`markets_for_dedup` query shape pinned** to the captured
+    `MarketsInput.filter` shape (`MarketFilter.status`,
+    `.resolvingBefore`). The legacy `{limit, status}` flat shape was
+    schema-drift from a pre-Phase-14 placeholder.
+
+Phase 14c follow-up (#505 still open after this PR): the captured
+fixture shows `CreateMarketWithBetInput` requires a
+`signedOrder: SignedOrderInput!` — an EIP-712 signed `OrderParams`
+struct. Until the bounty-runner gains operator-wallet signing
+capability (eth-account + EIP-712 typed-data signing of the
+`OrderParams` returned by `marketCreationOrderParams`), the chain's
+final `createMarketWithBet` step remains structurally broken. Phase
+14a's fail-closed UX guarantees this break surfaces as
+`reason=prophet_schema_drift` rather than as silent zero-output.
+
+The arb-bot's `placeOrder` / `cancelOrder` / `userOrders` shapes have
+been verified against the captured fixture and require no code
+changes; they live in `prophet-arb-bot/scripts/prophet/orders.py`.
 """
 
 from __future__ import annotations
@@ -537,6 +560,97 @@ def _cmd_run(
     # Issue #493: writes still go directly to app.prophetmarket.ai via
     # the transport (Authorization: Bearer <JWT>).
     prophet_client = MinimalProphetClient(transport=transport)
+
+    # Step 5.5 — Plan §14.3 dedup pre-filter (#505 Phase 14b). Prophet's
+    # `markets` query is the source of truth for currently-listed markets.
+    # We fetch the active set, normalize each row's `question` for case-
+    # insensitive comparison, and drop any candidate whose question is an
+    # exact match. Reconciliation refuses to credit duplicate creations,
+    # so submitting them blind wastes both the chain's `amountCents` seed
+    # bet and the bounty pool slot — fail closed if dedup is unreachable.
+    try:
+        existing_markets = prophet_client.markets_for_dedup(
+            jwt=jwt,
+            resolving_before_iso=BOUNTY_DEADLINE_ISO,
+        )
+    except (ProphetSchemaError, ProphetGraphQLError) as exc:
+        storage.insert(
+            "runs",
+            {
+                "bounty_id": bounty_id,
+                "command": "run",
+                "status": "blocked_dedup_unavailable",
+                "market_count": 0,
+                "dry_run": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        return {
+            "status": "blocked",
+            "command": "run",
+            "bounty_id": bounty_id,
+            "referral_code": join.referral_code,
+            "reason": "prophet_dedup_unavailable",
+            "blockers": [
+                f"markets_for_dedup_failed:{type(exc).__name__}:{exc}"
+            ],
+            "polymarket_sources_considered": len(sources),
+            "candidates_generated": len(filtered),
+            "prophet_markets_created": [],
+            "bounty_submission": {"status": "not_attempted", "submission_id": ""},
+            "prophet_auth": {
+                "method": "otp",
+                "source": auth_source,
+                "viewer_id": viewer_id,
+            },
+        }
+    except ProphetUnauthorized as exc:
+        storage.insert(
+            "runs",
+            {
+                "bounty_id": bounty_id,
+                "command": "run",
+                "status": "blocked_auth",
+                "market_count": 0,
+                "dry_run": False,
+                "error": f"dedup_unauthorized: {exc}",
+            },
+        )
+        return {
+            "status": "blocked",
+            "command": "run",
+            "bounty_id": bounty_id,
+            "referral_code": join.referral_code,
+            "reason": "prophet_unauthorized",
+            "blockers": [f"markets_for_dedup_unauthorized:{exc}"],
+            "prophet_markets_created": [],
+            "bounty_submission": {"status": "not_attempted", "submission_id": ""},
+            "prophet_auth": {
+                "method": "otp",
+                "source": auth_source,
+                "viewer_id": viewer_id,
+            },
+        }
+    existing_questions = {
+        (m.get("question") or "").strip().casefold()
+        for m in existing_markets
+        if isinstance(m, dict)
+    }
+    duplicate_candidates = [
+        c for c in filtered if c.question.strip().casefold() in existing_questions
+    ]
+    for cand in duplicate_candidates:
+        storage.insert(
+            "events",
+            {
+                "event_type": "prophet.market_dedup_skipped",
+                "polymarket_market_id": cand.polymarket_market_id,
+                "question": cand.question,
+            },
+        )
+    filtered = [
+        c for c in filtered if c.question.strip().casefold() not in existing_questions
+    ]
     created: list[MarketRecord] = []
     chain_blockers: list[str] = []
     chain_unauthorized = False

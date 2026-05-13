@@ -40,21 +40,18 @@ query IntrospectProphet {
     types {
       name
       kind
+      enumValues { name }
       fields {
         name
-        type {
+        args {
           name
-          kind
-          ofType { name kind }
+          type { name kind ofType { name kind ofType { name kind } } }
         }
+        type { name kind ofType { name kind ofType { name kind } } }
       }
       inputFields {
         name
-        type {
-          name
-          kind
-          ofType { name kind }
-        }
+        type { name kind ofType { name kind ofType { name kind } } }
       }
     }
   }
