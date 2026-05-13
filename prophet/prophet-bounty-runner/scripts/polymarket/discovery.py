@@ -1,19 +1,30 @@
 """Polymarket source discovery — plan §14.
 
 Fetches the settling-markets feed from the polymarket-data publisher and
-applies three fail-closed filters before any row reaches candidate
+applies four fail-closed filters before any row reaches candidate
 generation:
 
   - deadline gate: resolution_date < deadline (strict <, not <=).
     Rows resolving exactly at the deadline are dropped because the
     bounty's verifier window closes on the same instant — a market
     resolving at deadline cannot be paid before the window shuts.
+  - past-cutoff gate: resolution_date > now (strict >, not >=).
+    Polymarket Gamma keeps UMA-stuck markets in the "active" pool
+    long after their `endDate` has passed (live probe 2026-05-13:
+    Harvey Weinstein sentencing markets dated 2025-12-31 still
+    reported `closed=false active=true`). Mirroring one of those onto
+    Prophet creates a market for an event that already happened —
+    the bounty's reconciler refuses to credit it and the agent burns
+    the seed bet for nothing. Both a server-side `end_date_min` query
+    parameter and a client-side guard catch this: server side
+    narrows the response, client side fails closed if Gamma drops
+    the filter at the source.
   - settled gate: settled=True rows are skipped (no value mirroring an
     already-finalized market).
   - parseable date gate: rows missing or with malformed resolution_date
     are dropped. Without a verifiable date we cannot prove the deadline
-    gate, and creating an out-of-window Prophet market costs gas and
-    earns nothing.
+    or past-cutoff gates, and creating an out-of-window Prophet market
+    costs gas and earns nothing.
 
 The Polymarket source row is normalized into PolymarketSource so the
 downstream candidate generator does not have to handle raw publisher
@@ -48,14 +59,30 @@ class PolymarketSource:
 
 
 def discover_polymarket_sources(
-    *, gateway: Any, deadline: datetime
+    *,
+    gateway: Any,
+    deadline: datetime,
+    now: datetime | None = None,
 ) -> list[PolymarketSource]:
-    """Fetch settling-markets feed and return the deadline-eligible subset."""
+    """Fetch settling-markets feed and return the in-window subset.
+
+    `now` is injected so callers (and tests) control the past-cutoff
+    instant deterministically. Production callers pass
+    `datetime.now(timezone.utc)`; tests pin a fixed value so the
+    generated URL is stable enough to stub.
+    """
     deadline_utc = _ensure_utc(deadline)
+    now_utc = _ensure_utc(now) if now is not None else datetime.now(timezone.utc)
     deadline_iso = deadline_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # `order=endDate&ascending=true` makes the 500-row budget surface
+    # the soonest-resolving in-window markets first instead of being
+    # burned on far-future rows that we would filter out anyway.
     path = (
-        f"{_BASE_PATH}?end_date_max={deadline_iso}"
-        f"&closed=false&active=true&limit={_DEFAULT_LIMIT}"
+        f"{_BASE_PATH}?end_date_min={now_iso}"
+        f"&end_date_max={deadline_iso}"
+        f"&closed=false&active=true&order=endDate&ascending=true"
+        f"&limit={_DEFAULT_LIMIT}"
     )
     response = gateway.call(PUBLISHER, "GET", path, body=None)
     raw_sources = _extract_sources(response)
@@ -81,6 +108,11 @@ def discover_polymarket_sources(
         if resolution_date is None:
             continue
         if resolution_date >= deadline_utc:
+            continue
+        # Belt-and-suspenders: even though we ask Gamma for
+        # end_date_min=now, drop anything that slips through. UMA-stuck
+        # markets have surfaced live (see module docstring).
+        if resolution_date <= now_utc:
             continue
         market_id = raw.get("conditionId") or raw.get("id") or raw.get("polymarket_market_id")
         question = raw.get("question")

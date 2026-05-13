@@ -24,6 +24,8 @@ This file replaces:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from agent import run_command  # noqa: E402
 
 from conftest import load_fixture  # type: ignore[import-not-found]
@@ -45,7 +47,11 @@ def _seed_polymarket_and_bounty(stub_gateway) -> None:
     stub_gateway.register(
         "polymarket-data",
         "GET",
-        "/markets?end_date_max=2026-05-24T00:00:00Z&closed=false&active=true&limit=500",
+        (
+            "/markets?end_date_min=2026-05-08T00:00:00Z"
+            "&end_date_max=2026-05-24T00:00:00Z"
+            "&closed=false&active=true&order=endDate&ascending=true&limit=500"
+        ),
         load_fixture("polymarket_settling.json"),
     )
 
@@ -57,6 +63,12 @@ def test_run_emits_pending_ui_submission_after_dedup(
     monkeypatch.setattr(
         "agent.acquire_prophet_token_via_otp",
         lambda *_args, **_kw: load_fixture("prophet_otp_session.json"),
+    )
+    # Pin discovery's "now" so the end_date_min URL parameter matches
+    # the path registered in `_seed_polymarket_and_bounty`.
+    monkeypatch.setattr(
+        "agent._get_now",
+        lambda: datetime(2026, 5, 8, 0, 0, 0, tzinfo=timezone.utc),
     )
     _seed_polymarket_and_bounty(stub_gateway)
     # Dedup pre-filter is still in place — register an empty edges

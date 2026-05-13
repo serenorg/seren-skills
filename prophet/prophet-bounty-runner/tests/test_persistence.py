@@ -22,6 +22,8 @@ test_status_command_does_not_call_polymarket_or_prophet.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from agent import run_command  # noqa: E402
 
 from conftest import load_fixture, seed_prophet_chain_happy_path  # type: ignore[import-not-found]
@@ -37,7 +39,11 @@ def _seed_happy_path(stub_gateway, stub_transport=None) -> None:
     stub_gateway.register(
         "polymarket-data",
         "GET",
-        "/markets?end_date_max=2026-05-24T00:00:00Z&closed=false&active=true&limit=500",
+        (
+            "/markets?end_date_min=2026-05-08T00:00:00Z"
+            "&end_date_max=2026-05-24T00:00:00Z"
+            "&closed=false&active=true&order=endDate&ascending=true&limit=500"
+        ),
         load_fixture("polymarket_settling.json"),
     )
     # Phase-14a (#505): chain + post-create re-fetch, not single-shot.
@@ -57,6 +63,12 @@ def test_persist_run_writes_exactly_one_runs_row_per_invocation(
     monkeypatch.setattr(
         "agent.acquire_prophet_token_via_otp",
         lambda *_args, **_kw: load_fixture("prophet_otp_session.json"),
+    )
+    # Pin discovery's "now" so the end_date_min URL parameter matches
+    # the path registered in `_seed_happy_path`.
+    monkeypatch.setattr(
+        "agent._get_now",
+        lambda: datetime(2026, 5, 8, 0, 0, 0, tzinfo=timezone.utc),
     )
     _seed_happy_path(stub_gateway, stub_transport=stub_transport)
 
