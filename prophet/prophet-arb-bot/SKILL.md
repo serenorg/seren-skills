@@ -11,9 +11,11 @@ version: 0.1.0
 
 When invoked:
 
-1. Run `python3 scripts/agent.py --command setup --json-output` to verify auth and validate the operator's `inputs.manual_pairs`. Idempotent — safe to re-run.
-2. Run `python3 scripts/agent.py --command run --json-output` once and confirm the result is `status=ok` (or `status=ok_no_fills`). If `status=blocked`, surface the `reason` to the user and **do not** schedule cron until they acknowledge it.
-3. Only after a successful first run, call `python3 scripts/setup_cron.py create --yes-live` and start `python3 scripts/run_local_pull_runner.py` to claim due ticks. Without `--yes-live` the cron emits dry-run intents only.
+1. Run `python3 scripts/agent.py --command setup --json-output` to verify auth and apply the schema. Idempotent — safe to re-run.
+2. Run `python3 scripts/agent.py --command run --json-output` once. The result will be `status=ok` (cycle ran), `status=ok_no_fills` (cycle ran but no Prophet fills), or `status=blocked`.
+3. **If the run envelope carries `pending_ui_submission`** (auto-discover mode found Polymarket candidates that don't have Prophet mirrors yet), drive the **Agent-driven UI submission runbook** below for each entry. The runbook is shared verbatim with prophet-bounty-runner — the agent uses the same selectors and the same `record-created-market` follow-on command to persist captured `prophet_market_id`s back to `arb_pairs`. After driving the UI for every entry, re-run `agent.py --command run` so the bot trades the newly-created pairs.
+4. If `status=blocked`, surface the `reason` to the user and **do not** schedule cron until acknowledged.
+5. Only after a successful first run, call `python3 scripts/setup_cron.py create --yes-live` and start `python3 scripts/run_local_pull_runner.py` to claim due ticks. Without `--yes-live` the cron emits dry-run intents only.
 
 This validation gate prevents the cron and 12h local-pull poller from accruing cost before the runner has produced any qualifying scoring pass. Skill instructions are preloaded in context when this skill is active; do not perform filesystem searches or tool-driven exploration to rediscover them.
 
@@ -45,17 +47,45 @@ Two execution modes are supported, selected by `execution_mode` in `config.json`
 
 Set `"execution_mode": "delta_neutral"` and `"max_hedge_slippage_bps": 200.0` in `config.json` to enable. `delta_neutral` is also a real claim against `POLY_PRIVATE_KEY` / `POLY_API_KEY` / `POLY_PASSPHRASE` / `POLY_SECRET` — the live hedger fails closed if those creds are not loaded.
 
+## Auto-Discover Mode (#538)
+
+When `auto_discover.enabled = true` in `config.json`, every `--command run` cycle:
+
+1. **Fetches live Polymarket candidates** matching the campaign filter — active markets with 24h volume ≥ `min_24h_volume_usd` (default `$10,000`) that resolve in `[now + min_headroom_hours, resolution_deadline_iso]` (defaults: 24h headroom, 2026-05-24 deadline). Caps at `max_candidates` (default 50). No `manual_pairs` curation required — Jill invokes the skill and the campaign candidate set refreshes automatically.
+
+2. **Looks up matching Prophet markets** via `viewer.markets`. Matched pairs are UPSERTed into `arb_pairs` with `source_skill='auto_discover'` and arbed on the same cycle. Question matching is normalized substring (lowercase, punctuation stripped) — Prophet's `/create` AI preserves question text near-verbatim from the operator's spreadsheet, so the matcher is tight enough to avoid false positives.
+
+3. **Emits `pending_ui_submission`** for candidates Prophet hasn't created yet. The envelope shape is identical to the bounty-runner's, so the **Agent-driven UI submission runbook** below works for both skills without branching:
+   ```json
+   {
+     "polymarket_market_id": "0x...",
+     "question": "New York Yankees vs. Baltimore Orioles",
+     "category": "Sports",
+     "category_slug": "sports",
+     "resolution_date_iso": "2026-05-18T22:00:00Z",
+     "initial_bet_usdc": 1.0,
+     "bounty_id": "",
+     "prophet_viewer_id": "vid_...",
+     "source_skill": "prophet-arb-bot"
+   }
+   ```
+   Per entry, the agent drives Prophet `/create` (Validate Question → Create Market → bet form → Privy sign) and captures the new `prophet_market_id` from the redirected URL. The agent then calls `python3 scripts/agent.py --command record-created-market --polymarket-condition-id <id> --prophet-market-id <id>` to UPSERT the pair into `arb_pairs`. On the next `--command run` tick, the bot trades the new pair.
+
+4. **Refreshes the candidate sheet** at `state/arb_candidates.xlsx` (falls back to `.csv` if `openpyxl` is absent). Each row carries the pair status — `paired_this_run`, `already_paired`, `pending_prophet_creation`, or `unknown` — so the operator can audit the run's discovery output at a glance.
+
+When auto-discover is disabled (default), the existing `manual_pairs` flow is unchanged.
+
 ## What The Arb-Bot Is Not
 
 - Not a market-maker.
-- Not a Prophet market creator — that's the bounty-runner's job.
+- Not a Prophet market creator on its own — `pending_ui_submission` rows still require the agent to drive Prophet's `/create` UI via the Playwright runbook. The Python subprocess never signs the `createMarketWithBet` mutation directly (live-validated 2026-05-13: it requires a client-signed `SignedOrderInput` from the in-browser Privy SDK).
 - Not a position liquidator. Both modes are cancel-only on the maker side; held YES/NO inventory must be unwound by the operator through the Prophet UI.
 
 ## Required Inputs
 
 - `inputs.prophet_email` — same Privy account as the bounty-runner. Reuses the bounty-runner's session cache by default so the OTP flow only fires when both skills' caches are simultaneously stale.
 - `inputs.email_provider` — `gmail` or `outlook`. Used only on cold-start cache refresh.
-- `inputs.manual_pairs` — the list of pairs the agent trades. Each entry: `{ "prophet_market_id": "...", "polymarket_condition_id": "..." }`. Populate this from your bounty-runner's recent activity (the prophet markets it created carry the polymarket conditionId they were seeded from).
+- `inputs.manual_pairs` — explicit (prophet_market_id, polymarket_condition_id) pairs. **Optional when `auto_discover.enabled=true`** — auto-discover refreshes the candidate set from live Polymarket each cycle. Use `manual_pairs` for pairs outside the campaign filter or to force-pin a specific market.
 - `SEREN_API_KEY` — environment or `API_KEY` injected by Seren Desktop.
 
 ## Authentication
@@ -109,7 +139,7 @@ Before any live `run --yes-live`:
 
 1. Verify `SEREN_API_KEY` is loaded.
 2. Verify a fresh JWT is available — either via `PROPHET_SESSION_TOKEN` env or the bounty-runner's session cache.
-3. Verify `inputs.manual_pairs` has at least one entry (run `--command setup` first if not).
+3. Verify `inputs.manual_pairs` has at least one entry **OR** `auto_discover.enabled=true` (run `--command setup` first if neither is satisfied).
 4. Verify `https://app.prophetmarket.ai/api/graphql` is reachable (the prophet-ai publisher hop is gone — see #493).
 5. Verify the live `polymarket-data` publisher is reachable.
 6. **Funds preflight (#524):** after scoring, query `viewer.cashBalance.availableCents` once. In `single_leg` mode, if it cannot cover `sum(opp.size_usdc for opp in actionable[:max_orders_per_run])`, return a `status=blocked, reason=funds_insufficient, action=deposit_required` envelope before any `placeOrder` mutation fires. Skip preflight in dry-run cycles.

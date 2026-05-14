@@ -33,6 +33,10 @@ PUBLISHER = "polymarket-data"
 # so the response we filter is already pre-trimmed.
 _BASE_PATH = "/markets"
 _DEFAULT_LIMIT = 100
+# #538 — auto-discover sweeps a larger universe so the volume filter has
+# enough qualifiers to produce ~24 actionable candidates. Mirrors the
+# bounty-runner's Phase-15 bump (`scripts/polymarket/discovery.py`).
+_AUTO_DISCOVER_LIMIT = 500
 
 
 @dataclass
@@ -42,6 +46,10 @@ class PolymarketSource:
     resolution_date: datetime
     category: str | None
     settled: bool
+    # #538 — added so auto-discover can rank/filter by 24h volume.
+    # Defaults to 0.0 so existing callers that don't set it keep working.
+    volume_24h_usd: float = 0.0
+    slug: str | None = None
 
 
 def discover_polymarket_sources(
@@ -142,3 +150,115 @@ def _ensure_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Auto-discover (#538)
+#
+# Layered on top of the dedup-mode discover above. The arb-bot's
+# auto-discover path needs three additional gates the bounty-runner
+# discovery doesn't enforce:
+#
+#   - 24h volume floor — only mirror markets with real Polymarket flow,
+#     otherwise Prophet's odds-vs-Polymarket spread is meaningless.
+#   - Execution headroom — drop markets resolving inside the agent's
+#     UI-submission window (Validate ~10s + odds calc 60-120s + bet form
+#     + Privy prompt = ~90-180s minimum). Same default the bounty-runner
+#     applies (10 min).
+#   - Candidate cap — keep the per-tick batch small so Jill's first run
+#     finishes in minutes, not hours. Default 50.
+#
+# Returns the same `PolymarketSource` shape with `volume_24h_usd` /
+# `slug` populated, plus a per-row signal that lets the caller route
+# matched pairs vs. pending-creation entries downstream.
+
+
+def discover_arb_candidates(
+    *,
+    gateway: Any,
+    deadline: datetime,
+    min_24h_volume_usd: float = 10_000.0,
+    minimum_headroom_seconds: int = 24 * 3600,
+    max_candidates: int = 50,
+    now: datetime | None = None,
+) -> list[PolymarketSource]:
+    """Auto-discover qualifying Polymarket candidates for arb.
+
+    Pure-data: the publisher call is the only side effect. Caller is
+    responsible for the Prophet pair lookup and any persistence.
+    """
+    from datetime import timedelta
+
+    deadline_utc = _ensure_utc(deadline)
+    now_utc = _ensure_utc(now) if now is not None else datetime.now(tz=timezone.utc)
+    earliest_resolution = now_utc + timedelta(seconds=int(minimum_headroom_seconds))
+
+    deadline_iso = deadline_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    path = (
+        f"{_BASE_PATH}?end_date_min={now_iso}&end_date_max={deadline_iso}"
+        f"&closed=false&active=true"
+        f"&order=volume24hr&ascending=false&limit={_AUTO_DISCOVER_LIMIT}"
+    )
+    response = gateway.call(PUBLISHER, "GET", path, body=None)
+    raw_sources = _extract_sources(response)
+
+    keepers: list[PolymarketSource] = []
+    for raw in raw_sources:
+        if not isinstance(raw, dict):
+            continue
+        if any(raw.get(k) is True for k in ("closed", "archived", "resolved", "settled")):
+            continue
+        # Volume gate — strict >= so the operator can set the cutoff at
+        # exactly $10k and get the full 10-k tier.
+        volume_24h = _safe_volume(raw)
+        if volume_24h < float(min_24h_volume_usd):
+            continue
+        resolution_date = _parse_resolution_date(
+            raw.get("endDate") or raw.get("endDateIso") or raw.get("resolution_date")
+        )
+        if resolution_date is None:
+            continue
+        if resolution_date >= deadline_utc:
+            continue
+        if resolution_date < earliest_resolution:
+            # Markets too close to resolution waste a seed bet — the UI
+            # submission can't complete before the market closes.
+            continue
+        market_id = raw.get("conditionId") or raw.get("id") or raw.get("polymarket_market_id")
+        question = raw.get("question") or raw.get("title")
+        if not isinstance(market_id, str) or not market_id:
+            continue
+        if not isinstance(question, str) or not question:
+            continue
+        category = _extract_category(raw)
+        slug = raw.get("slug")
+        slug_str = slug if isinstance(slug, str) and slug else None
+        keepers.append(
+            PolymarketSource(
+                polymarket_market_id=market_id,
+                question=question,
+                resolution_date=resolution_date,
+                category=category,
+                settled=False,
+                volume_24h_usd=volume_24h,
+                slug=slug_str,
+            )
+        )
+        if len(keepers) >= int(max_candidates):
+            break
+    return keepers
+
+
+def _safe_volume(raw: dict[str, Any]) -> float:
+    """Extract 24h volume from Gamma's response. Field name varies by
+    response shape — try the live name first, then the legacy fallbacks."""
+    for key in ("volume24hr", "volumeNum24hr", "volume_24h", "volume24h"):
+        value = raw.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
