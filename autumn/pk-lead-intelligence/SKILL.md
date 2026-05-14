@@ -19,6 +19,39 @@ Apex. Authentication is the same path a person uses.
 This document is the operator handoff. Read it end-to-end before
 running the skill.
 
+## Status by Phase
+
+The skill ships in phases. Each phase landed on `main` as a `feat(...)`
+commit, but **"feat" means "gates and pure logic merged" — not
+"end-to-end live against a Salesforce sandbox."** Live correctness for
+every Playwright-driven write below is gated behind a sandbox-supervised
+operator checkpoint that has not yet happened.
+
+| Phase | Status | What is real | What is gated behind operator checkpoint |
+| :--- | :--- | :--- | :--- |
+| 1 — auth + storage | ✅ wired | Microsoft SSO + 1Password Service Account; storage-state reuse | n/a |
+| 2 — enrichment dry-run | ✅ wired | Lead fetch, Perplexity + Claude + LinkedIn research, `.docx` render | n/a |
+| 3 — schema + reporting provisioning | ⚠ gates merged | Field schema, idempotency checks, naming conventions, dashboard layout specs | All Salesforce Object Manager / Report Builder / Dashboard Builder DOM driving (`_drive_new_field`, `_drive_new_report`, `_drive_new_dashboard`, `_find_report_url_by_title`, `_find_dashboard_url_by_title`, `_list_existing_lead_field_api_names`) |
+| 4 — live Note write + weekly Google Doc | ⚠ gates merged | Cross-division gate, 24h recency gate, write-then-stamp order, weekly renderer (empty/populated), Drive upload-then-share order, single-line cron summary, `--allow-live` × `live_mode=true` dual gate | Lead Notes form DOM driving (`_drive_new_note_form`, `_read_last_enrichment_at`, `_update_last_enrichment_at`). Weekly doc's `lead_summaries=[]` is hardcoded until the `enriched_leads` ledger lands. |
+| 5 — cron + slash command + monitoring | ❌ not started | n/a | seren-cron jobs, local-pull runner, `/pk-status`, JSON envelope, `enriched_leads` ledger, failure-modes doc |
+
+### What the operator checkpoint requires
+
+A single half-day session with a Salesforce **sandbox** org (not prod) where:
+
+1. The operator drives `--command provision` headful and the engineer fills the Phase 3 stubs with the real Lightning selectors observed in that session.
+2. The operator drives `--command run --allow-live` headful against one PK Lead and the engineer fills the Phase 4 stubs with the real Note-form selectors.
+3. The engineer attaches the recording or selector transcript to the merge PR.
+4. The PR title is `feat(pk-lead-intelligence): land Phase 3/4 live drivers (operator checkpoint <date>)`.
+
+Until that session lands, the skill in `--allow-live` mode will either skip every Lead (because `is_packaging` defaults `False`) or crash with `NotImplementedError` on the first PK-flagged Lead. This is the issue tracked in [#563](https://github.com/serenorg/seren-skills/issues/563).
+
+### How to tell what state you are in
+
+- `--command run --dry-run` — works today end-to-end against a real org login. Produces a `.docx` of the rendered Note for the first matching Lead and exits.
+- `--command run --allow-live` — refuses to write unless `inputs.live_mode: true` is also set in `config.json`. Once both gates are set, the path advances until it hits one of the Phase 4 stubs and raises `NotImplementedError` with the function name. This is fail-closed-correct until the operator checkpoint runs.
+- `--command weekly` — works today; renders the weekly Google Doc and uploads + shares it. The doc currently always says "no enrichments this week" because the `enriched_leads` ledger that feeds `lead_summaries` is Phase 5 scope.
+
 ## When to Use
 
 - daily PK lead enrichment cron (runs on weekdays at 06:00 in the

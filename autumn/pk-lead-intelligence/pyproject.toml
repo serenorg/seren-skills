@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+markers = [
+    "sandbox: requires a live Salesforce sandbox org. Skipped by default; run with `pytest -m sandbox` during the operator checkpoint. See tests/sandbox/CHECKPOINT_RUNBOOK.md.",
+]
+addopts = "-m 'not sandbox' --strict-markers"
