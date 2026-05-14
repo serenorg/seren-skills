@@ -4,9 +4,8 @@ Run a single arb cycle. Best-guess Prophet placeOrder mutation is in
 `scripts/prophet/orders.py` (§3 ADR — fixture-validated in a follow-on PR).
 
 Commands:
-  --command setup           Apply SerenDB schema, seed arb_pairs from
-                            inputs.manual_pairs and (optionally) the
-                            bounty-runner's markets_created. Idempotent.
+  --command setup           Apply SerenDB schema and seed arb_pairs from
+                            inputs.manual_pairs. Idempotent.
   --command run             One arb cycle: refresh JWT, fetch prices, score,
                             place orders, persist. Default.
   --command status          Read-only summary of open Prophet orders +
@@ -68,7 +67,6 @@ from otp_worker.session_cache import SessionCache
 from persistence import (
     RunRecorder,
     apply_schema,
-    discover_pairs_from_bounty_runner,
     list_arb_pairs,
     list_open_orders,
     list_recent_runs,
@@ -203,7 +201,6 @@ def cmd_setup(*, config: AgentConfig) -> CycleResult:
         "auth": "unchecked",
         "schema": "unchecked",
         "pairs_seeded_manual": 0,
-        "pairs_seeded_from_bounty_runner": 0,
         "warnings": [],
     }
 
@@ -259,26 +256,7 @@ def cmd_setup(*, config: AgentConfig) -> CycleResult:
                 f"pair_upsert_failed:{prophet_id[:8]}:{type(exc).__name__}"
             )
 
-    # Optional: seed from bounty-runner. Empty until bounty-runner migrates.
-    inherited = discover_pairs_from_bounty_runner(target=target)
-    for row in inherited:
-        try:
-            upsert_arb_pair(
-                target=target,
-                prophet_market_id=row["prophet_market_id"],
-                polymarket_condition_id=row["polymarket_condition_id"],
-                source_skill="prophet-bounty-runner",
-            )
-            payload["pairs_seeded_from_bounty_runner"] = (
-                int(payload["pairs_seeded_from_bounty_runner"]) + 1
-            )
-        except Exception:
-            continue
-
-    if (
-        payload["pairs_seeded_manual"] == 0
-        and payload["pairs_seeded_from_bounty_runner"] == 0
-    ):
+    if payload["pairs_seeded_manual"] == 0:
         payload["warnings"].append(
             "no pairs seeded — populate inputs.manual_pairs in config.json"
         )
@@ -305,7 +283,7 @@ def _acquire_jwt(
     if env_jwt:
         return env_jwt, None, "env"
 
-    cache = SessionCache()  # default = bounty-runner cache
+    cache = SessionCache()
     entry = cache.read()
     if entry.is_fresh():
         return entry.jwt, entry.prophet_viewer_id, "cache"
