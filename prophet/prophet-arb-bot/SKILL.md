@@ -1,8 +1,6 @@
 ---
 name: prophet-arb-bot
 description: Operator-arb between Prophet and Polymarket on operator-supplied market pairs.
-author: Taariq Lewis
-version: 0.1.0
 ---
 
 # Prophet Arb Bot
