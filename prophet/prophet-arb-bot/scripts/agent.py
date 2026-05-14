@@ -36,7 +36,9 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from arbitrage.hedge import (
     DepthAssessment,
+    SeedIntent,
     assess_polymarket_depth,
+    derive_seed_intent,
     hedge_filled_order,
     unwind_seed_hedge_after_prophet_decline,
 )
@@ -1128,6 +1130,145 @@ def cmd_status(
 
 
 # ---------------------------------------------------------------------------
+# Compute-seed-intent (#548)
+#
+# After the agent clicks "Create Market" on Prophet's `/create` UI, the
+# `startOddsCalculation` response carries an `OddsCalculationSession` id.
+# Prophet's 6-model AI calc runs for 60–180s and the resulting
+# `pricing.yesFairValueBps` is the sharpest signal we have for the
+# per-market seed-side decision. The agent invokes this command between
+# Create-Market and the Polymarket-first `record-created-market` call to
+# get back a structured `{seed_side, hedge_side, hedge_price, edge_bps}`
+# the per-market hedge needs.
+
+
+def cmd_compute_seed_intent(
+    *,
+    config: AgentConfig,
+    polymarket_condition_id: str,
+    odds_session_id: str,
+    polymarket_yes_price: float,
+    transport: Any,
+    jwt: str,
+    poll: Any | None = None,
+    fetch_book: Any | None = None,
+    poll_interval_s: float = 2.0,
+    poll_timeout_s: float = 180.0,
+) -> CycleResult:
+    """Run the per-market seed-side decision using Prophet's AI fair value.
+
+    Returns a `seed_intent_ready` envelope on success and a structured
+    blocked envelope (`odds_session_not_completed`,
+    `prophet_market_not_viable`, `no_edge`, `polymarket_book_unavailable`)
+    otherwise. Callers feed the success payload's `seed_side` and
+    `hedge_price` into `record-created-market` for the
+    Polymarket-first hedge submission.
+
+    `poll` and `fetch_book` are injectable for tests; default wiring is
+    bound lazily so this command can be parsed and called without
+    importing the live polymarket transport.
+    """
+    if poll is None:
+        from prophet.odds_session import poll_odds_session as poll
+    if fetch_book is None:
+        from polymarket_live import fetch_book as fetch_book  # type: ignore
+
+    session = poll(
+        transport,
+        jwt=jwt,
+        session_id=odds_session_id,
+        interval_s=poll_interval_s,
+        timeout_s=poll_timeout_s,
+    )
+
+    base_payload: dict[str, Any] = {
+        "session_id": session.id,
+        "session_status": session.status,
+        "polymarket_condition_id": polymarket_condition_id,
+    }
+
+    if session.status != "COMPLETED" or session.pricing is None:
+        return CycleResult(
+            status="blocked",
+            reason="odds_session_not_completed",
+            payload={
+                **base_payload,
+                "rejection_reason": session.rejection_reason,
+                "completed_models": session.completed_models,
+                "total_models": session.total_models,
+            },
+        )
+
+    pricing = session.pricing
+    if not pricing.is_viable:
+        return CycleResult(
+            status="blocked",
+            reason="prophet_market_not_viable",
+            payload={
+                **base_payload,
+                "is_viable": False,
+                "prophet_fair_value_bps": pricing.yes_fair_value_bps,
+                "confidence_bps": pricing.confidence_bps,
+            },
+        )
+
+    try:
+        book_payload = fetch_book(polymarket_condition_id)
+    except Exception as exc:
+        return CycleResult(
+            status="blocked",
+            reason="polymarket_book_unavailable",
+            payload={
+                **base_payload,
+                "is_viable": True,
+                "prophet_fair_value_bps": pricing.yes_fair_value_bps,
+                "polymarket_yes_price": float(polymarket_yes_price),
+                "error": f"{type(exc).__name__}:{str(exc)[:200]}",
+            },
+        )
+
+    intent = derive_seed_intent(
+        prophet_fair_value_bps=pricing.yes_fair_value_bps,
+        polymarket_yes_price=float(polymarket_yes_price),
+        book_payload=book_payload,
+    )
+    if intent is None:
+        # Either zero edge or the side we need has no book depth. Surface
+        # both so the agent's log carries the actionable explanation.
+        return CycleResult(
+            status="blocked",
+            reason="no_edge",
+            payload={
+                **base_payload,
+                "is_viable": True,
+                "prophet_fair_value_bps": pricing.yes_fair_value_bps,
+                "polymarket_yes_price": float(polymarket_yes_price),
+                "best_bid": float(book_payload.get("best_bid") or 0.0),
+                "best_ask": float(book_payload.get("best_ask") or 0.0),
+            },
+        )
+
+    return CycleResult(
+        status="ok",
+        reason="seed_intent_ready",
+        payload={
+            **base_payload,
+            "is_viable": True,
+            "seed_side": intent.seed_side,
+            "hedge_side": intent.hedge_side,
+            "hedge_price": intent.hedge_price,
+            "tick_size": intent.tick_size,
+            "edge_bps": intent.edge_bps,
+            "prophet_fair_value_bps": pricing.yes_fair_value_bps,
+            "polymarket_yes_price": float(polymarket_yes_price),
+            "confidence_bps": pricing.confidence_bps,
+            "best_bid": float(book_payload.get("best_bid") or 0.0),
+            "best_ask": float(book_payload.get("best_ask") or 0.0),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Record-created-market (#538)
 #
 # After the agent drives Prophet's `/create` UI for a `pending_ui_submission`
@@ -1320,6 +1461,7 @@ def main(argv: list[str] | None = None) -> int:
             "status",
             "probe-schema",
             "record-created-market",
+            "compute-seed-intent",
         ],
         default="run",
     )
@@ -1395,6 +1537,35 @@ def main(argv: list[str] | None = None) -> int:
             "after the Polymarket seed hedge filled; unwind the Polymarket leg."
         ),
     )
+    parser.add_argument(
+        "--odds-session-id",
+        default="",
+        help=(
+            "(compute-seed-intent) Prophet OddsCalculationSession id from "
+            "the startOddsCalculation response. Required."
+        ),
+    )
+    parser.add_argument(
+        "--polymarket-yes-price",
+        default=0.0,
+        type=float,
+        help=(
+            "(compute-seed-intent) Current Polymarket YES price the agent "
+            "observed at /create time. Required."
+        ),
+    )
+    parser.add_argument(
+        "--poll-interval-s",
+        default=2.0,
+        type=float,
+        help="(compute-seed-intent) Seconds between odds-session polls.",
+    )
+    parser.add_argument(
+        "--poll-timeout-s",
+        default=180.0,
+        type=float,
+        help="(compute-seed-intent) Total seconds to wait for COMPLETED.",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "probe-schema":
@@ -1443,6 +1614,37 @@ def main(argv: list[str] | None = None) -> int:
             seed_size_usdc=args.seed_size_usdc,
             prophet_confirm_declined=args.prophet_confirm_declined,
         )
+    elif args.command == "compute-seed-intent":
+        jwt = os.environ.get("PROPHET_SESSION_TOKEN", "")
+        if not jwt:
+            result = CycleResult(
+                status="blocked",
+                reason="missing_session_token",
+                payload={
+                    "action": "export_PROPHET_SESSION_TOKEN",
+                },
+            )
+        elif not args.odds_session_id or not args.polymarket_condition_id:
+            result = CycleResult(
+                status="blocked",
+                reason="missing_required_args",
+                payload={
+                    "odds_session_id": args.odds_session_id,
+                    "polymarket_condition_id": args.polymarket_condition_id,
+                    "polymarket_yes_price": args.polymarket_yes_price,
+                },
+            )
+        else:
+            result = cmd_compute_seed_intent(
+                config=config,
+                polymarket_condition_id=args.polymarket_condition_id,
+                odds_session_id=args.odds_session_id,
+                polymarket_yes_price=args.polymarket_yes_price,
+                transport=transport,
+                jwt=jwt,
+                poll_interval_s=args.poll_interval_s,
+                poll_timeout_s=args.poll_timeout_s,
+            )
     else:
         parser.error(f"unknown command: {args.command}")
         return 2

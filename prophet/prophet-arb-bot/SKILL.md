@@ -13,7 +13,7 @@ When invoked:
 
 1. Run `python3 scripts/agent.py --command setup --json-output` to verify auth and apply the schema. Idempotent — safe to re-run.
 2. Run `python3 scripts/agent.py --command run --yes-live --json-output` once. The result will be `status=ok` (cycle ran), `status=ok_no_fills` (cycle ran but no Prophet fills), or `status=blocked`.
-3. **If the run envelope carries `pending_ui_submission`** (auto-discover mode found Polymarket candidates that don't have Prophet mirrors yet), drive the **Agent-driven UI submission runbook** below for each entry. The runbook submits the Polymarket hedge first through `record-created-market`, then the agent clicks Prophet Confirm only after the hedge succeeds. After driving the UI for every entry, re-run `agent.py --command run --yes-live` so the bot trades the newly-created pairs.
+3. **If the run envelope carries `pending_ui_submission`** (auto-discover mode found Polymarket candidates that don't have Prophet mirrors yet), drive the **Agent-driven UI submission runbook** below for each entry. The runbook drives `/create` through `startOddsCalculation`, calls `compute-seed-intent` to read Prophet's AI fair value out of the completed odds session and pick the seed/hedge sides, submits the Polymarket hedge first via `record-created-market`, and only clicks Prophet Confirm after the hedge succeeds. After driving the UI for every entry, re-run `agent.py --command run --yes-live` so the bot trades the newly-created pairs.
 4. If `status=blocked`, surface the `reason` to the user and **do not** schedule cron until acknowledged.
 5. Only after a successful first run, call `python3 scripts/setup_cron.py create --yes-live` and start `python3 scripts/run_local_pull_runner.py` to claim due ticks. `--yes-live` remains required for autonomous schedules as defense-in-depth.
 
@@ -392,17 +392,50 @@ If `max_fundable == 0` the cycle returns
 For each `pending_ui_submission` entry:
 
 1. Navigate to `https://app.prophetmarket.ai/create`, fill the question,
-   click `Validate Question`, then click `Create Market`.
-2. Wait for odds calculation to finish and the bet form to render.
-3. Fill the intended seed side and `entry.initial_bet_usdc`, but do
-   **not** click the Prophet Confirm / Privy signing prompt yet.
-4. Submit the Polymarket hedge first:
+   click `Validate Question`, then click `Create Market`. Capture the
+   `OddsCalculationSession.id` returned by `startOddsCalculation` — the
+   agent reads it from the network response or the page state.
+
+2. **Compute the seed-side decision from Prophet's AI fair value (#548).**
+   The 6-model calc runs for 60–180s. While it runs, fetch the current
+   Polymarket YES midpoint or best-of-book price (the
+   `pending_ui_submission` entry carries the Polymarket market id), then
+   poll the session and derive the intent in one call:
+
+   ```bash
+   PROPHET_SESSION_TOKEN="$JWT" python3 scripts/agent.py \
+     --command compute-seed-intent \
+     --odds-session-id "$OCS_ID" \
+     --polymarket-condition-id "$POLY_CID" \
+     --polymarket-yes-price "$POLY_YES_PRICE" \
+     --json-output
+   ```
+
+   - `status=ok, reason=seed_intent_ready` → use `seed_side`,
+     `hedge_price`, and `tick_size` from the payload for the next steps.
+   - `status=blocked, reason=odds_session_not_completed` → Prophet
+     rejected or failed the calc. Abandon this entry. No exposure was
+     created on either side.
+   - `status=blocked, reason=prophet_market_not_viable` → Prophet
+     completed but marked `isViable=false`. Abandon this entry.
+   - `status=blocked, reason=no_edge` → Prophet's fair value matches the
+     Polymarket price within the configured floor. Abandon — the seed
+     bet would have negative expected value.
+   - `status=blocked, reason=polymarket_book_unavailable` → the live
+     polymarket-data publisher is down. Retry on the next tick.
+
+3. Once the bet form renders, fill the seed side returned by
+   `compute-seed-intent` (`buy` or `sell`) and `entry.initial_bet_usdc`,
+   but do **not** click the Prophet Confirm / Privy signing prompt yet.
+
+4. Submit the Polymarket hedge first using the prices the previous step
+   returned:
 
    ```bash
    python3 scripts/agent.py --command record-created-market \
      --polymarket-condition-id "$POLY_CID" \
-     --prophet-seed-side buy \
-     --polymarket-marketable-price 0.001 \
+     --prophet-seed-side "$SEED_SIDE" \
+     --polymarket-marketable-price "$HEDGE_PRICE" \
      --seed-size-usdc "$INITIAL_BET_USDC" \
      --json-output
    ```
@@ -424,13 +457,14 @@ For each `pending_ui_submission` entry:
    ```
 
 8. If Prophet Confirm fails or the operator declines after the
-   Polymarket hedge filled, immediately unwind the Polymarket leg:
+   Polymarket hedge filled, immediately unwind the Polymarket leg using
+   the opposite-side marketable price from the live book:
 
    ```bash
    python3 scripts/agent.py --command record-created-market \
      --polymarket-condition-id "$POLY_CID" \
-     --prophet-seed-side buy \
-     --polymarket-marketable-price 0.999 \
+     --prophet-seed-side "$SEED_SIDE" \
+     --polymarket-marketable-price "$UNWIND_PRICE" \
      --seed-size-usdc "$INITIAL_BET_USDC" \
      --prophet-confirm-declined \
      --json-output
