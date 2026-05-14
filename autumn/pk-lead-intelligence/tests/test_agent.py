@@ -75,7 +75,7 @@ def test_resolve_salesforce_org_url_rejects_missing_inputs_key():
 
 
 def test_main_rejects_run_without_dry_run(capsys, tmp_path: Path):
-    """Phase 1 has no write paths; the `--dry-run` flag is required.
+    """Phase 2 has no SF write paths; the `--dry-run` flag is required.
 
     Without it, the CLI must exit non-zero and not invoke any
     downstream module.
@@ -87,8 +87,13 @@ def test_main_rejects_run_without_dry_run(capsys, tmp_path: Path):
     assert "--dry-run only" in captured.err
 
 
-def test_main_rejects_allow_live_in_phase_1(capsys, tmp_path: Path):
-    """`--allow-live` is reserved for Phase 2+. Phase 1 refuses it."""
+def test_main_rejects_allow_live_in_phase_2(capsys, tmp_path: Path):
+    """`--allow-live` is reserved for Phase 4+. Phase 2 refuses it.
+
+    Live Salesforce writes do not exist until Phase 4 — accepting the
+    flag earlier would let an unreviewed renderer ship Notes onto live
+    Lead records.
+    """
 
     rc = agent.main(
         [
@@ -102,7 +107,7 @@ def test_main_rejects_allow_live_in_phase_1(capsys, tmp_path: Path):
     )
     assert rc == 2
     captured = capsys.readouterr()
-    assert "reserved for Phase 2" in captured.err
+    assert "reserved for Phase 4" in captured.err
 
 
 # --------------------------------------------------------------------- #
@@ -110,16 +115,17 @@ def test_main_rejects_allow_live_in_phase_1(capsys, tmp_path: Path):
 # --------------------------------------------------------------------- #
 
 
-def test_main_dry_run_prints_first_lead(
+def test_main_dry_run_prints_first_lead_and_enrichment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys,
 ):
-    """When dry-run executes, the first-lead row must end up on stdout.
+    """Phase 2 dry-run: lead row + enrichment .docx path land on stdout.
 
-    Both downstream calls — op credential read and Playwright/SSO/
-    Lead orchestration — are monkeypatched. The test guards the
-    contract: parsed args → run dry-run → print structured row.
+    Both downstream seams are monkeypatched — `_run_dry_run` (Playwright /
+    1Password) and `_run_enrichment` (Perplexity / LinkedIn / Claude /
+    python-docx). The test guards the contract: parsed args → fetch lead
+    → enrich → print structured row + enrichment summary.
     """
 
     cfg = tmp_path / "config.json"
@@ -129,7 +135,12 @@ def test_main_dry_run_prints_first_lead(
         )
     )
 
+    from scripts.research.claude_hypothesis import Hypothesis
+    from scripts.research.linkedin_search import LinkedInCandidate
+    from scripts.research.perplexity import PerplexityResearch
     from scripts.sf import client as sf_client
+    from scripts.sf import enrich_lead
+    from scripts.output.note_renderer import NoteSection, RenderedNote
 
     fake_lead = sf_client.LeadRow(
         record_id="00Q5g00000XYZAbc",
@@ -143,7 +154,33 @@ def test_main_dry_run_prints_first_lead(
         captured_kwargs.update(kwargs)
         return fake_lead
 
+    fake_note = RenderedNote(
+        title="PK Lead Enrichment — Acme GmbH",
+        sections=[NoteSection("Lead", "x")],
+        enriched_at_utc="2026-05-14T10:30:00Z",
+    )
+    fake_docx_path = tmp_path / "output" / "00Q5g00000XYZAbc_Acme_GmbH.docx"
+    fake_enrichment = enrich_lead.EnrichmentResult(
+        note=fake_note,
+        docx_path=fake_docx_path,
+        perplexity=PerplexityResearch(summary="s", citations=[], raw_text=""),
+        linkedin=LinkedInCandidate(
+            url="https://www.linkedin.com/in/x/",
+            title=None,
+            match_confidence=42,
+            reasons=["linkedin-profile-url"],
+        ),
+        hypothesis=Hypothesis(text="h", recommended_action="a"),
+    )
+
+    enrichment_kwargs: dict = {}
+
+    def fake_run_enrichment(**kwargs):
+        enrichment_kwargs.update(kwargs)
+        return fake_enrichment
+
     monkeypatch.setattr(agent, "_run_dry_run", fake_run_dry_run)
+    monkeypatch.setattr(agent, "_run_enrichment", fake_run_enrichment)
 
     rc = agent.main(
         ["--command", "run", "--dry-run", "--config", str(cfg)]
@@ -151,14 +188,20 @@ def test_main_dry_run_prints_first_lead(
 
     assert rc == 0
     captured = capsys.readouterr()
+    # Phase 1 contract still holds.
     assert "00Q5g00000XYZAbc" in captured.out
     assert "Acme GmbH" in captured.out
+    # Phase 2 additions are surfaced.
+    assert str(fake_docx_path) in captured.out
+    assert "42%" in captured.out
 
-    # Org URL flowed through from config to the runner.
+    # Org URL flowed through from config to the SSO runner.
     assert (
         captured_kwargs["salesforce_org_url"]
         == "https://acme.lightning.force.com"
     )
+    # Enrichment received the fetched lead.
+    assert enrichment_kwargs["lead"] is fake_lead
 
 
 # --------------------------------------------------------------------- #
