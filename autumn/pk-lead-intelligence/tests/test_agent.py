@@ -75,40 +75,114 @@ def test_resolve_salesforce_org_url_rejects_missing_inputs_key():
 
 
 def test_main_rejects_run_without_dry_run(capsys, tmp_path: Path):
-    """Phase 2 has no SF write paths; the `--dry-run` flag is required.
-
-    Without it, the CLI must exit non-zero and not invoke any
-    downstream module.
-    """
+    """`--command run` with neither `--dry-run` nor `--allow-live`
+    is refused — Phase 4 unlocked `--allow-live` as an alternative
+    to `--dry-run`, but bare `run` still cannot proceed (we never
+    enrich silently without an operator opt-in)."""
 
     rc = agent.main(["--command", "run", "--config", str(tmp_path / "x.json")])
     assert rc == 2
     captured = capsys.readouterr()
-    assert "--dry-run only" in captured.err
+    assert "requires --dry-run or --allow-live" in captured.err
 
 
-def test_main_rejects_allow_live_for_run_command(capsys, tmp_path: Path):
-    """`--allow-live` against `--command run` is reserved for Phase 4+.
-
-    Phase 3 enables `--allow-live` for the `provision` command only.
-    The `run` command (Lead Note writes) stays gated until Phase 4 —
-    accepting the flag earlier would let an unreviewed renderer ship
-    Notes onto live Lead records.
+def test_main_run_allow_live_requires_live_mode_config(
+    capsys, tmp_path: Path
+):
+    """Phase 4: `--allow-live` for `--command run` requires the
+    `inputs.live_mode=true` config gate. Defense in depth —
+    either gate alone refuses to write to a live Lead record.
     """
 
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "inputs": {
+                    "salesforce_org_url": "https://acme.lightning.force.com",
+                    "live_mode": False,
+                }
+            }
+        )
+    )
     rc = agent.main(
         [
             "--command",
             "run",
-            "--dry-run",
             "--allow-live",
             "--config",
-            str(tmp_path / "x.json"),
+            str(cfg),
         ]
     )
     assert rc == 2
     captured = capsys.readouterr()
-    assert "reserved for Phase 4" in captured.err
+    assert "live_mode" in captured.err
+
+
+def test_main_run_emits_single_line_summary_for_cron(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    """The cron parses one line of stdout per run.
+
+    The contract is a single line prefixed with
+    `pk-lead-intelligence run:` carrying the run-state key/value
+    pairs the seren-cron `execution_results` table records. The
+    test asserts the prefix and the presence of the run-status
+    keys so the cron has a stable parse target.
+    """
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {"inputs": {"salesforce_org_url": "https://acme.lightning.force.com"}}
+        )
+    )
+
+    from scripts.research.claude_hypothesis import Hypothesis
+    from scripts.research.linkedin_search import LinkedInCandidate
+    from scripts.research.perplexity import PerplexityResearch
+    from scripts.sf import client as sf_client
+    from scripts.sf import enrich_lead
+    from scripts.output.note_renderer import NoteSection, RenderedNote
+
+    fake_lead = sf_client.LeadRow(
+        record_id="00Q5g00000XYZAbc",
+        name="Acme GmbH",
+        source_url="https://acme.lightning.force.com/lightning/o/Lead/list",
+    )
+    fake_note = RenderedNote(
+        title="t", sections=[NoteSection("Lead", "x")],
+        enriched_at_utc="2026-05-14T10:30:00Z",
+    )
+    fake_enrichment = enrich_lead.EnrichmentResult(
+        note=fake_note,
+        docx_path=tmp_path / "note.docx",
+        perplexity=PerplexityResearch(summary="s", citations=[], raw_text=""),
+        linkedin=None,
+        hypothesis=Hypothesis(text="h", recommended_action="a"),
+    )
+
+    monkeypatch.setattr(agent, "_run_dry_run", lambda **k: fake_lead)
+    monkeypatch.setattr(agent, "_run_enrichment", lambda **k: fake_enrichment)
+
+    rc = agent.main(
+        ["--command", "run", "--dry-run", "--config", str(cfg)]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    summary_lines = [
+        ln for ln in out.splitlines()
+        if ln.startswith("pk-lead-intelligence run:")
+    ]
+    assert len(summary_lines) == 1, (
+        f"Expected exactly one summary line. Got: {summary_lines!r}"
+    )
+    summary = summary_lines[0]
+    # The cron records these keys verbatim; their presence is a contract.
+    assert "command=run" in summary
+    assert "dry_run=true" in summary
+    assert "notes_written=" in summary
 
 
 # --------------------------------------------------------------------- #
