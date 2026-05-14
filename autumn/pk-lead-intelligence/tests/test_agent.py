@@ -12,6 +12,8 @@ the contract.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -157,3 +159,51 @@ def test_main_dry_run_prints_first_lead(
         captured_kwargs["salesforce_org_url"]
         == "https://acme.lightning.force.com"
     )
+
+
+# --------------------------------------------------------------------- #
+# Direct-script invocation (issue #541)                                  #
+# --------------------------------------------------------------------- #
+
+
+def test_direct_script_invocation_resolves_sibling_imports():
+    """`python scripts/agent.py --help` must succeed.
+
+    Issue #541: launching the CLI as a script — the form documented
+    in SKILL.md — used to die with `ModuleNotFoundError: No module
+    named 'scripts'` because Python puts `scripts/` on `sys.path`,
+    not the skill root. The fix is a one-line `sys.path` nudge at
+    the top of `scripts/agent.py`. This test is the canary that
+    locks the fix in: it runs the actual script in a fresh
+    subprocess (no pytest path discovery, no PYTHONPATH inheritance)
+    and asserts the import chain resolves cleanly.
+
+    A pure-import test would be insufficient — pytest puts the skill
+    root on `sys.path` itself, so the bug only surfaces in a real
+    subprocess launched the way the SKILL.md documents.
+    """
+
+    skill_root = Path(__file__).resolve().parent.parent
+    agent_script = skill_root / "scripts" / "agent.py"
+    assert agent_script.exists(), agent_script
+
+    # Strip PYTHONPATH so an inherited skill-root entry can't hide the
+    # bug. Run from a directory that is NOT the skill root for the
+    # same reason — sys.path[0] gets set to the script's parent
+    # (`scripts/`), exactly as in the SKILL.md-documented invocation.
+    env = {"PATH": "/usr/bin:/bin"}
+    result = subprocess.run(
+        [sys.executable, str(agent_script), "--help"],
+        cwd="/tmp",
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, (
+        f"direct-script invocation failed: rc={result.returncode}\n"
+        f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+    )
+    # Sanity check that argparse really rendered (i.e. we hit `main`,
+    # not a partial import). The CLI's `prog` name is stable.
+    assert "pk-lead-intelligence" in result.stdout

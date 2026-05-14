@@ -27,9 +27,21 @@ import json
 import sys
 from pathlib import Path
 
-from scripts.auth import op_service_account
-from scripts.auth import microsoft_sso
-from scripts.sf import client as sf_client
+# Make `from scripts.* import …` work when this file is launched as
+# a script (`python scripts/agent.py`), not just as a module
+# (`python -m scripts.agent`). Without this, Python puts the
+# `scripts/` directory on sys.path[0] and the `scripts` package
+# itself is unreachable. The `not in` guard keeps the nudge
+# idempotent so pytest and `python -m` paths — which already put
+# the skill root on sys.path — don't get a duplicate entry. Issue
+# #541.
+_SKILL_ROOT = str(Path(__file__).resolve().parent.parent)
+if _SKILL_ROOT not in sys.path:
+    sys.path.insert(0, _SKILL_ROOT)
+
+from scripts.auth import op_service_account  # noqa: E402
+from scripts.auth import microsoft_sso  # noqa: E402
+from scripts.sf import client as sf_client  # noqa: E402
 
 
 # --------------------------------------------------------------------- #
