@@ -429,3 +429,113 @@ def unwind_seed_hedge_after_prophet_decline(
         polymarket_fill_price=float(result.get("fill_price", 0.0)),
         error=None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-market seed-intent decision (#548)
+
+
+@dataclass(frozen=True)
+class SeedIntent:
+    """Side + marketable price for a delta-neutral seed bet.
+
+    The arb-bot's seed thesis: buy the YES leg on the venue that
+    underprices it, hedge with the opposite side on the other venue.
+    `seed_side` is the side the operator takes on Prophet (the YES leg);
+    `hedge_side` is the opposite side the Polymarket leg fills. Edge is
+    reported in basis points of probability so the agent can compare
+    against `scoring.min_spread` without unit gymnastics.
+    """
+
+    seed_side: str
+    hedge_side: str
+    hedge_price: float
+    tick_size: str
+    edge_bps: float
+
+
+def _snap_to_tick(price: float, tick_size: str, side: str) -> float:
+    """Match `polymarket_live.snap_price` semantics without the import.
+
+    BUY hedges hit asks → floor to current tick (we won't pay above ask).
+    SELL hedges hit bids → ceil to current tick (we won't sell below bid).
+    Result is clamped to `[tick, 1 - tick]` so it stays a valid CLOB
+    price and rounded to the tick's decimal precision.
+    """
+    import math
+
+    try:
+        tick = float(tick_size)
+    except (TypeError, ValueError):
+        tick = 0.01
+    if tick <= 0.0:
+        tick = 0.01
+    lower = tick
+    upper = 1.0 - tick
+    normalized = max(lower, min(upper, price))
+    ratio = normalized / tick
+    if side.upper() == "BUY":
+        snapped = math.floor(ratio) * tick
+    else:
+        snapped = math.ceil(ratio) * tick
+    decimals = len(tick_size.split(".")[1]) if "." in tick_size else 0
+    return round(max(lower, min(upper, snapped)), max(decimals, 0))
+
+
+def derive_seed_intent(
+    *,
+    prophet_fair_value_bps: int,
+    polymarket_yes_price: float,
+    book_payload: dict[str, Any],
+    min_edge_bps: float = 0.0,
+) -> SeedIntent | None:
+    """Decide the seed/hedge sides from Prophet's AI fair value vs the
+    live Polymarket YES price. Returns None when there is no actionable
+    edge or the Polymarket book lacks the required side.
+
+    Rule:
+      - Prophet fair value > Polymarket price → Prophet underprices YES;
+        operator buys YES on Prophet, hedge sells YES on Polymarket at
+        best-bid snapped to tick.
+      - Prophet fair value < Polymarket price → Polymarket underprices NO;
+        operator sells YES on Prophet (== buys NO), hedge buys YES on
+        Polymarket at best-ask snapped to tick.
+
+    Edge is the absolute probability gap in bps. The function does not
+    apply a slippage budget — `assess_polymarket_depth` already does
+    that with `max_hedge_slippage_bps` in the preflight loop.
+    """
+    prophet_yes = max(0.0, min(1.0, prophet_fair_value_bps / 10_000.0))
+    poly_yes = max(0.0, min(1.0, float(polymarket_yes_price)))
+    delta = prophet_yes - poly_yes
+    edge_bps = abs(delta) * 10_000.0
+    if edge_bps <= min_edge_bps:
+        return None
+
+    tick_size = str(book_payload.get("tick_size") or "0.01")
+    if delta > 0:
+        # Prophet says YES is more likely than Polymarket.
+        best_bid = float(book_payload.get("best_bid") or 0.0)
+        if best_bid <= 0.0:
+            return None
+        hedge_price = _snap_to_tick(best_bid, tick_size, "SELL")
+        return SeedIntent(
+            seed_side="buy",
+            hedge_side="sell",
+            hedge_price=hedge_price,
+            tick_size=tick_size,
+            edge_bps=edge_bps,
+        )
+
+    # delta < 0 — Prophet says YES is less likely than Polymarket.
+    best_ask = float(book_payload.get("best_ask") or 0.0)
+    if best_ask <= 0.0:
+        return None
+    hedge_price = _snap_to_tick(best_ask, tick_size, "BUY")
+    return SeedIntent(
+        seed_side="sell",
+        hedge_side="buy",
+        hedge_price=hedge_price,
+        tick_size=tick_size,
+        edge_bps=edge_bps,
+    )
