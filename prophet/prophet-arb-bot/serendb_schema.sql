@@ -94,6 +94,20 @@ ALTER TABLE arb_orders
     ADD COLUMN IF NOT EXISTS polymarket_order_id     TEXT,
     ADD COLUMN IF NOT EXISTS hedge_status            TEXT DEFAULT 'pending';
 
+ALTER TABLE arb_orders
+    DROP CONSTRAINT IF EXISTS arb_orders_hedge_status_check;
+
+ALTER TABLE arb_orders
+    ADD CONSTRAINT arb_orders_hedge_status_check
+    CHECK (hedge_status IS NULL OR hedge_status IN (
+        'pending',
+        'hedged',
+        'naked_exposure',
+        'unwound',
+        'hedge_failed_no_commit',
+        'unwound_after_prophet_decline'
+    ));
+
 CREATE INDEX IF NOT EXISTS arb_orders_hedge_status_idx
     ON arb_orders (hedge_status);
 

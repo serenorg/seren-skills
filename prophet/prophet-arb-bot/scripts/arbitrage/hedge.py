@@ -184,6 +184,11 @@ class HedgeOutcome:
         the Prophet position manually via the UI.
       - ``unwound``: Polymarket order rejected but Prophet order was
         still open and was cancelled before fill. Clean exit.
+      - ``hedge_failed_no_commit``: seed hedge failed before Prophet
+        Confirm, so the agent must not commit the Prophet seed.
+      - ``unwound_after_prophet_decline``: seed hedge filled first, then
+        Prophet Confirm failed/declined, and the Polymarket leg was
+        marketably reversed.
     """
 
     hedge_status: str
@@ -312,7 +317,7 @@ def hedge_filled_order(
 
 def hedge_seed_bet(
     *,
-    prophet_market_id: str,
+    prophet_market_id: str = "",
     polymarket_condition_id: str,
     prophet_seed_side: str,
     size_usdc: float,
@@ -322,12 +327,10 @@ def hedge_seed_bet(
     """Submit the opposing Polymarket order for a Prophet Phase 15 seed.
 
     Differs from ``hedge_filled_order`` in one critical way: the Prophet
-    seed is **already committed** at the moment this is called (the
-    agent just clicked Confirm on the in-browser Privy prompt). There
-    is no `cancelOrder` for a seed — it created the market itself —
-    so a hedge failure must NOT route to ``unwind_prophet``. We record
-    ``naked_exposure`` honestly and let the operator decide whether to
-    liquidate manually.
+    seed has **not** been committed yet. This function runs before the
+    agent clicks Confirm in the in-browser Privy prompt. If the
+    Polymarket hedge fails, the agent aborts the Prophet confirm and
+    there is no exposure on either venue.
 
     ``prophet_seed_side`` is the side the operator bet on Prophet
     (``"buy"`` for YES, ``"sell"`` for NO). The hedge takes the
@@ -343,8 +346,62 @@ def hedge_seed_bet(
             marketable_price=float(marketable_price),
         )
     except Exception as exc:
-        # NO unwind attempt: the Prophet seed is already committed.
-        # Naked exposure is surfaced for operator follow-up.
+        return HedgeOutcome(
+            hedge_status="hedge_failed_no_commit",
+            polymarket_order_id=None,
+            polymarket_filled_qty=0.0,
+            polymarket_fill_price=0.0,
+            error=str(exc)[:200],
+        )
+
+    polymarket_order_id = (
+        result.get("polymarket_order_id") if isinstance(result, dict) else None
+    )
+    if not polymarket_order_id:
+        return HedgeOutcome(
+            hedge_status="hedge_failed_no_commit",
+            polymarket_order_id=None,
+            polymarket_filled_qty=0.0,
+            polymarket_fill_price=0.0,
+            error="polymarket_submit_returned_no_order_id",
+        )
+
+    return HedgeOutcome(
+        hedge_status="hedged",
+        polymarket_order_id=str(polymarket_order_id),
+        polymarket_filled_qty=float(result.get("filled_qty", 0.0)),
+        polymarket_fill_price=float(result.get("fill_price", 0.0)),
+        error=None,
+    )
+
+
+def unwind_seed_hedge_after_prophet_decline(
+    *,
+    polymarket_condition_id: str,
+    prophet_seed_side: str,
+    size_usdc: float,
+    marketable_price: float,
+    hedger: Hedger,
+) -> HedgeOutcome:
+    """Reverse a seed hedge when Prophet Confirm fails after Polymarket
+    already filled.
+
+    Polymarket is the recoverable leg. The original seed hedge used the
+    opposite of ``prophet_seed_side``; the unwind therefore submits the
+    same side as the intended Prophet seed.
+    """
+    unwind_side = prophet_seed_side.lower()
+    if unwind_side not in {"buy", "sell"}:
+        raise ValueError(f"unknown prophet side: {prophet_seed_side!r}")
+
+    try:
+        result = hedger.submit_hedge(
+            condition_id=polymarket_condition_id,
+            hedge_side=unwind_side,
+            size_usdc=float(size_usdc),
+            marketable_price=float(marketable_price),
+        )
+    except Exception as exc:
         return HedgeOutcome(
             hedge_status="naked_exposure",
             polymarket_order_id=None,
@@ -362,11 +419,11 @@ def hedge_seed_bet(
             polymarket_order_id=None,
             polymarket_filled_qty=0.0,
             polymarket_fill_price=0.0,
-            error="polymarket_submit_returned_no_order_id",
+            error="polymarket_unwind_returned_no_order_id",
         )
 
     return HedgeOutcome(
-        hedge_status="hedged",
+        hedge_status="unwound_after_prophet_decline",
         polymarket_order_id=str(polymarket_order_id),
         polymarket_filled_qty=float(result.get("filled_qty", 0.0)),
         polymarket_fill_price=float(result.get("fill_price", 0.0)),
