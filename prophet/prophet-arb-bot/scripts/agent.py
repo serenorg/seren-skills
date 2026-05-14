@@ -47,8 +47,13 @@ from arbitrage.scoring import (
     ScoringConfig,
     score_batch,
 )
+from config_bootstrap import bootstrap_config_if_missing
 from db import ResolvedTarget, get_target
 from discovery import AutoDiscoverConfig, AutoDiscoverResult, run_auto_discover
+from discovery.seed_qualifier import (
+    QualifierDecision,
+    qualify_and_trim_pending,
+)
 from otp_worker import (
     EmailPublisherUnavailable,
     IdentityMismatch,
@@ -69,8 +74,10 @@ from persistence import (
 )
 from funds_preflight import (
     evaluate_funds_preflight,
+    evaluate_seed_funds_preflight,
     evaluate_two_venue_funds_preflight,
 )
+from arbitrage.hedge import hedge_seed_bet  # type: ignore  # re-export
 from polymarket.prices import fetch_market_prices
 from prophet import (
     ProphetClientError,
@@ -421,6 +428,130 @@ def _build_hedger(config: AgentConfig) -> Any:
     return _LiveHedger(trader)
 
 
+def _apply_seed_preflight_and_trim(
+    *,
+    pending: list[dict],
+    initial_bet_usdc: float,
+    delta_neutral: bool,
+    live_hedger: Any,
+    max_hedge_slippage_bps: float,
+    transport: Any,
+    jwt: str | None,
+    gateway: Any,
+    recorder: Any,
+) -> CycleResult | None:
+    """#542 Fix 2 — gate `pending_ui_submission` by what the operator
+    can actually fund + hedge.
+
+    Returns a blocked `CycleResult` when the operator can't fund a
+    single seed (deposit_required envelope) and ``None`` otherwise.
+    Side effect: stashes the trimmed list under
+    ``recorder.summary["_trimmed_pending"]`` and records counts +
+    drop reasons under public summary keys.
+    """
+    # Prophet balance — same path the trading-side preflight uses.
+    balance_client = MinimalProphetClient(transport=transport)
+    try:
+        cash = balance_client.cash_balance(jwt=jwt)
+        prophet_avail = float(cash.available_usdc)
+    except Exception as exc:
+        recorder.record_blocker(
+            f"seed_preflight_cash_failed:{type(exc).__name__}:{str(exc)[:120]}"
+        )
+        # Conservative fallback — if we can't read the Prophet balance,
+        # treat as 0 so we block rather than silently emit unfundable
+        # entries. The operator can re-run after the transient lifts.
+        prophet_avail = 0.0
+
+    # Polymarket balance — only when delta-neutral and the live
+    # hedger is wired in. In single-leg mode, no Polymarket spend.
+    polymarket_avail: float
+    if delta_neutral and live_hedger is not None:
+        try:
+            polymarket_avail = float(
+                getattr(live_hedger, "_trader", live_hedger).get_cash_balance()
+            )
+        except Exception as exc:
+            recorder.record_blocker(
+                f"seed_preflight_polymarket_balance_failed:"
+                f"{type(exc).__name__}:{str(exc)[:120]}"
+            )
+            polymarket_avail = 0.0
+    else:
+        # In single-leg mode the Polymarket side doesn't consume
+        # capital at seed-time, so we mark it as effectively
+        # unlimited (the funds preflight ignores the side that
+        # isn't spending).
+        polymarket_avail = float("inf")
+
+    preflight = evaluate_seed_funds_preflight(
+        candidate_count=len(pending),
+        initial_bet_usdc=float(initial_bet_usdc),
+        prophet_available_usdc=prophet_avail,
+        polymarket_available_usdc=polymarket_avail,
+    )
+
+    recorder.summary["seed_preflight_max_fundable"] = preflight.max_fundable_count
+    recorder.summary["seed_preflight_prophet_avail"] = preflight.prophet_available_usdc
+    if delta_neutral:
+        recorder.summary["seed_preflight_polymarket_avail"] = (
+            preflight.polymarket_available_usdc
+        )
+
+    if not preflight.ok:
+        recorder.record_blocker(
+            f"funds_insufficient_for_seeds:"
+            f"prophet_deficit={preflight.prophet_deficit_usdc}_usdc;"
+            f"polymarket_deficit={preflight.polymarket_deficit_usdc}_usdc"
+        )
+        payload = recorder.finish("blocked", "funds_insufficient_for_seeds")
+        payload["action"] = "deposit_required_for_seeds"
+        payload["deposit"] = preflight.to_deposit_envelope()
+        return CycleResult(
+            status="blocked",
+            reason="funds_insufficient_for_seeds",
+            payload=payload,
+        )
+
+    # Build the depth assessor only in delta-neutral mode — single-leg
+    # has no Polymarket hedge, so depth ineligibility doesn't apply.
+    depth_assessor = None
+    if delta_neutral and live_hedger is not None:
+        def _assess(market_id: str, size_usdc: float, slippage_bps: float) -> bool:
+            try:
+                book = live_hedger.fetch_book(market_id)
+            except Exception:
+                return False
+            verdict = assess_polymarket_depth(
+                book_payload=book,
+                target_size_usdc=size_usdc,
+                # Seeds are buys on Prophet by default; the hedge
+                # sells on Polymarket so we consume bids. Production
+                # code can refine per-candidate when seed side varies.
+                hedge_side="sell",
+                max_slippage_bps=slippage_bps,
+            )
+            return bool(verdict.sufficient)
+
+        depth_assessor = _assess
+
+    decision = qualify_and_trim_pending(
+        pending=pending,
+        max_fundable_count=preflight.max_fundable_count,
+        initial_bet_usdc=float(initial_bet_usdc),
+        depth_assessor=depth_assessor,
+        max_hedge_slippage_bps=float(max_hedge_slippage_bps),
+    )
+
+    recorder.summary["_trimmed_pending"] = decision.qualified
+    recorder.summary["seed_dropped_count"] = len(decision.dropped)
+    if decision.dropped:
+        recorder.summary["seed_dropped_reasons"] = [
+            d.get("reason", "unknown") for d in decision.dropped
+        ]
+    return None
+
+
 def cmd_run(
     *,
     config: AgentConfig,
@@ -514,6 +645,31 @@ def cmd_run(
             pending_ui_submission = auto_result.pending_ui_submission
             # Reload pairs — auto_paired rows are now in arb_pairs.
             pairs = list_arb_pairs(target=target)
+
+            # #542 Fix 2 — seed preflight + trim. Cap the pending list by
+            # what the operator can actually fund right now on BOTH venues
+            # so the agent doesn't approve 12 Privy prompts when only 5
+            # have backing collateral. Skip the trim in dry-run cycles —
+            # the operator isn't being asked to commit capital yet.
+            if pending_ui_submission and config.live_mode and yes_live:
+                seed_block = _apply_seed_preflight_and_trim(
+                    pending=pending_ui_submission,
+                    initial_bet_usdc=config.auto_discover.initial_bet_usdc,
+                    delta_neutral=delta_neutral,
+                    live_hedger=live_hedger,
+                    max_hedge_slippage_bps=config.max_hedge_slippage_bps,
+                    transport=transport,
+                    jwt=jwt,
+                    gateway=gateway,
+                    recorder=recorder,
+                )
+                if seed_block is not None:
+                    # Blocked — `pending_ui_submission` is empty until the
+                    # operator funds. Return early with deposit envelope.
+                    return seed_block
+                pending_ui_submission = recorder.summary.get(
+                    "_trimmed_pending", pending_ui_submission
+                )
 
     for p in pairs:
         recorder.record_pair(p["prophet_market_id"], p["polymarket_condition_id"])
@@ -933,8 +1089,18 @@ def cmd_record_created_market(
     config: AgentConfig,
     polymarket_condition_id: str,
     prophet_market_id: str,
+    prophet_seed_side: str = "",
+    polymarket_marketable_price: float = 0.0,
+    seed_size_usdc: float | None = None,
 ) -> CycleResult:
-    """Persist a pair the agent just created via the Prophet UI."""
+    """Persist a pair the agent just created via the Prophet UI.
+
+    In ``execution_mode="delta_neutral"`` and with ``prophet_seed_side``
+    + ``polymarket_marketable_price`` provided, also submits the
+    opposing Polymarket order via the live hedger (#542 Fix 3). The
+    hedge outcome is surfaced in the payload so the agent can log
+    ``hedge_status='hedged'`` or ``'naked_exposure'`` per market.
+    """
     if not polymarket_condition_id or not prophet_market_id:
         return CycleResult(
             status="blocked",
@@ -965,13 +1131,47 @@ def cmd_record_created_market(
             reason="persist_failed",
             payload={"error": f"{type(exc).__name__}:{str(exc)[:200]}"},
         )
+
+    payload: dict[str, Any] = {
+        "prophet_market_id": prophet_market_id,
+        "polymarket_condition_id": polymarket_condition_id,
+    }
+
+    # #542 Fix 3 — delta-neutral seed hedge. Only fires when:
+    #   - delta_neutral mode is on, AND
+    #   - the agent supplied the seed side + a marketable hedge price.
+    # Otherwise back-compat behavior (upsert-only) is preserved.
+    delta_neutral = config.execution_mode == EXECUTION_MODE_DELTA_NEUTRAL
+    if delta_neutral and prophet_seed_side and polymarket_marketable_price > 0:
+        try:
+            hedger = _build_hedger(config)
+        except Exception as exc:
+            payload["hedge_status"] = "naked_exposure"
+            payload["hedge_error"] = f"hedger_unavailable:{str(exc)[:200]}"
+            return CycleResult(status="ok", reason="pair_recorded_no_hedge", payload=payload)
+
+        size = float(seed_size_usdc) if seed_size_usdc is not None else float(
+            config.auto_discover.initial_bet_usdc
+        )
+        outcome = hedge_seed_bet(
+            prophet_market_id=prophet_market_id,
+            polymarket_condition_id=polymarket_condition_id,
+            prophet_seed_side=prophet_seed_side,
+            size_usdc=size,
+            marketable_price=float(polymarket_marketable_price),
+            hedger=hedger,
+        )
+        payload["hedge_status"] = outcome.hedge_status
+        payload["polymarket_order_id"] = outcome.polymarket_order_id
+        payload["polymarket_filled_qty"] = outcome.polymarket_filled_qty
+        payload["polymarket_fill_price"] = outcome.polymarket_fill_price
+        if outcome.error:
+            payload["hedge_error"] = outcome.error
+
     return CycleResult(
         status="ok",
         reason="pair_recorded",
-        payload={
-            "prophet_market_id": prophet_market_id,
-            "polymarket_condition_id": polymarket_condition_id,
-        },
+        payload=payload,
     )
 
 
@@ -1027,6 +1227,41 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="(record-created-market) Prophet market id the agent just created.",
     )
+    parser.add_argument(
+        "--prophet-email",
+        default="",
+        help=(
+            "(setup) Persisted to inputs.prophet_email on first-run "
+            "bootstrap. Ignored if config.json already exists."
+        ),
+    )
+    parser.add_argument(
+        "--email-provider",
+        default="",
+        choices=["", "gmail", "outlook"],
+        help=(
+            "(setup) Persisted to inputs.email_provider on first-run "
+            "bootstrap. Ignored if config.json already exists."
+        ),
+    )
+    parser.add_argument(
+        "--prophet-seed-side",
+        default="",
+        choices=["", "buy", "sell"],
+        help=(
+            "(record-created-market) Operator side on the Prophet seed bet. "
+            "Required to dispatch the delta-neutral hedge in delta_neutral mode."
+        ),
+    )
+    parser.add_argument(
+        "--polymarket-marketable-price",
+        default=0.0,
+        type=float,
+        help=(
+            "(record-created-market) Marketable Polymarket price for the seed "
+            "hedge. Required in delta_neutral mode."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.command == "probe-schema":
@@ -1035,6 +1270,17 @@ def main(argv: list[str] | None = None) -> int:
         # Pass an explicit empty argv so the probe's argparse does not
         # re-parse the parent agent's --config / --command flags.
         return probe_main([])
+
+    # #542 Fix 1 — zero-friction first-run. If config.json is absent,
+    # copy from config.example.json and persist optional flags. Existing
+    # configs are never overwritten.
+    skill_root = SCRIPT_DIR.parent
+    bootstrap_config_if_missing(
+        config_path=args.config,
+        example_path=str(skill_root / "config.example.json"),
+        prophet_email=args.prophet_email or None,
+        email_provider=args.email_provider or None,
+    )
 
     config = AgentConfig.load(args.config)
     gateway = HttpGateway()
@@ -1059,6 +1305,8 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             polymarket_condition_id=args.polymarket_condition_id,
             prophet_market_id=args.prophet_market_id,
+            prophet_seed_side=args.prophet_seed_side,
+            polymarket_marketable_price=args.polymarket_marketable_price,
         )
     else:
         parser.error(f"unknown command: {args.command}")

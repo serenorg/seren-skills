@@ -304,3 +304,71 @@ def hedge_filled_order(
         polymarket_fill_price=float(result.get("fill_price", 0.0)),
         error=None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Seed-bet hedge (#542 Fix 3)
+
+
+def hedge_seed_bet(
+    *,
+    prophet_market_id: str,
+    polymarket_condition_id: str,
+    prophet_seed_side: str,
+    size_usdc: float,
+    marketable_price: float,
+    hedger: Hedger,
+) -> HedgeOutcome:
+    """Submit the opposing Polymarket order for a Prophet Phase 15 seed.
+
+    Differs from ``hedge_filled_order`` in one critical way: the Prophet
+    seed is **already committed** at the moment this is called (the
+    agent just clicked Confirm on the in-browser Privy prompt). There
+    is no `cancelOrder` for a seed — it created the market itself —
+    so a hedge failure must NOT route to ``unwind_prophet``. We record
+    ``naked_exposure`` honestly and let the operator decide whether to
+    liquidate manually.
+
+    ``prophet_seed_side`` is the side the operator bet on Prophet
+    (``"buy"`` for YES, ``"sell"`` for NO). The hedge takes the
+    opposite side on Polymarket.
+    """
+    hedge_side = _opposite_side(prophet_seed_side)
+
+    try:
+        result = hedger.submit_hedge(
+            condition_id=polymarket_condition_id,
+            hedge_side=hedge_side,
+            size_usdc=float(size_usdc),
+            marketable_price=float(marketable_price),
+        )
+    except Exception as exc:
+        # NO unwind attempt: the Prophet seed is already committed.
+        # Naked exposure is surfaced for operator follow-up.
+        return HedgeOutcome(
+            hedge_status="naked_exposure",
+            polymarket_order_id=None,
+            polymarket_filled_qty=0.0,
+            polymarket_fill_price=0.0,
+            error=str(exc)[:200],
+        )
+
+    polymarket_order_id = (
+        result.get("polymarket_order_id") if isinstance(result, dict) else None
+    )
+    if not polymarket_order_id:
+        return HedgeOutcome(
+            hedge_status="naked_exposure",
+            polymarket_order_id=None,
+            polymarket_filled_qty=0.0,
+            polymarket_fill_price=0.0,
+            error="polymarket_submit_returned_no_order_id",
+        )
+
+    return HedgeOutcome(
+        hedge_status="hedged",
+        polymarket_order_id=str(polymarket_order_id),
+        polymarket_filled_qty=float(result.get("filled_qty", 0.0)),
+        polymarket_fill_price=float(result.get("fill_price", 0.0)),
+        error=None,
+    )

@@ -339,17 +339,19 @@ Cross-skill read: `discover_pairs_from_bounty_runner` SELECTs from `markets_crea
 ```bash
 cd prophet/prophet-arb-bot
 python3 -m pip install -r requirements.txt
-cp config.example.json config.json
-# Edit config.json: set inputs.prophet_email, inputs.email_provider,
-# and at least one entry in inputs.manual_pairs.
 export SEREN_API_KEY=...
 
-# 1. Validate config and auth.
-python3 scripts/agent.py --config config.json --command setup --json-output
+# 1. Validate config and auth. Auto-bootstraps config.json from
+#    config.example.json on first run with auto_discover.enabled=true
+#    and live_mode=false. Email + provider are persisted from flags;
+#    existing configs are never overwritten.
+python3 scripts/agent.py --config config.json --command setup --json-output \
+  --prophet-email you@example.com --email-provider gmail
 
 # 2. Validate the runner end-to-end before scheduling cron. Confirm the
 #    JSON output reports `"status": "ok"`. If it reports a `blocked`
-#    status, resolve the blocker and re-run before continuing.
+#    status (e.g. `funds_insufficient_for_seeds`), resolve the blocker
+#    using the deposit envelope and re-run before continuing.
 python3 scripts/agent.py --config config.json --command run --json-output
 
 # 3. Schedule and start the autonomous hourly runner. Add --yes-live to
@@ -361,6 +363,56 @@ python3 scripts/setup_cron.py create \
   --email-provider gmail
 python3 scripts/run_local_pull_runner.py --config config.json
 ```
+
+## Seed bet preflight (#542)
+
+When `auto_discover.enabled = true`, every `pending_ui_submission`
+entry will cost the operator `initial_bet_usdc` on Prophet at confirm
+time. In `delta_neutral` mode, it costs the same amount again on
+Polymarket for the hedge (see below). Before emitting the list, the
+runner now:
+
+1. Queries Prophet `viewer.cashBalance` and (in delta-neutral mode)
+   `DirectClobTrader.get_cash_balance` to compute
+   `max_fundable = min(prophet_floor, polymarket_floor)`.
+2. Filters candidates by Polymarket hedge depth (`assess_polymarket_depth`)
+   when delta-neutral is active.
+3. Ranks survivors by Polymarket 24h volume (proxy for spread potential
+   since pre-creation pairs have no Prophet odds yet) and trims to
+   `max_fundable` entries.
+
+If `max_fundable == 0` the cycle returns
+`status=blocked, reason=funds_insufficient_for_seeds` with a
+`deposit_required_for_seeds` envelope carrying split deficits per venue.
+
+## Delta-neutral seed creation (#542)
+
+Single-leg mode (`execution_mode = "single_leg"`) commits the Prophet
+seed bet unhedged; held YES/NO inventory resolves with the market.
+
+Delta-neutral mode (`execution_mode = "delta_neutral"`) hedges every
+seed at creation time:
+
+1. The agent drives Prophet's `/create` UI and confirms the Privy
+   signing prompt for one `pending_ui_submission` entry.
+2. The agent immediately invokes:
+
+   ```bash
+   python3 scripts/agent.py --command record-created-market \
+     --polymarket-condition-id "$POLY_CID" \
+     --prophet-market-id "$PROPHET_MID" \
+     --prophet-seed-side buy \
+     --polymarket-marketable-price 0.001
+   ```
+
+3. The runner persists the pair to `arb_pairs`, then submits the
+   opposing Polymarket marketable order via `DirectClobTrader`.
+   `arb_orders` records the pair as `hedge_status='hedged'` on success
+   or `hedge_status='naked_exposure'` if the Polymarket leg failed.
+
+Hedge failures do **not** trigger a Prophet unwind — the seed has
+already committed on confirm and is not cancellable. Naked exposure is
+surfaced honestly for operator follow-up.
 
 ## Disclaimers
 
