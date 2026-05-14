@@ -1518,6 +1518,14 @@ def _emit(result: CycleResult, *, json_output: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Issue #568: load `.env` from the skill root before any auth check.
+    # Without this, `db.py:184` raises `RuntimeError: SEREN_API_KEY is
+    # required` even when the operator has a valid key on disk — which
+    # was the proximate cause of issue #567's Windows failure cascade.
+    from polymarket_live import maybe_load_dotenv
+
+    maybe_load_dotenv(SCRIPT_DIR.parent)
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config",

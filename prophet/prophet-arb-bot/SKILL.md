@@ -9,13 +9,30 @@ description: Operator-arb between Prophet and Polymarket on operator-supplied ma
 
 When invoked:
 
-1. Run `python3 scripts/agent.py --command setup --json-output` to verify auth and apply the schema. Idempotent — safe to re-run.
-2. Run `python3 scripts/agent.py --command run --yes-live --json-output` once. The result will be `status=ok` (cycle ran), `status=ok_no_fills` (cycle ran but no Prophet fills), or `status=blocked`.
-3. **If the run envelope carries `pending_ui_submission`** (auto-discover mode found Polymarket candidates that don't have Prophet mirrors yet), drive the **Agent-driven UI submission runbook** below for each entry. The runbook drives `/create` through `startOddsCalculation`, calls `compute-seed-intent` to read Prophet's AI fair value out of the completed odds session and pick the seed/hedge sides, submits the Polymarket hedge first via `record-created-market`, and only clicks Prophet Confirm after the hedge succeeds. After driving the UI for every entry, re-run `agent.py --command run --yes-live` so the bot trades the newly-created pairs.
-4. If `status=blocked`, surface the `reason` to the user and **do not** schedule cron until acknowledged.
-5. Only after a successful first run, call `python3 scripts/setup_cron.py create --yes-live` and start `python3 scripts/run_local_pull_runner.py` to claim due ticks. `--yes-live` remains required for autonomous schedules as defense-in-depth.
+1. **Probe auth via MCP first.** Call `mcp__seren-mcp__list_projects`. If it returns successfully, the user is authenticated through Seren Desktop and no `.env` setup is required — proceed to step 2. If MCP is unavailable, see **API Key Setup (Fallback)** below before continuing.
+2. Run `python3 scripts/agent.py --command setup --json-output` to apply the schema. Idempotent — safe to re-run. (The runner reads `<skill-root>/.env` automatically on startup, so a desktop-injected key or an operator-written `.env` both work.)
+3. Run `python3 scripts/agent.py --command run --yes-live --json-output` once. The result will be `status=ok` (cycle ran), `status=ok_no_fills` (cycle ran but no Prophet fills), or `status=blocked`.
+4. **If the run envelope carries `pending_ui_submission`** (auto-discover mode found Polymarket candidates that don't have Prophet mirrors yet), drive the **Agent-driven UI submission runbook** below for each entry. The runbook drives `/create` through `startOddsCalculation`, calls `compute-seed-intent` to read Prophet's AI fair value out of the completed odds session and pick the seed/hedge sides, submits the Polymarket hedge first via `record-created-market`, and only clicks Prophet Confirm after the hedge succeeds. After driving the UI for every entry, re-run `agent.py --command run --yes-live` so the bot trades the newly-created pairs.
+5. If `status=blocked`, surface the `reason` to the user and **do not** schedule cron until acknowledged.
+6. Only after a successful first run, call `python3 scripts/setup_cron.py create --yes-live` and start `python3 scripts/run_local_pull_runner.py` to claim due ticks. `--yes-live` remains required for autonomous schedules as defense-in-depth.
 
 This validation gate prevents the cron and 12h local-pull poller from accruing cost before the runner has produced any qualifying scoring pass. Skill instructions are preloaded in context when this skill is active; do not perform filesystem searches or tool-driven exploration to rediscover them.
+
+## API Key Setup
+
+**MCP-first (default on Seren Desktop).** Before any subprocess call, probe auth with `mcp__seren-mcp__list_projects`. If it returns a project list, you are authenticated — done. Schema bootstrap and project/database creation can also be performed entirely over MCP (`list_projects` / `create_project`, `list_databases` / `create_database`, `run_sql_transaction`), so on Seren Desktop the agent never needs `SEREN_API_KEY` in the subprocess environment for setup.
+
+**Fallback (no MCP available, or running outside Seren Desktop).** The agent reads `SEREN_API_KEY` (and the desktop-injected `API_KEY` alias) from the environment, and auto-loads `<skill-root>/.env` on startup, so any of these three states works:
+
+1. Seren Desktop has injected `API_KEY` into the runtime — no further action.
+2. The current shell already has `SEREN_API_KEY` exported — no further action.
+3. `<skill-root>/.env` carries `SEREN_API_KEY=<key>` — the runner auto-loads it.
+
+If none of the three is true and the agent cannot reach MCP, register a new account by `POST`ing to `https://api.serendb.com/auth/agent` with `{"name":"prophet-arb-bot"}`. Extract `.data.agent.api_key` from the response and write it to `<skill-root>/.env` using your file-write tool (not a shell `cp`/`export` — Windows `cmd.exe` does not interpret those).
+
+**Do not create a new account if a key already exists.** Creating a duplicate account results in a $0-balance key that overrides the user's funded account. Always probe MCP and inspect `<skill-root>/.env` before invoking the `/auth/agent` endpoint.
+
+Reference: [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.md).
 
 ## When to Use
 
@@ -335,26 +352,30 @@ The seren-db publisher does not expose an HTTP `run-sql` endpoint; SQL execution
 
 ## Minimal Run
 
-```bash
-cd prophet/prophet-arb-bot
-python3 -m pip install -r requirements.txt
-export SEREN_API_KEY=...
+**Preconditions** (operator does once, no shell required):
 
-# 1. Validate config and auth. Auto-bootstraps config.json from
-#    config.example.json on first run with auto_discover.enabled=true
-#    execution_mode=delta_neutral and live_mode=true. Email + provider
+- Working directory is `prophet/prophet-arb-bot`.
+- Python dependencies from `requirements.txt` are installed.
+- Auth is one of: Seren Desktop runtime is authenticated (the agent should confirm via `mcp__seren-mcp__list_projects`), or `SEREN_API_KEY` lives in `<skill-root>/.env`, or `SEREN_API_KEY` is set in the current shell. The runner auto-loads `<skill-root>/.env` on startup, so a key in that file is sufficient on any platform — no `export` or `cp` required.
+
+**Cycle commands** (the agent runs these via `python3`):
+
+```bash
+# 1. Validate config and apply the schema. Auto-bootstraps config.json
+#    from config.example.json on first run with auto_discover.enabled=true,
+#    execution_mode=delta_neutral, and live_mode=true. Email + provider
 #    are persisted from flags; existing configs are never overwritten.
 python3 scripts/agent.py --config config.json --command setup --json-output \
   --prophet-email you@example.com --email-provider gmail
 
 # 2. Validate the runner end-to-end before scheduling cron. Confirm the
-#    JSON output reports `"status": "ok"`. If it reports a `blocked`
-#    status (e.g. `funds_insufficient_for_seeds`), resolve the blocker
-#    using the deposit envelope and re-run before continuing.
+#    JSON output reports `"status": "ok"`. If it reports `blocked`
+#    (e.g. `funds_insufficient_for_seeds`), resolve the blocker using
+#    the deposit envelope and re-run before continuing.
 python3 scripts/agent.py --config config.json --command run --yes-live --json-output
 
 # 3. Schedule and start the autonomous hourly runner. Use --yes-live
-#    only after the validation step above returned status=ok.
+#    only after step 2 returned status=ok.
 python3 scripts/setup_cron.py create \
   --config config.json \
   --prophet-email you@example.com \
