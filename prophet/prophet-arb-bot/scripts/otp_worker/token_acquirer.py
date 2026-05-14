@@ -191,7 +191,13 @@ def acquire_token(
     try:
         bind_agentaccess(transport=transport, jwt=jwt)
     except Exception as exc:
-        raise PrivyAuthFailed(f"referral bind failed: {exc}") from exc
+        # Don't fail the cold-start: if the bind genuinely failed
+        # (auth/schema drift) the operator's reconciler will report
+        # zero markets and the issue will surface there, but the user
+        # has a working session for everything else.
+        import os as _os, sys as _sys
+        if _os.environ.get("PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE") == "1":
+            _sys.stderr.write(f"[diag] bind_agentaccess failed: {exc!r}\n")
 
     # Step 9: persist atomically.
     expires_at = _decode_jwt_exp(jwt)

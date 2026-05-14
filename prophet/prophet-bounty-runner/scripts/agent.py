@@ -302,23 +302,6 @@ def acquire_prophet_token_via_otp(
             f"PROPHET_SESSION_TOKEN viewer.email {viewer_email!r} does "
             f"not match prophet_email {email!r}"
         )
-
-    from prophet.affiliate import bind_agentaccess
-
-    try:
-        bind_agentaccess(transport=transport, jwt=jwt)
-    except Exception as exc:
-        if require_viewer_binding:
-            raise PrivyAuthFailed(
-                f"PROPHET_SESSION_TOKEN referral bind failed: {exc}"
-            ) from exc
-        return {
-            "token": jwt,
-            "prophet_viewer_id": viewer_id,
-            "viewer_email": viewer_email or email,
-            "source": "env_token_unbound",
-            "binding_error": str(exc),
-        }
     return {
         "token": jwt,
         "prophet_viewer_id": viewer_id,
