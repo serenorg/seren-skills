@@ -61,11 +61,20 @@ class LeadRow:
     `record_id` is the 15/18-char Salesforce id pulled out of the
     `href` on the Name link. We surface both so downstream callers
     have a stable handle (id) and a human-readable label (name).
+
+    `is_packaging` mirrors the `PACKAGING__c` custom field
+    provisioned in Phase 3. Defaults to False so the
+    `enrich_lead.is_packaging_lead` cross-division gate fails
+    closed on any LeadRow whose source did not populate the flag.
+    Phase 4 populates it via `dataclasses.replace(lead,
+    is_packaging=True)` after reading the column from the All
+    Sources PK Leads report or the Lead detail page.
     """
 
     record_id: str
     name: str
     source_url: str
+    is_packaging: bool = False
 
 
 # --------------------------------------------------------------------- #

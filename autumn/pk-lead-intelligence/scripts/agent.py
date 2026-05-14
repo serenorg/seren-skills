@@ -1,12 +1,14 @@
 """Top-level entrypoint for pk-lead-intelligence runs.
 
-Phase 3 supports two commands:
+Phase 4 supports three commands:
 
     python scripts/agent.py --command run        --dry-run
+    python scripts/agent.py --command run        --allow-live   # Phase 4
     python scripts/agent.py --command provision  --dry-run
     python scripts/agent.py --command provision  --allow-live
+    python scripts/agent.py --command weekly                    # Phase 4
 
-The `run` command (Phase 2):
+The `run` command:
 
 1. Reads SF credentials from 1Password via `auth.op_service_account`.
 2. Launches a Playwright Chromium with the persisted storage_state
@@ -15,9 +17,12 @@ The `run` command (Phase 2):
 4. Runs the enrichment pipeline (`sf.enrich_lead`) over that lead —
    Perplexity research, LinkedIn discovery, Claude hypothesis — and
    writes a local `.docx` Note for operator review.
+5. (Phase 4, `--allow-live`) Writes the rendered Note to the Lead's
+   Related tab, gated by `is_packaging_lead` + recency on
+   `Last_Enrichment_At__c`.
 
 The `provision` command (Phase 3) provisions the schema and
-reporting surface that the Phase 4 cron will read:
+reporting surface the cron reads:
 
 * 3 custom Lead fields (PACKAGING__c, Last_Enrichment_At__c,
   Activity_Gap_Days__c) via Object Manager.
@@ -25,11 +30,15 @@ reporting surface that the Phase 4 cron will read:
 * PK Lead Dashboard (3 components).
 * PK Opportunity Pipeline & Rolling Forecast dashboard (5 components).
 
-There is no Salesforce write to Lead **records** in Phase 3 — those
-land in Phase 4. The `provision` command's `--allow-live` gate is
-defense-in-depth: it must be paired with `inputs.live_mode=true`
-in config.json. The `run` command's `--allow-live` is still
-reserved for Phase 4+.
+The `weekly` command (Phase 4) composes the Tuesday-morning status
+doc from the past 7 days of enrichments and uploads it to Google
+Drive, shared with `inputs.nathan_share_email`.
+
+Both `run --allow-live` and `provision --allow-live` honor the
+defense-in-depth double gate: the CLI flag must be paired with
+`inputs.live_mode=true` in config.json. Each run prints a single
+parseable summary line so the seren-cron `execution_results`
+table can capture the run state.
 """
 
 from __future__ import annotations
@@ -52,9 +61,12 @@ if _SKILL_ROOT not in sys.path:
     sys.path.insert(0, _SKILL_ROOT)
 
 from dataclasses import dataclass  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
 from scripts.auth import microsoft_sso  # noqa: E402
 from scripts.auth import op_service_account  # noqa: E402
+from scripts.integrations import google_drive  # noqa: E402
+from scripts.output import weekly_status  # noqa: E402
 from scripts.research import claude_hypothesis  # noqa: E402
 from scripts.research import linkedin_search  # noqa: E402
 from scripts.research import perplexity  # noqa: E402
@@ -64,6 +76,7 @@ from scripts.sf import build_pk_opp_artifacts as opp_artifacts  # noqa: E402
 from scripts.sf import client as sf_client  # noqa: E402
 from scripts.sf import enrich_lead  # noqa: E402
 from scripts.sf import provision_fields  # noqa: E402
+from scripts.sf import write_note  # noqa: E402
 
 
 # --------------------------------------------------------------------- #
@@ -132,32 +145,36 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--command",
         required=True,
-        choices=["run", "provision"],
+        choices=["run", "provision", "weekly"],
         help=(
-            "Top-level command. `run` enriches a Lead (Phase 2 dry-"
-            "run only). `provision` creates the schema + reporting "
-            "surface (Phase 3; honors `--allow-live` when paired "
-            "with config `inputs.live_mode=true`)."
+            "Top-level command. `run` enriches a Lead (Phase 2 "
+            "dry-run; Phase 4 live Note write). `provision` creates "
+            "the schema + reporting surface (Phase 3). `weekly` "
+            "composes the Tuesday-morning status doc and uploads it "
+            "to Google Drive (Phase 4). Live commands require "
+            "`--allow-live` paired with config `inputs.live_mode=true`."
         ),
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help=(
-            "Plan-only mode. For `run` this is required (Phase 2 has "
-            "no live path). For `provision` this prints the planned "
-            "artifacts without driving the Setup / Report / Dashboard "
-            "UI."
+            "Plan-only mode. For `run` this disables the Phase 4 "
+            "Note-write path. For `provision` this prints the "
+            "planned artifacts without driving the Setup / Report / "
+            "Dashboard UI. For `weekly` this prints the rendered "
+            "doc body without uploading."
         ),
     )
     parser.add_argument(
         "--allow-live",
         action="store_true",
         help=(
-            "Honored for `--command provision` only (Phase 3); must "
-            "be paired with `inputs.live_mode=true` in config.json. "
-            "Rejected for `--command run` — Lead-record writes are "
-            "Phase 4+ territory."
+            "Enables live Salesforce or Drive writes; must be "
+            "paired with `inputs.live_mode=true` in config.json. "
+            "For `run`, writes the Note to the Lead's Related tab. "
+            "For `provision`, drives the Setup / Reports / "
+            "Dashboards UI. For `weekly`, uploads the doc to Drive."
         ),
     )
     parser.add_argument(
@@ -429,6 +446,159 @@ def _run_enrichment(
     )
 
 
+# --------------------------------------------------------------------- #
+# Phase 4 live Note write                                               #
+# --------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    """One-line cron contract for the `run` command.
+
+    The Phase 5 cron parses this line out of stdout and records it
+    in the seren-cron `execution_results` table. The format is a
+    space-separated `key=value` list prefixed with
+    `pk-lead-intelligence run:` — keys must not be renamed without
+    bumping the parser.
+    """
+
+    command: str
+    dry_run: bool
+    leads_evaluated: int
+    notes_written: int
+    notes_skipped_non_pk: int
+    notes_skipped_recent: int
+    docx_written: int
+
+
+def _run_live_note_write(
+    *,
+    salesforce_org_url: str,
+    storage_path: Path,
+    headless: bool,
+    op_vault: str,
+    op_item: str,
+    enrichment: enrich_lead.EnrichmentResult,
+    lead: sf_client.LeadRow,
+    dry_run: bool,
+) -> write_note.NoteWriteResult:  # pragma: no cover
+    """Drive the Phase 4 Note-write step.
+
+    Marked `pragma: no cover` — live correctness is validated at the
+    Phase 4 operator checkpoint. Tests monkeypatch this seam to
+    exercise the CLI without driving Lightning.
+    """
+
+    creds = op_service_account.read_salesforce_credentials(
+        vault=op_vault, item=op_item
+    )
+
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        try:
+            if storage_path.exists():
+                context = browser.new_context(storage_state=str(storage_path))
+            else:
+                context = browser.new_context()
+            try:
+                sso_result = microsoft_sso.authenticate(
+                    context=context,
+                    salesforce_org_url=salesforce_org_url,
+                    creds=creds,
+                    storage_path=storage_path,
+                )
+                return write_note.write_note_to_lead(
+                    page=sso_result.page,
+                    options=write_note.NoteWriteOptions(
+                        lead=lead,
+                        note=enrichment.note,
+                    ),
+                    now=datetime.now(tz=timezone.utc),
+                    dry_run=dry_run,
+                )
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+
+def _print_run_summary(summary: RunSummary) -> None:
+    """Emit the single-line cron-contract summary to stdout.
+
+    Booleans render as lowercase `true`/`false` so the line is
+    grep-friendly. Keys are listed in a stable order so a flat
+    `awk`/`grep` parse keeps working when columns are added later.
+    """
+
+    parts = [
+        f"command={summary.command}",
+        f"dry_run={'true' if summary.dry_run else 'false'}",
+        f"leads_evaluated={summary.leads_evaluated}",
+        f"notes_written={summary.notes_written}",
+        f"notes_skipped_non_pk={summary.notes_skipped_non_pk}",
+        f"notes_skipped_recent={summary.notes_skipped_recent}",
+        f"docx_written={summary.docx_written}",
+    ]
+    print(f"pk-lead-intelligence run: {' '.join(parts)}")
+
+
+# --------------------------------------------------------------------- #
+# Phase 4 weekly status doc                                             #
+# --------------------------------------------------------------------- #
+
+
+def _run_weekly(  # pragma: no cover
+    *,
+    config: dict,
+    dry_run: bool,
+) -> google_drive.ShareResult:
+    """Compose the weekly status doc and upload it to Drive.
+
+    `pragma: no cover` because the live wiring needs the
+    `google-drive` publisher. Tests monkeypatch this seam to
+    exercise the CLI; the renderer and the share gate are covered
+    directly in their own test files.
+
+    Phase 4 ships the empty-week skeleton: the lead summaries are
+    sourced from the SerenDB `enriched_leads` ledger when Phase 4's
+    persistence lands. Until then this returns an empty week so the
+    operator can rehearse the share path end-to-end.
+    """
+
+    from scripts.seren_client import call_publisher  # noqa: PLC0415
+
+    inputs = config.get("inputs") or {}
+    folder_id = inputs.get("google_drive_folder_id", "")
+    share_email = inputs.get("nathan_share_email", "")
+    monthly_target = int(inputs.get("monthly_close_target_usd", 500_000))
+
+    now = datetime.now(tz=timezone.utc)
+    week_label = f"{now.year}-W{now.isocalendar().week:02d}"
+
+    doc = weekly_status.compose_weekly_status_doc(
+        week_label=week_label,
+        lead_summaries=[],
+        monthly_close_target_usd=monthly_target,
+    )
+
+    # Adapt the shared `call_publisher(publisher, method, path, *, body)`
+    # surface to the narrower `(publisher, path, body) -> dict` shape
+    # `google_drive.upload_and_share` expects. Drive writes are
+    # always POST in this path.
+    def _post(publisher: str, path: str, body: dict) -> dict:
+        return call_publisher(publisher, "POST", path, body=body)
+
+    return google_drive.upload_and_share(
+        doc=doc,
+        folder_id=folder_id,
+        share_email=share_email,
+        dry_run=dry_run,
+        publisher_call=_post,
+    )
+
+
 def _resolve_live_mode(config: dict) -> bool:
     """Read `inputs.live_mode` from config with a safe False default.
 
@@ -448,27 +618,60 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _build_parser().parse_args(argv)
 
-    # `run` command (Phase 2) — Lead-record writes do not exist
-    # yet, so --dry-run is required and --allow-live is refused.
+    # `run` command — Phase 2 dry-run + Phase 4 live Note write.
+    # `--dry-run` is required when `--allow-live` is absent (we
+    # never enrich silently without operator opt-in). When
+    # `--allow-live` is set, the config gate must also be set.
     if args.command == "run":
-        if not args.dry_run:
+        if args.allow_live and args.dry_run:
             print(
-                "Phase 2 supports --dry-run only. Re-run with --dry-run.",
+                "--allow-live and --dry-run are mutually exclusive. "
+                "Pick one and re-run.",
+                file=sys.stderr,
+            )
+            return 2
+        if not args.allow_live and not args.dry_run:
+            print(
+                "--command run requires --dry-run or --allow-live. "
+                "Re-run with one of the two flags.",
                 file=sys.stderr,
             )
             return 2
         if args.allow_live:
-            print(
-                "--allow-live for --command run is reserved for Phase 4+ "
-                "and is rejected. Drop the flag and re-run with --dry-run.",
-                file=sys.stderr,
-            )
-            return 2
+            config = _load_config(args.config)
+            if not _resolve_live_mode(config):
+                print(
+                    "--allow-live requires config.json "
+                    "`inputs.live_mode: true`. Both gates must be set; "
+                    "neither alone is sufficient.",
+                    file=sys.stderr,
+                )
+                return 2
 
     # `provision` command (Phase 3) — --allow-live is honored when
     # paired with config `inputs.live_mode=true`. Either gate
     # alone refuses to drive the UI.
     if args.command == "provision":
+        if args.allow_live and args.dry_run:
+            print(
+                "--allow-live and --dry-run are mutually exclusive. "
+                "Pick one and re-run.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.allow_live:
+            config = _load_config(args.config)
+            if not _resolve_live_mode(config):
+                print(
+                    "--allow-live requires config.json "
+                    "`inputs.live_mode: true`. Both gates must be set; "
+                    "neither alone is sufficient.",
+                    file=sys.stderr,
+                )
+                return 2
+
+    # `weekly` command (Phase 4) — same double-gate as the others.
+    if args.command == "weekly":
         if args.allow_live and args.dry_run:
             print(
                 "--allow-live and --dry-run are mutually exclusive. "
@@ -511,6 +714,15 @@ def main(argv: list[str] | None = None) -> int:
         _print_provision_summary(summary, dry_run=args.dry_run)
         return 0
 
+    if args.command == "weekly":
+        result = _run_weekly(config=config, dry_run=args.dry_run)
+        print(
+            f"weekly: status={result.status} "
+            f"shared_with={result.shared_with or '(none)'} "
+            f"url={result.doc_url or '(none)'}"
+        )
+        return 0
+
     # args.command == "run"
     lead = _run_dry_run(
         salesforce_org_url=salesforce_org_url,
@@ -537,6 +749,41 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("  linkedin:  (no candidate)")
     print(f"  hypothesis: {enrichment.hypothesis.text[:120]}")
+
+    # Phase 4 live Note write. Only runs when --allow-live is set
+    # AND the config gate is on (already validated above). The
+    # `is_packaging` flag is sourced from the Lead's PACKAGING__c
+    # column — Phase 4 reads it via the existing dry-run path's
+    # downstream wiring. Until the column-read lands, the live
+    # path inherits `is_packaging=False` from `LeadRow`'s default,
+    # which makes `write_note_to_lead` return `skipped_non_pk`.
+    # The cross-division gate fails closed by design.
+    note_status = "not_attempted"
+    if args.allow_live:
+        write_result = _run_live_note_write(
+            salesforce_org_url=salesforce_org_url,
+            storage_path=args.storage_path,
+            headless=args.headless,
+            op_vault=op_vault,
+            op_item=op_item,
+            enrichment=enrichment,
+            lead=lead,
+            dry_run=False,
+        )
+        note_status = write_result.status
+        print(f"note_write: status={note_status}")
+
+    _print_run_summary(
+        RunSummary(
+            command="run",
+            dry_run=args.dry_run,
+            leads_evaluated=1,
+            notes_written=1 if note_status == "written" else 0,
+            notes_skipped_non_pk=1 if note_status == "skipped_non_pk" else 0,
+            notes_skipped_recent=1 if note_status == "skipped_recent" else 0,
+            docx_written=1 if enrichment.docx_path else 0,
+        )
+    )
     return 0
 
 
