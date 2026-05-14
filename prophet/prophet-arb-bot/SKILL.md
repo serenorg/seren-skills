@@ -396,23 +396,31 @@ For each `pending_ui_submission` entry:
    `OddsCalculationSession.id` returned by `startOddsCalculation` — the
    agent reads it from the network response or the page state.
 
-2. **Compute the seed-side decision from Prophet's AI fair value (#548).**
-   The 6-model calc runs for 60–180s. While it runs, fetch the current
-   Polymarket YES midpoint or best-of-book price (the
-   `pending_ui_submission` entry carries the Polymarket market id), then
-   poll the session and derive the intent in one call:
+2. **Compute the seed-side decision from Prophet's AI fair value (#548 / #551).**
+   The 6-model calc runs for 60–180s. Poll the session and derive the
+   intent in one call. `--polymarket-yes-price` is optional — if omitted
+   (or `0.0`) the runner fetches the Polymarket book and derives the
+   YES price from the midpoint (#551), so the agent does not need a
+   separate price-fetch step:
 
    ```bash
    PROPHET_SESSION_TOKEN="$JWT" python3 scripts/agent.py \
      --command compute-seed-intent \
      --odds-session-id "$OCS_ID" \
      --polymarket-condition-id "$POLY_CID" \
-     --polymarket-yes-price "$POLY_YES_PRICE" \
      --json-output
    ```
 
+   Pass `--polymarket-yes-price <value>` only when you want to pin a
+   specific value (e.g. a freshly-observed mark at `/create` time). The
+   envelope reports `polymarket_yes_price_source` ∈
+   {`caller_supplied`, `book_midpoint`, `book_best_bid_only`,
+   `book_best_ask_only`} so the agent can log which value was used.
+
    - `status=ok, reason=seed_intent_ready` → use `seed_side`,
      `hedge_price`, and `tick_size` from the payload for the next steps.
+     Render `edge_summary` (e.g. `Prophet 58.0% vs Polymarket 42.0%
+     → 1600 bps edge (BUY YES on Prophet)`) in the per-market log.
    - `status=blocked, reason=odds_session_not_completed` → Prophet
      rejected or failed the calc. Abandon this entry. No exposure was
      created on either side.
@@ -420,9 +428,12 @@ For each `pending_ui_submission` entry:
      completed but marked `isViable=false`. Abandon this entry.
    - `status=blocked, reason=no_edge` → Prophet's fair value matches the
      Polymarket price within the configured floor. Abandon — the seed
-     bet would have negative expected value.
+     bet would have negative expected value. `edge_summary` carries the
+     side-by-side (e.g. `Prophet 50.0% vs Polymarket 50.0% → 0 bps
+     no_edge`) so Jill sees the why in the run summary.
    - `status=blocked, reason=polymarket_book_unavailable` → the live
-     polymarket-data publisher is down. Retry on the next tick.
+     polymarket-data publisher is down, or the book had no usable
+     bid/ask to derive a midpoint. Retry on the next tick.
 
 3. Once the bet form renders, fill the seed side returned by
    `compute-seed-intent` (`buy` or `sell`) and `entry.initial_bet_usdc`,

@@ -182,6 +182,11 @@ def test_cmd_compute_seed_intent_success_emits_intent_envelope() -> None:
     assert result.payload["edge_bps"] == pytest.approx(800.0)
     assert result.payload["session_status"] == "COMPLETED"
     assert result.payload["is_viable"] is True
+    # #551 — side-by-side human-readable summary the agent renders verbatim.
+    summary = result.payload["edge_summary"]
+    assert "Prophet 58.0%" in summary
+    assert "Polymarket 50.0%" in summary
+    assert "800 bps" in summary
 
 
 def test_cmd_compute_seed_intent_blocks_when_session_not_completed() -> None:
@@ -260,3 +265,42 @@ def test_cmd_compute_seed_intent_blocks_when_no_edge() -> None:
     assert result.reason == "no_edge"
     assert result.payload["prophet_fair_value_bps"] == 5000
     assert result.payload["polymarket_yes_price"] == pytest.approx(0.50)
+    # #551 — no_edge envelope must carry a human-readable side-by-side.
+    summary = result.payload["edge_summary"]
+    assert "Prophet 50.0%" in summary
+    assert "Polymarket 50.0%" in summary
+    assert "no_edge" in summary
+
+
+def test_cmd_compute_seed_intent_auto_derives_polymarket_yes_price_from_midpoint() -> None:
+    """When --polymarket-yes-price is omitted (passed as 0.0), the command
+    derives the price from the book midpoint and uses it for the
+    seed-side decision. Asserts the envelope reports the resolved value,
+    not the placeholder 0.0 that was passed in."""
+
+    def fake_poll(transport, *, jwt, session_id, **kwargs):
+        # Prophet says YES is more likely (60%). Polymarket midpoint
+        # from the book below is (0.40 + 0.44)/2 = 0.42, so seed_side
+        # must be `buy` and edge_bps == 1800.
+        return _completed_session(yes_fair_value_bps=6000)
+
+    def fake_fetch_book(condition_id: str) -> dict:
+        return _book(best_bid=0.40, best_ask=0.44, tick_size="0.01")
+
+    result = cmd_compute_seed_intent(
+        config=_fake_config(),
+        polymarket_condition_id="0xabc",
+        odds_session_id="ocs_1",
+        polymarket_yes_price=0.0,  # omitted by the caller
+        transport=object(),
+        jwt="eyJ...",
+        poll=fake_poll,
+        fetch_book=fake_fetch_book,
+    )
+
+    assert result.status == "ok"
+    assert result.reason == "seed_intent_ready"
+    assert result.payload["polymarket_yes_price"] == pytest.approx(0.42)
+    assert result.payload["polymarket_yes_price_source"] == "book_midpoint"
+    assert result.payload["seed_side"] == "buy"
+    assert result.payload["edge_bps"] == pytest.approx(1800.0)
