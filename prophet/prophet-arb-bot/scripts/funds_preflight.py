@@ -76,3 +76,69 @@ def evaluate_funds_preflight(
         needed_usdc=needed,
         deficit_usdc=deficit,
     )
+
+
+# ---------------------------------------------------------------------------
+# Two-venue preflight (#536 — delta-neutral mode)
+
+
+@dataclass
+class TwoVenueFundsPreflightResult:
+    """Funds preflight for delta-neutral runs.
+
+    Both legs of an opportunity lock collateral simultaneously: Prophet
+    holds ``size_usdc`` for the LIMIT, and Polymarket needs USDC of equal
+    notional in CLOB collateral to back the hedge fill. We surface the
+    deficit per venue so the agent's deposit runbook (#524 extension)
+    can route the operator to the right `Deposit USDC` UI.
+    """
+
+    ok: bool
+    prophet_available_usdc: float
+    polymarket_available_usdc: float
+    prophet_needed_usdc: float
+    polymarket_needed_usdc: float
+    prophet_deficit_usdc: float
+    polymarket_deficit_usdc: float
+
+    def to_deposit_envelope(self) -> dict:
+        return {
+            "chain": DEPOSIT_CHAIN,
+            "chain_id": DEPOSIT_CHAIN_ID,
+            "usdc_contract_polygon": DEPOSIT_USDC_CONTRACT_POLYGON,
+            "prophet_available_usdc": self.prophet_available_usdc,
+            "polymarket_available_usdc": self.polymarket_available_usdc,
+            "prophet_needed_usdc": self.prophet_needed_usdc,
+            "polymarket_needed_usdc": self.polymarket_needed_usdc,
+            "prophet_deficit_usdc": self.prophet_deficit_usdc,
+            "polymarket_deficit_usdc": self.polymarket_deficit_usdc,
+        }
+
+
+def evaluate_two_venue_funds_preflight(
+    *,
+    opportunities: Iterable[_OpportunityLike],
+    prophet_available_usdc: float,
+    polymarket_available_usdc: float,
+) -> TwoVenueFundsPreflightResult:
+    """Same math as ``evaluate_funds_preflight`` but returns split
+    deficits across the Prophet and Polymarket venues.
+
+    Delta-neutral notional is symmetric per opportunity: the Prophet
+    LIMIT locks ``size_usdc`` of Prophet protocol cash, and a successful
+    hedge will lock the same notional on the Polymarket CLOB.
+    """
+    needed = round(sum(float(o.size_usdc) for o in opportunities), 6)
+    prophet_avail = float(prophet_available_usdc)
+    polymarket_avail = float(polymarket_available_usdc)
+    prophet_deficit = round(max(0.0, needed - prophet_avail), 6)
+    polymarket_deficit = round(max(0.0, needed - polymarket_avail), 6)
+    return TwoVenueFundsPreflightResult(
+        ok=(prophet_deficit <= 0.0 and polymarket_deficit <= 0.0),
+        prophet_available_usdc=prophet_avail,
+        polymarket_available_usdc=polymarket_avail,
+        prophet_needed_usdc=needed,
+        polymarket_needed_usdc=needed,
+        prophet_deficit_usdc=prophet_deficit,
+        polymarket_deficit_usdc=polymarket_deficit,
+    )

@@ -22,5 +22,7 @@
     "fetch_correlations": true
   },
   "live_mode": false,
-  "max_orders_per_run": 5
+  "max_orders_per_run": 5,
+  "execution_mode": "single_leg",
+  "max_hedge_slippage_bps": 200.0
 }
