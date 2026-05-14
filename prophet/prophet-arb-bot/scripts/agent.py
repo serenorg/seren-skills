@@ -1201,6 +1201,7 @@ def cmd_compute_seed_intent(
 
     pricing = session.pricing
     if not pricing.is_viable:
+        prophet_pct = pricing.yes_fair_value_bps / 100.0
         return CycleResult(
             status="blocked",
             reason="prophet_market_not_viable",
@@ -1209,6 +1210,9 @@ def cmd_compute_seed_intent(
                 "is_viable": False,
                 "prophet_fair_value_bps": pricing.yes_fair_value_bps,
                 "confidence_bps": pricing.confidence_bps,
+                "edge_summary": (
+                    f"Prophet fair value {prophet_pct:.1f}% but isViable=false"
+                ),
             },
         )
 
@@ -1227,14 +1231,37 @@ def cmd_compute_seed_intent(
             },
         )
 
-    intent = derive_seed_intent(
-        prophet_fair_value_bps=pricing.yes_fair_value_bps,
-        polymarket_yes_price=float(polymarket_yes_price),
+    # #551 Fix 1 — auto-derive YES price from book midpoint when omitted.
+    # Caller passes 0.0 (CLI default) to delegate price discovery here.
+    resolved_poly_yes, price_source = _resolve_polymarket_yes_price(
+        polymarket_yes_price=polymarket_yes_price,
         book_payload=book_payload,
     )
+    if resolved_poly_yes <= 0.0:
+        return CycleResult(
+            status="blocked",
+            reason="polymarket_book_unavailable",
+            payload={
+                **base_payload,
+                "is_viable": True,
+                "prophet_fair_value_bps": pricing.yes_fair_value_bps,
+                "polymarket_yes_price": 0.0,
+                "polymarket_yes_price_source": price_source,
+                "error": "empty_book_midpoint_unavailable",
+            },
+        )
+
+    intent = derive_seed_intent(
+        prophet_fair_value_bps=pricing.yes_fair_value_bps,
+        polymarket_yes_price=resolved_poly_yes,
+        book_payload=book_payload,
+    )
+    prophet_pct = pricing.yes_fair_value_bps / 100.0
+    poly_pct = resolved_poly_yes * 100.0
     if intent is None:
         # Either zero edge or the side we need has no book depth. Surface
         # both so the agent's log carries the actionable explanation.
+        edge_gap_bps = abs(prophet_pct * 100.0 - poly_pct * 100.0)
         return CycleResult(
             status="blocked",
             reason="no_edge",
@@ -1242,12 +1269,18 @@ def cmd_compute_seed_intent(
                 **base_payload,
                 "is_viable": True,
                 "prophet_fair_value_bps": pricing.yes_fair_value_bps,
-                "polymarket_yes_price": float(polymarket_yes_price),
+                "polymarket_yes_price": resolved_poly_yes,
+                "polymarket_yes_price_source": price_source,
                 "best_bid": float(book_payload.get("best_bid") or 0.0),
                 "best_ask": float(book_payload.get("best_ask") or 0.0),
+                "edge_summary": (
+                    f"Prophet {prophet_pct:.1f}% vs Polymarket {poly_pct:.1f}% "
+                    f"→ {edge_gap_bps:.0f} bps no_edge"
+                ),
             },
         )
 
+    direction = "BUY YES on Prophet" if intent.seed_side == "buy" else "SELL YES on Prophet"
     return CycleResult(
         status="ok",
         reason="seed_intent_ready",
@@ -1260,12 +1293,44 @@ def cmd_compute_seed_intent(
             "tick_size": intent.tick_size,
             "edge_bps": intent.edge_bps,
             "prophet_fair_value_bps": pricing.yes_fair_value_bps,
-            "polymarket_yes_price": float(polymarket_yes_price),
+            "polymarket_yes_price": resolved_poly_yes,
+            "polymarket_yes_price_source": price_source,
             "confidence_bps": pricing.confidence_bps,
             "best_bid": float(book_payload.get("best_bid") or 0.0),
             "best_ask": float(book_payload.get("best_ask") or 0.0),
+            "edge_summary": (
+                f"Prophet {prophet_pct:.1f}% vs Polymarket {poly_pct:.1f}% "
+                f"→ {intent.edge_bps:.0f} bps edge ({direction})"
+            ),
         },
     )
+
+
+def _resolve_polymarket_yes_price(
+    *,
+    polymarket_yes_price: float,
+    book_payload: dict[str, Any],
+) -> tuple[float, str]:
+    """Return ``(resolved_price, source)`` for the YES price the seed-intent
+    derivation should use.
+
+    Operator-supplied values (> 0) win. Otherwise derive from the book
+    midpoint, or fall back to whichever side of the book has liquidity.
+    Returns ``(0.0, "empty_book")`` when neither bid nor ask is usable —
+    the caller surfaces this as ``polymarket_book_unavailable``.
+    """
+    explicit = float(polymarket_yes_price)
+    if explicit > 0.0:
+        return explicit, "caller_supplied"
+    best_bid = float(book_payload.get("best_bid") or 0.0)
+    best_ask = float(book_payload.get("best_ask") or 0.0)
+    if best_bid > 0.0 and best_ask > 0.0:
+        return (best_bid + best_ask) / 2.0, "book_midpoint"
+    if best_bid > 0.0:
+        return best_bid, "book_best_bid_only"
+    if best_ask > 0.0:
+        return best_ask, "book_best_ask_only"
+    return 0.0, "empty_book"
 
 
 # ---------------------------------------------------------------------------
@@ -1550,8 +1615,8 @@ def main(argv: list[str] | None = None) -> int:
         default=0.0,
         type=float,
         help=(
-            "(compute-seed-intent) Current Polymarket YES price the agent "
-            "observed at /create time. Required."
+            "(compute-seed-intent) Current Polymarket YES price. Optional — "
+            "omit (or pass 0.0) to auto-derive from the book midpoint (#551)."
         ),
     )
     parser.add_argument(
