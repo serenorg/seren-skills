@@ -328,7 +328,7 @@ def hedge_seed_bet(
 
     Differs from ``hedge_filled_order`` in one critical way: the Prophet
     seed has **not** been committed yet. This function runs before the
-    agent clicks Confirm in the in-browser Privy prompt. If the
+    agent clicks Confirm in Prophet's in-browser signing prompt. If the
     Polymarket hedge fails, the agent aborts the Prophet confirm and
     there is no exposure on either venue.
 

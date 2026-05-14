@@ -127,7 +127,7 @@ def acquire_token(
         sleep(INBOX_POLL_INTERVAL_SECONDS)
     if not body:
         raise OtpEmailTimeout(
-            f"no Privy OTP email from {PRIVY_OTP_SENDER} within "
+            f"no Prophet login OTP email from {PRIVY_OTP_SENDER} within "
             f"{INBOX_POLL_TIMEOUT_SECONDS:.0f}s"
         )
 

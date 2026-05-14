@@ -163,8 +163,8 @@ def _ensure_utc(value: datetime) -> datetime:
 #     otherwise Prophet's odds-vs-Polymarket spread is meaningless.
 #   - Execution headroom — drop markets resolving inside the agent's
 #     UI-submission window (Validate ~10s + odds calc 60-120s + bet form
-#     + Privy prompt = ~90-180s minimum). Same default the bounty-runner
-#     applies (10 min).
+#     + Prophet signing prompt = ~90-180s minimum). Same default the
+#     bounty-runner applies (10 min).
 #   - Candidate cap — keep the per-tick batch small so Jill's first run
 #     finishes in minutes, not hours. Default 50.
 #
