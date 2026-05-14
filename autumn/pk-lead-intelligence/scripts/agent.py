@@ -1,23 +1,24 @@
 """Top-level entrypoint for pk-lead-intelligence runs.
 
-Phase 1 supports exactly one command:
+Phase 2 supports exactly one command:
 
     python scripts/agent.py --command run --dry-run
 
 That path:
 
-1. Reads SF credentials from 1Password via PR A.
+1. Reads SF credentials from 1Password via `auth.op_service_account`.
 2. Launches a Playwright Chromium with the persisted storage_state
-   (if any) and drives Microsoft SSO via PR C.
-3. Navigates to the Lead list and prints the first Lead row.
+   (if any) and drives Microsoft SSO via `auth.microsoft_sso`.
+3. Navigates to the Lead list and reads the first Lead row.
+4. Runs the enrichment pipeline (`sf.enrich_lead`) over that lead —
+   Perplexity research, LinkedIn discovery, Claude hypothesis — and
+   writes a local `.docx` Note for operator review.
 
-There is no SerenDB write in Phase 1 — those land in Phase 2 once
-the operator signs off on the SSO + scraping path. The schema
-bootstrap from PR B is intentionally not wired here.
-
-Live writes are gated by `--allow-live`, which Phase 1 cannot honor
-(there are no write paths yet). The flag is parsed and rejected so
-the operator does not develop a false sense of which gates exist.
+There is no Salesforce write in Phase 2 — those land in Phase 4 once
+the operator has reviewed at least five dry-run Notes. Live writes
+are gated by `--allow-live`, which Phase 2 cannot honor; the flag is
+parsed and rejected so the operator does not develop a false sense
+of which gates exist.
 """
 
 from __future__ import annotations
@@ -39,9 +40,13 @@ _SKILL_ROOT = str(Path(__file__).resolve().parent.parent)
 if _SKILL_ROOT not in sys.path:
     sys.path.insert(0, _SKILL_ROOT)
 
-from scripts.auth import op_service_account  # noqa: E402
 from scripts.auth import microsoft_sso  # noqa: E402
+from scripts.auth import op_service_account  # noqa: E402
+from scripts.research import claude_hypothesis  # noqa: E402
+from scripts.research import linkedin_search  # noqa: E402
+from scripts.research import perplexity  # noqa: E402
 from scripts.sf import client as sf_client  # noqa: E402
+from scripts.sf import enrich_lead  # noqa: E402
 
 
 # --------------------------------------------------------------------- #
@@ -52,8 +57,8 @@ from scripts.sf import client as sf_client  # noqa: E402
 def _load_config(config_path: Path) -> dict:
     """Read and parse `config.json`. Caller decides what to do on miss.
 
-    Kept deliberately minimal — Phase 2+ will likely introduce a
-    pydantic model. For Phase 1 the only field we read is
+    Kept deliberately minimal — Phase 3+ will likely introduce a
+    pydantic model. For Phase 2 the only field we read is
     `inputs.salesforce_org_url`.
     """
 
@@ -103,20 +108,21 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Drive Salesforce Lightning as the named human owner, "
             "enrich PK Leads, write Notes, and publish a weekly status "
-            "doc. Phase 1 implements only the dry-run lead read."
+            "doc. Phase 2 implements the dry-run lead read plus the "
+            "enrichment pipeline that produces a local .docx Note."
         ),
     )
     parser.add_argument(
         "--command",
         required=True,
         choices=["run"],
-        help="Top-level command. Phase 1 supports `run`.",
+        help="Top-level command. Phase 2 supports `run`.",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help=(
-            "Required in Phase 1. Disables every Salesforce write "
+            "Required in Phase 2. Disables every Salesforce write "
             "path (which do not exist yet anyway)."
         ),
     )
@@ -124,7 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--allow-live",
         action="store_true",
         help=(
-            "Reserved for Phase 2+. Live writes also require "
+            "Reserved for Phase 4+. Live writes also require "
             "config.json `inputs.live_mode=true` — both must be set."
         ),
     )
@@ -144,6 +150,15 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("output"),
+        help=(
+            "Directory for dry-run .docx Notes. Defaults to ./output "
+            "(gitignored)."
+        ),
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
         help=(
@@ -156,7 +171,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 # --------------------------------------------------------------------- #
-# Phase 1 dry-run flow                                                  #
+# Phase 2 dry-run flow                                                  #
 # --------------------------------------------------------------------- #
 
 
@@ -174,6 +189,11 @@ def _run_dry_run(
     log or pretty-print it as they please. Lifecycles the
     Playwright browser inside this function; callers do not need to
     manage it.
+
+    This function intentionally does NOT run enrichment — the
+    enrichment pipeline does not need the Playwright browser, and
+    keeping the Playwright lifecycle isolated to this function means
+    the browser closes before any HTTP-bound publisher call runs.
     """
 
     creds = op_service_account.read_salesforce_credentials(
@@ -212,6 +232,36 @@ def _run_dry_run(
             browser.close()
 
 
+def _run_enrichment(
+    *,
+    lead: sf_client.LeadRow,
+    output_dir: Path,
+) -> enrich_lead.EnrichmentResult:
+    """Run the research → render → docx pipeline for one Lead.
+
+    Constructs the live `Dependencies` bundle from the published
+    adapter functions and delegates to `enrich_lead.enrich`. Tests
+    monkeypatch this seam to avoid network and python-docx.
+
+    `company_hint` is `None` in Phase 2 — `LeadRow` does not yet
+    carry an explicit company field, and the Perplexity / LinkedIn
+    adapters degrade gracefully without it. Phase 3 will populate
+    the hint from the All Sources PK Leads report column.
+    """
+
+    deps = enrich_lead.Dependencies(
+        perplexity_research=perplexity.research_lead,
+        linkedin_discover=linkedin_search.discover_candidates,
+        claude_hypothesis=claude_hypothesis.generate,
+    )
+    return enrich_lead.enrich(
+        lead=lead,
+        deps=deps,
+        company_hint=None,
+        output_dir=output_dir,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry. Returns a process exit code."""
 
@@ -220,15 +270,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run" and not args.dry_run:
         # No live write paths exist yet; refuse to pretend otherwise.
         print(
-            "Phase 1 supports --dry-run only. Re-run with --dry-run.",
+            "Phase 2 supports --dry-run only. Re-run with --dry-run.",
             file=sys.stderr,
         )
         return 2
 
     if args.allow_live:
         print(
-            "--allow-live is reserved for Phase 2+ and is rejected in "
-            "Phase 1. Drop the flag and re-run with --dry-run.",
+            "--allow-live is reserved for Phase 4+ and is rejected in "
+            "Phase 2. Drop the flag and re-run with --dry-run.",
             file=sys.stderr,
         )
         return 2
@@ -257,6 +307,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  record_id: {lead.record_id}")
     print(f"  name:      {lead.name}")
     print(f"  source:    {lead.source_url}")
+
+    enrichment = _run_enrichment(lead=lead, output_dir=args.output_dir)
+
+    print("enrichment:")
+    print(f"  docx:      {enrichment.docx_path}")
+    if enrichment.linkedin is not None:
+        print(
+            f"  linkedin:  {enrichment.linkedin.url} "
+            f"({enrichment.linkedin.match_confidence}%)"
+        )
+    else:
+        print("  linkedin:  (no candidate)")
+    print(f"  hypothesis: {enrichment.hypothesis.text[:120]}")
     return 0
 
 
