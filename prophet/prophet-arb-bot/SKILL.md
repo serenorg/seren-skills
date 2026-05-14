@@ -36,11 +36,20 @@ Mode A operator-arb. For each operator-supplied (prophet_market_id, polymarket_c
 
 Every cycle persists the run shell, scored opportunities, and submitted orders to SerenDB (`prophet/prophet`). The `arb_runs`, `arb_opportunities`, and `arb_orders` tables are the canonical run history. The agent also emits a single JSON envelope on stdout for `seren-cron` to capture in its `execution_results` table.
 
-## What Mode A Is Not
+## Execution Modes
 
-- Mode A is not delta-neutral. The arb-bot trades exclusively on Prophet; the polymarket leg is a fair-value reference, not a hedge. Adding the polymarket hedge requires CCTP/Polygon plumbing that doubles the surface and is deferred to a later mode.
-- Mode A is not a market-maker.
-- Mode A does not create new Prophet markets — that's the bounty-runner's job.
+Two execution modes are supported, selected by `execution_mode` in `config.json`:
+
+- `single_leg` (default, Mode A) — the arb-bot trades exclusively on Prophet; the polymarket leg is a fair-value reference, not a hedge. Existing operators are unaffected by the #536 changes.
+- `delta_neutral` (opt-in) — after every Prophet fill the bot submits the offsetting Polymarket order via `py-clob-client`. Both Prophet and Polymarket are on Polygon, so no cross-chain bridging is required; each leg locks its own USDC pool. A **pre-trade depth check** rejects opportunities where the Polymarket book can't absorb the planned notional at `max_hedge_slippage_bps` (default 200) — preventing naked Prophet exposure at the source. If the hedge submission fails post-fill, the bot invokes the Prophet `cancelOrder` unwind path and records the order with `hedge_status=naked_exposure` for operator action.
+
+Set `"execution_mode": "delta_neutral"` and `"max_hedge_slippage_bps": 200.0` in `config.json` to enable. `delta_neutral` is also a real claim against `POLY_PRIVATE_KEY` / `POLY_API_KEY` / `POLY_PASSPHRASE` / `POLY_SECRET` — the live hedger fails closed if those creds are not loaded.
+
+## What The Arb-Bot Is Not
+
+- Not a market-maker.
+- Not a Prophet market creator — that's the bounty-runner's job.
+- Not a position liquidator. Both modes are cancel-only on the maker side; held YES/NO inventory must be unwound by the operator through the Prophet UI.
 
 ## Required Inputs
 
@@ -103,8 +112,12 @@ Before any live `run --yes-live`:
 3. Verify `inputs.manual_pairs` has at least one entry (run `--command setup` first if not).
 4. Verify `https://app.prophetmarket.ai/api/graphql` is reachable (the prophet-ai publisher hop is gone — see #493).
 5. Verify the live `polymarket-data` publisher is reachable.
-6. **Funds preflight (#524):** after scoring, query `viewer.cashBalance.availableCents` once. If it cannot cover `sum(opp.size_usdc for opp in actionable[:max_orders_per_run])`, return a `status=blocked, reason=funds_insufficient, action=deposit_required` envelope before any `placeOrder` mutation fires. Skip preflight in dry-run cycles.
-7. If any check fails, fail closed with a structured `blocked` envelope and let the cron retry on the next tick.
+6. **Funds preflight (#524):** after scoring, query `viewer.cashBalance.availableCents` once. In `single_leg` mode, if it cannot cover `sum(opp.size_usdc for opp in actionable[:max_orders_per_run])`, return a `status=blocked, reason=funds_insufficient, action=deposit_required` envelope before any `placeOrder` mutation fires. Skip preflight in dry-run cycles.
+7. **Delta-neutral pre-trade additions (#536):** when `execution_mode = "delta_neutral"`, the cycle additionally must:
+   - Have `py-clob-client` installed and `POLY_PRIVATE_KEY`/`POLY_API_KEY`/`POLY_PASSPHRASE`/`POLY_SECRET` loaded.
+   - Reach the Polymarket CLOB and fetch order-book depth for every actionable pair. Opportunities whose visible Polymarket depth can't cover the target notional at `max_hedge_slippage_bps` are rejected with `polymarket_depth_*` blockers before the Prophet limit is posted.
+   - Run the **two-venue funds preflight**: query both Prophet protocol cash AND Polymarket CLOB collateral. The blocked envelope returns `prophet_deficit_usdc` and `polymarket_deficit_usdc` as separate fields so the agent's deposit runbook can route to the right venue.
+8. If any check fails, fail closed with a structured `blocked` envelope and let the cron retry on the next tick.
 
 ## Agent-driven deposit runbook
 
@@ -175,6 +188,45 @@ low-SerenBucks case. The cron keeps firing; each tick re-checks the
 balance. This is correct when the operator funds externally between
 ticks. The blocker `funds_insufficient_by_<deficit>_usdc` is recorded
 on the run so the operator can see the gap without re-running.
+
+## Delta-neutral hedge flow (#536)
+
+When `execution_mode = "delta_neutral"`, every cycle follows this two-leg sequence:
+
+1. **Post-fill sweep (top of cycle).** `list_user_orders` is called first.
+   Any previously-open Prophet order now reporting `filled_shares > 0`
+   triggers an immediate Polymarket hedge — opposite side, same notional,
+   marketable price snapped to live tick. The hedge order id, fill
+   quantity, and fill price are persisted to `arb_orders` alongside the
+   Prophet leg under `hedge_status='hedged'`. Latency target: <5s between
+   fill detection and Polymarket submission.
+
+2. **Pre-trade depth check.** Each scored opportunity goes through
+   `assess_polymarket_depth` before the Prophet limit is posted. If the
+   visible Polymarket book can't cover `size_usdc` at acceptable slippage,
+   the opportunity is rejected this cycle with a `polymarket_depth_*`
+   blocker. This makes the "Prophet fills, Polymarket can't hedge" failure
+   path impossible at the source — we don't quote Prophet exposure we
+   can't immediately offset.
+
+3. **Two-venue funds preflight.** Both Prophet protocol cash and
+   Polymarket CLOB collateral are checked. The blocked envelope returns
+   separate `prophet_deficit_usdc` and `polymarket_deficit_usdc` so the
+   deposit runbook routes to the right venue.
+
+4. **Hedge-failure path.** If the hedge submission throws after a Prophet
+   fill (book moved between depth check and submission, CLOB rejection,
+   balance shortfall on Polymarket), the bot invokes Prophet's
+   `cancelOrder` for cleanup (no-op if already fully filled) and records
+   `hedge_status='naked_exposure'`. Prophet has no force-close on the maker
+   side, so naked exposure is honestly surfaced rather than silently
+   accumulated — the operator must unwind the Prophet leg manually via
+   the Prophet UI.
+
+Schema: `arb_orders` carries four delta-neutral columns
+(`polymarket_filled_qty`, `polymarket_fill_price`, `polymarket_order_id`,
+`hedge_status`). They default to neutral values for `single_leg` rows so
+existing operators see no migration churn.
 
 ## `placeOrder` is server-signed (#505 Phase 15)
 

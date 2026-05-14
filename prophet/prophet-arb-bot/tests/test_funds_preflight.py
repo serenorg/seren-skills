@@ -23,7 +23,10 @@ from dataclasses import dataclass
 import pytest
 
 from prophet.client import MinimalProphetClient, ViewerCashBalance
-from funds_preflight import evaluate_funds_preflight
+from funds_preflight import (
+    evaluate_funds_preflight,
+    evaluate_two_venue_funds_preflight,
+)
 
 
 @dataclass
@@ -87,3 +90,60 @@ def test_preflight_ok_when_no_opportunities() -> None:
     assert result.ok is True
     assert result.needed_usdc == 0.0
     assert result.deficit_usdc == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Two-venue preflight (#536)
+#
+# Delta-neutral mode needs USDC on BOTH Prophet (LIMIT collateral) AND
+# Polymarket CLOB (hedge collateral). A single combined deficit hides
+# which venue needs the deposit; the operator runbook routes deposits
+# per chain. We return separate deficits so the runbook can act.
+
+
+def test_two_venue_preflight_returns_split_deficits_when_polymarket_short() -> None:
+    """Prophet covered, Polymarket short: deposit Polymarket-side only."""
+    opps = [_StubOpp(size_usdc=10.0), _StubOpp(size_usdc=5.0)]
+
+    result = evaluate_two_venue_funds_preflight(
+        opportunities=opps,
+        prophet_available_usdc=100.0,
+        polymarket_available_usdc=3.0,
+    )
+
+    assert result.ok is False
+    assert result.prophet_deficit_usdc == pytest.approx(0.0)
+    assert result.polymarket_deficit_usdc == pytest.approx(12.0)
+    envelope = result.to_deposit_envelope()
+    assert envelope["prophet_deficit_usdc"] == pytest.approx(0.0)
+    assert envelope["polymarket_deficit_usdc"] == pytest.approx(12.0)
+
+
+def test_two_venue_preflight_returns_split_deficits_when_prophet_short() -> None:
+    """Polymarket covered, Prophet short: deposit Prophet-side only."""
+    opps = [_StubOpp(size_usdc=20.0)]
+
+    result = evaluate_two_venue_funds_preflight(
+        opportunities=opps,
+        prophet_available_usdc=5.0,
+        polymarket_available_usdc=100.0,
+    )
+
+    assert result.ok is False
+    assert result.prophet_deficit_usdc == pytest.approx(15.0)
+    assert result.polymarket_deficit_usdc == pytest.approx(0.0)
+
+
+def test_two_venue_preflight_ok_when_both_sides_funded() -> None:
+    """Happy path: both venues cover the round-trip notional."""
+    opps = [_StubOpp(size_usdc=8.0), _StubOpp(size_usdc=12.0)]
+
+    result = evaluate_two_venue_funds_preflight(
+        opportunities=opps,
+        prophet_available_usdc=50.0,
+        polymarket_available_usdc=50.0,
+    )
+
+    assert result.ok is True
+    assert result.prophet_deficit_usdc == pytest.approx(0.0)
+    assert result.polymarket_deficit_usdc == pytest.approx(0.0)

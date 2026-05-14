@@ -74,6 +74,33 @@ class RunRecorder:
     def record_order(self, order: Any) -> None:
         self.orders.append(asdict(order))
 
+    def attach_hedge_outcome(
+        self,
+        *,
+        prophet_order_id: str,
+        hedge_status: str,
+        polymarket_order_id: str | None,
+        polymarket_filled_qty: float,
+        polymarket_fill_price: float,
+        error: str | None = None,
+    ) -> None:
+        """Mutate the recorded order entry with hedge metadata.
+
+        Called from the agent run loop after `hedge_filled_order`
+        resolves. If no row matches ``prophet_order_id`` (e.g. dry-run
+        synthesized hedge), this is a silent no-op so tests don't have
+        to thread fake recorder state through every path.
+        """
+        for entry in self.orders:
+            if entry.get("order_id") == prophet_order_id:
+                entry["hedge_status"] = hedge_status
+                entry["polymarket_order_id"] = polymarket_order_id
+                entry["polymarket_filled_qty"] = polymarket_filled_qty
+                entry["polymarket_fill_price"] = polymarket_fill_price
+                if error:
+                    entry["hedge_error"] = error
+                return
+
     def record_blocker(self, code: str) -> None:
         self.blockers.append(code)
 
@@ -129,17 +156,27 @@ class RunRecorder:
                             json.dumps(opp.get("health_warnings") or []),
                         ),
                     )
-                # Upsert orders.
+                # Upsert orders. Hedge columns are populated only when
+                # the runner ran in delta-neutral mode; single-leg rows
+                # keep the defaults (`polymarket_filled_qty=0`,
+                # `polymarket_fill_price=0`, `polymarket_order_id=NULL`,
+                # `hedge_status='pending'`).
                 for order in self.orders:
                     cur.execute(
                         """
                         INSERT INTO arb_orders (
                           prophet_order_id, run_id, prophet_market_id,
-                          side, outcome, shares, limit_price, status
+                          side, outcome, shares, limit_price, status,
+                          polymarket_filled_qty, polymarket_fill_price,
+                          polymarket_order_id, hedge_status
                         )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         ON CONFLICT (prophet_order_id) DO UPDATE SET
                           status = EXCLUDED.status,
+                          polymarket_filled_qty = EXCLUDED.polymarket_filled_qty,
+                          polymarket_fill_price = EXCLUDED.polymarket_fill_price,
+                          polymarket_order_id = EXCLUDED.polymarket_order_id,
+                          hedge_status = EXCLUDED.hedge_status,
                           last_seen_at = NOW()
                         """,
                         (
@@ -151,6 +188,10 @@ class RunRecorder:
                             order.get("shares"),
                             order.get("limit_price"),
                             order.get("status"),
+                            order.get("polymarket_filled_qty", 0.0),
+                            order.get("polymarket_fill_price", 0.0),
+                            order.get("polymarket_order_id"),
+                            order.get("hedge_status", "pending"),
                         ),
                     )
             conn.commit()

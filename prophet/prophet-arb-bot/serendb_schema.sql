@@ -85,6 +85,18 @@ CREATE INDEX IF NOT EXISTS arb_orders_market_idx
 CREATE INDEX IF NOT EXISTS arb_orders_status_idx
     ON arb_orders (status);
 
+-- Delta-neutral (#536) — track the Polymarket hedge leg alongside the
+-- Prophet leg. Single-leg rows leave these columns NULL / default; the
+-- recorder only writes them when execution_mode = "delta_neutral".
+ALTER TABLE arb_orders
+    ADD COLUMN IF NOT EXISTS polymarket_filled_qty   DOUBLE PRECISION DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS polymarket_fill_price   DOUBLE PRECISION DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS polymarket_order_id     TEXT,
+    ADD COLUMN IF NOT EXISTS hedge_status            TEXT DEFAULT 'pending';
+
+CREATE INDEX IF NOT EXISTS arb_orders_hedge_status_idx
+    ON arb_orders (hedge_status);
+
 -- ---------------------------------------------------------------------------
 -- arb_positions — open holdings (computed from fills).
 
