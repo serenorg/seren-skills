@@ -4,10 +4,10 @@
 Prophet's `/create` UI. Today that list is emitted verbatim — every
 entry costs the operator `initial_bet_usdc` on Prophet at confirm-time,
 and another `initial_bet_usdc` on Polymarket if the agent immediately
-hedges (Fix 3 below). With a thin balance the operator approves Privy
-prompts that fail at confirm; with a deep Polymarket book on one
-candidate and a paper-thin book on another, the hedge fails post-fill
-and leaves naked exposure.
+hedges (Fix 3 below). With a thin balance the operator approves Prophet
+signing prompts that fail at confirm; with a deep Polymarket book on
+one candidate and a paper-thin book on another, the hedge fails
+post-fill and leaves naked exposure.
 
 This module clamps both gaps:
 

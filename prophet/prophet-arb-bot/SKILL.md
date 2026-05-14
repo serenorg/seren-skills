@@ -76,19 +76,19 @@ When auto-discover is disabled in an existing custom config, the existing `manua
 ## What The Arb-Bot Is Not
 
 - Not a market-maker.
-- Not a Prophet market creator on its own — `pending_ui_submission` rows still require the agent to drive Prophet's `/create` UI via the Playwright runbook. The Python subprocess never signs the `createMarketWithBet` mutation directly (live-validated 2026-05-13: it requires a client-signed `SignedOrderInput` from the in-browser Privy SDK).
+- Not a Prophet market creator on its own — `pending_ui_submission` rows still require the agent to drive Prophet's `/create` UI via the Playwright runbook. The Python subprocess never signs the `createMarketWithBet` mutation directly (live-validated 2026-05-13: it requires a client-signed `SignedOrderInput` from Prophet's in-browser signing flow).
 - Not a position liquidator. Both modes are cancel-only on the maker side; held YES/NO inventory must be unwound by the operator through the Prophet UI.
 
 ## Required Inputs
 
-- `inputs.prophet_email` — Privy account email. The arb-bot caches the JWT so the OTP flow only fires when the cache is stale.
+- `inputs.prophet_email` — the email address you use to log into Prophet (app.prophetmarket.ai). If you do not have a Prophet account yet, use whatever email you want associated with the bot — Prophet will create the account on first login. The arb-bot caches the JWT so the OTP flow only fires when the cache is stale.
 - `inputs.email_provider` — `gmail` or `outlook`. Used only on cold-start cache refresh.
 - `inputs.manual_pairs` — explicit (prophet_market_id, polymarket_condition_id) pairs. **Optional when `auto_discover.enabled=true`** — auto-discover refreshes the candidate set from live Polymarket each cycle. Use `manual_pairs` for pairs outside the campaign filter or to force-pin a specific market.
 - `SEREN_API_KEY` — environment or `API_KEY` injected by Seren Desktop.
 
 ## Authentication
 
-The arb-bot owns its Privy session cache at `~/.config/seren/skills/prophet-arb-bot/state/privy_session.json` (override with `PROPHET_ARB_STATE_DIR`). If the cache is fresh (default leeway 60s before JWT expiry) the agent uses the cached JWT directly with **zero OTP emails**. If the cache is stale, the agent silently refreshes via the in-process refresh worker. Only when both fail does the cold-start OTP flow fire.
+The arb-bot owns its Prophet session cache under `~/.config/seren/skills/prophet-arb-bot/state/` (override with `PROPHET_ARB_STATE_DIR`). If the cache is fresh (default leeway 60s before JWT expiry) the agent uses the cached JWT directly with **zero OTP emails**. If the cache is stale, the agent silently refreshes via the in-process refresh worker. Only when both fail does the cold-start OTP flow fire.
 
 Expected cadence:
 
@@ -101,7 +101,7 @@ You can also pre-supply a JWT via `PROPHET_SESSION_TOKEN` env var. The agent ski
 ## Live Mode Safety
 
 First-run mode is live-enabled delta-neutral, but Prophet's in-browser
-Privy prompt remains the per-market consent gate. Autonomous schedules
+signing prompt remains the per-market consent gate. Autonomous schedules
 still require both:
 
 - `live_mode: true` in `config.json`
@@ -207,7 +207,7 @@ DEPOSIT_CONFIRM_BUTTON         = 'button:has-text("Confirm")'
 2. Query on-chain USDC at that address via `seren-polygon`.
 3. If on-chain USDC < `deposit.deficit_usdc`, surface and stop.
 4. Otherwise navigate to `PROPHET_WALLET_URL`, click Deposit, fill
-   the amount = `deficit_usdc`, click Confirm, accept the Privy
+   the amount = `deficit_usdc`, click Confirm, accept the Prophet
    signing prompt.
 5. Poll `viewer.cashBalance.availableCents` until the deposit lands.
 6. Re-run `agent.py --command run --json-output`.
@@ -264,9 +264,9 @@ existing operators see no migration churn.
 The Prophet `placeOrder` mutation is **server-signed**. Unlike
 `createMarketWithBet` (which requires a client-signed
 `SignedOrderInput`), `PlaceOrderInput` carries no signature — Prophet's
-backend signs the CTF order on behalf of the user via the user's Privy
-embedded wallet. Just the Privy JWT in the `Authorization` header is
-sufficient.
+backend signs the CTF order on behalf of the user via the user's
+embedded wallet. Just the Prophet session JWT in the `Authorization`
+header is sufficient.
 
 The mutation shape is live-validated against Prophet's production
 GraphQL endpoint (2026-05-13) and pinned in
@@ -431,17 +431,17 @@ For each `pending_ui_submission` entry:
      polymarket-data publisher is down, or the book had no usable
      bid/ask to derive a midpoint. Retry on the next tick.
    - `status=blocked, reason=prophet_unauthorized` (#553) → the cached
-     Privy JWT is stale. Run the **Agent-driven OTP runbook** to refresh
-     it, re-export `PROPHET_SESSION_TOKEN`, and retry the same
-     `compute-seed-intent` call. The market is still in the odds-session
-     window — do not abandon the candidate.
+     Prophet session JWT is stale. Run the **Agent-driven OTP runbook**
+     to refresh it, re-export `PROPHET_SESSION_TOKEN`, and retry the
+     same `compute-seed-intent` call. The market is still in the
+     odds-session window — do not abandon the candidate.
    - `status=blocked, reason=odds_session_timeout` (#553) → Prophet's
      6-model AI calc did not complete within `--poll-timeout-s` (default
      180s). Abandon this entry. No exposure was created on either side.
 
 3. Once the bet form renders, fill the seed side returned by
    `compute-seed-intent` (`buy` or `sell`) and `entry.initial_bet_usdc`,
-   but do **not** click the Prophet Confirm / Privy signing prompt yet.
+   but do **not** click the Prophet Confirm signing prompt yet.
 
 4. Submit the Polymarket hedge first using the prices the previous step
    returned:
@@ -459,8 +459,8 @@ For each `pending_ui_submission` entry:
    this entry and do not click Prophet Confirm. No Prophet exposure was
    created.
 6. If the response has `hedge_status='hedged'` and
-   `next_action='click_prophet_confirm'`, click the Prophet Confirm /
-   Privy prompt.
+   `next_action='click_prophet_confirm'`, click the Prophet Confirm
+   signing prompt.
 7. If Prophet Confirm succeeds, capture the redirected
    `prophet_market_id` and persist the pair:
 
@@ -523,7 +523,7 @@ Seed hedge statuses:
 
 ## Disclaimers
 
-- Prophet is **mainnet** software. Orders submitted by this skill trade real USDC against real counterparties on Prophet's production deployment. Bad orders are not reversible; review your `min_spread` / `kelly_fraction` / `max_trade_size_usdc` before approving any Prophet Privy prompt or enabling an autonomous live schedule.
+- Prophet is **mainnet** software. Orders submitted by this skill trade real USDC against real counterparties on Prophet's production deployment. Bad orders are not reversible; review your `min_spread` / `kelly_fraction` / `max_trade_size_usdc` before approving any Prophet signing prompt or enabling an autonomous live schedule.
 - This skill does not provide financial advice. Trading prediction markets is regulated differently across jurisdictions; the user is responsible for ensuring participation is legal where they live.
 
 ## Troubleshooting
@@ -534,7 +534,7 @@ Seed hedge statuses:
 
 **`reason=blocked_otp_email_missing`.**
 
-- `inputs.prophet_email` is empty in `config.json`. Set it to the Privy account email the operator uses for Prophet.
+- `inputs.prophet_email` is empty in `config.json`. Set it to the email address the operator uses to log into Prophet (app.prophetmarket.ai). If the operator does not have a Prophet account yet, any email they want associated with the bot is fine.
 
 **`reason=prophet_unauthorized` on every tick.**
 

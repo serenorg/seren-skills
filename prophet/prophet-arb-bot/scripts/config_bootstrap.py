@@ -64,8 +64,9 @@ def bootstrap_config_if_missing(
 
     # Fresh install defaults for Jill: auto-discover on so the first
     # `--command run` finds candidates, delta-neutral on so seed bets
-    # are hedged, and live mode on so the per-market Privy prompt is the
-    # consent gate. Existing configs are never overwritten above.
+    # are hedged, and live mode on so the per-market Prophet signing
+    # prompt is the consent gate. Existing configs are never overwritten
+    # above.
     auto = data.setdefault("auto_discover", {})
     auto["enabled"] = True
     data["execution_mode"] = "delta_neutral"
