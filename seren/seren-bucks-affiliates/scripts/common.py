@@ -12,8 +12,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "skill": "seren-bucks-affiliates",
     "program": {
         "program_id": "seren-bucks-default",
+        "program_slug": "seren-bucks",
         "program_name": "SerenBucks Affiliate Program",
-        "tracked_link": "https://serendb.com?ref=default",
+        "tracked_link": "",
         "affiliate_source_of_truth": "seren-affiliates",
     },
     "database": {
@@ -53,7 +54,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "proposal_size": 10,
         "new_outbound_daily_cap": 10,
         "strict_mode": True,
-        "tracked_link": "https://serendb.com?ref=default",
+        "tracked_link": "",
     },
     "simulate": {
         "affiliate_bootstrap_failure": False,
