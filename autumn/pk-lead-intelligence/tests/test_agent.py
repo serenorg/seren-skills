@@ -87,12 +87,13 @@ def test_main_rejects_run_without_dry_run(capsys, tmp_path: Path):
     assert "--dry-run only" in captured.err
 
 
-def test_main_rejects_allow_live_in_phase_2(capsys, tmp_path: Path):
-    """`--allow-live` is reserved for Phase 4+. Phase 2 refuses it.
+def test_main_rejects_allow_live_for_run_command(capsys, tmp_path: Path):
+    """`--allow-live` against `--command run` is reserved for Phase 4+.
 
-    Live Salesforce writes do not exist until Phase 4 — accepting the
-    flag earlier would let an unreviewed renderer ship Notes onto live
-    Lead records.
+    Phase 3 enables `--allow-live` for the `provision` command only.
+    The `run` command (Lead Note writes) stays gated until Phase 4 —
+    accepting the flag earlier would let an unreviewed renderer ship
+    Notes onto live Lead records.
     """
 
     rc = agent.main(
@@ -108,6 +109,117 @@ def test_main_rejects_allow_live_in_phase_2(capsys, tmp_path: Path):
     assert rc == 2
     captured = capsys.readouterr()
     assert "reserved for Phase 4" in captured.err
+
+
+# --------------------------------------------------------------------- #
+# Phase 3 provisioning CLI gates                                         #
+# --------------------------------------------------------------------- #
+
+
+def test_main_provision_requires_live_mode_in_config(
+    capsys, tmp_path: Path
+):
+    """`--allow-live` alone is not enough — `inputs.live_mode` must
+    also be true. Defense in depth: a stray CLI flag cannot drive
+    Salesforce writes if the operator has not flipped the config gate.
+    """
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "inputs": {
+                    "salesforce_org_url": "https://acme.lightning.force.com",
+                    "live_mode": False,
+                }
+            }
+        )
+    )
+    rc = agent.main(
+        [
+            "--command",
+            "provision",
+            "--allow-live",
+            "--config",
+            str(cfg),
+        ]
+    )
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "live_mode" in captured.err
+
+
+def test_main_provision_dry_run_prints_plan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    """Dry-run provision prints the plan without driving the UI.
+
+    The seam `_run_provision` is monkeypatched — tests do not need
+    Playwright or a live Salesforce. The contract: parsed args →
+    dispatch to provision → print the three artifact summaries.
+    """
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "inputs": {
+                    "salesforce_org_url": "https://acme.lightning.force.com",
+                    "live_mode": False,
+                }
+            }
+        )
+    )
+
+    from scripts.sf import build_all_sources_leads_report as all_leads_report
+    from scripts.sf import build_pk_lead_dashboard as lead_dashboard
+    from scripts.sf import build_pk_opp_artifacts as opp_artifacts
+    from scripts.sf import provision_fields
+
+    fake_summary = agent.ProvisionSummary(
+        fields=provision_fields.ProvisionResult(
+            planned=list(provision_fields.LEAD_FIELD_SPECS),
+            created=[],
+            skipped=[],
+        ),
+        all_sources_report=all_leads_report.ReportResult(
+            spec=all_leads_report.ALL_SOURCES_PK_LEADS_REPORT_SPEC,
+            created=False,
+            url=None,
+        ),
+        lead_dashboard=lead_dashboard.DashboardResult(
+            spec=lead_dashboard.PK_LEAD_DASHBOARD_SPEC,
+            created=False,
+            url=None,
+        ),
+        opp_dashboard=opp_artifacts.DashboardResult(
+            spec=opp_artifacts.PK_OPP_PIPELINE_DASHBOARD_SPEC,
+            created=False,
+            url=None,
+        ),
+    )
+
+    captured_kwargs: dict = {}
+
+    def fake_run_provision(**kwargs):
+        captured_kwargs.update(kwargs)
+        return fake_summary
+
+    monkeypatch.setattr(agent, "_run_provision", fake_run_provision)
+
+    rc = agent.main(
+        ["--command", "provision", "--dry-run", "--config", str(cfg)]
+    )
+
+    assert rc == 0
+    assert captured_kwargs["dry_run"] is True
+    out = capsys.readouterr().out
+    # Each planned artifact must be surfaced so the operator can
+    # eyeball the plan before flipping live_mode=true.
+    assert "PACKAGING__c" in out
+    assert "All Sources PK Leads" in out
+    assert "PK Lead Dashboard" in out
+    assert "PK Opportunity Pipeline & Rolling Forecast" in out
 
 
 # --------------------------------------------------------------------- #
