@@ -88,6 +88,7 @@ from prophet import (
     ProphetUnauthorized,
 )
 from prophet.client import MinimalProphetClient
+from prophet.odds_session import OddsSessionTimeout
 from prophet.orders import ProphetOrder, ProphetOrderClient
 from seren_cron_client import HttpGateway
 
@@ -1173,13 +1174,40 @@ def cmd_compute_seed_intent(
     if fetch_book is None:
         from polymarket_live import fetch_book as fetch_book  # type: ignore
 
-    session = poll(
-        transport,
-        jwt=jwt,
-        session_id=odds_session_id,
-        interval_s=poll_interval_s,
-        timeout_s=poll_timeout_s,
-    )
+    # #553 — wrap the poll's two typed faults so the agent never sees a
+    # raw traceback. ProphetUnauthorized → JWT is stale, agent should
+    # refresh and retry the same call. OddsSessionTimeout → Prophet's
+    # AI calc never finished, agent should abandon the candidate.
+    try:
+        session = poll(
+            transport,
+            jwt=jwt,
+            session_id=odds_session_id,
+            interval_s=poll_interval_s,
+            timeout_s=poll_timeout_s,
+        )
+    except ProphetUnauthorized as exc:
+        return CycleResult(
+            status="blocked",
+            reason="prophet_unauthorized",
+            payload={
+                "polymarket_condition_id": polymarket_condition_id,
+                "odds_session_id": odds_session_id,
+                "action": "refresh_jwt",
+                "error": f"ProphetUnauthorized:{str(exc)[:200]}",
+            },
+        )
+    except OddsSessionTimeout as exc:
+        return CycleResult(
+            status="blocked",
+            reason="odds_session_timeout",
+            payload={
+                "polymarket_condition_id": polymarket_condition_id,
+                "odds_session_id": odds_session_id,
+                "timeout_s": float(poll_timeout_s),
+                "error": f"OddsSessionTimeout:{str(exc)[:200]}",
+            },
+        )
 
     base_payload: dict[str, Any] = {
         "session_id": session.id,

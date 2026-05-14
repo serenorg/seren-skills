@@ -26,7 +26,8 @@ import pytest
 
 from arbitrage.hedge import derive_seed_intent
 from agent import cmd_compute_seed_intent, AgentConfig
-from prophet.odds_session import BinaryPricing, OddsSession
+from prophet import ProphetUnauthorized
+from prophet.odds_session import BinaryPricing, OddsSession, OddsSessionTimeout
 
 
 def _book(
@@ -304,3 +305,68 @@ def test_cmd_compute_seed_intent_auto_derives_polymarket_yes_price_from_midpoint
     assert result.payload["polymarket_yes_price_source"] == "book_midpoint"
     assert result.payload["seed_side"] == "buy"
     assert result.payload["edge_bps"] == pytest.approx(1800.0)
+
+
+# ---------------------------------------------------------------------------
+# Auth + timeout boundary envelopes (#553)
+#
+# `poll_odds_session` can raise `ProphetUnauthorized` (stale JWT — same
+# failure mode `cmd_run` already wraps at agent.py:764) or
+# `OddsSessionTimeout` (Prophet AI calc never completes). Before this
+# revision both surfaced as raw Python tracebacks. The agent's runbook
+# needs structured `blocked` envelopes to know whether to refresh the
+# JWT and retry vs abandon the candidate.
+
+
+def test_cmd_compute_seed_intent_blocks_on_prophet_unauthorized() -> None:
+    def fake_poll(transport, *, jwt, session_id, **kwargs):
+        raise ProphetUnauthorized("prophet returned 401: invalid or expired token")
+
+    def fake_fetch_book(condition_id: str) -> dict:
+        raise AssertionError("fetch_book must not run when poll raised 401")
+
+    result = cmd_compute_seed_intent(
+        config=_fake_config(),
+        polymarket_condition_id="0xabc",
+        odds_session_id="ocs_1",
+        polymarket_yes_price=0.0,
+        transport=object(),
+        jwt="eyJstale...",
+        poll=fake_poll,
+        fetch_book=fake_fetch_book,
+    )
+
+    assert result.status == "blocked"
+    assert result.reason == "prophet_unauthorized"
+    assert result.payload["action"] == "refresh_jwt"
+    assert result.payload["odds_session_id"] == "ocs_1"
+    assert result.payload["polymarket_condition_id"] == "0xabc"
+    assert "ProphetUnauthorized" in result.payload["error"]
+
+
+def test_cmd_compute_seed_intent_blocks_on_odds_session_timeout() -> None:
+    def fake_poll(transport, *, jwt, session_id, **kwargs):
+        raise OddsSessionTimeout(
+            "odds session 'ocs_1' did not reach terminal status within 180.0s"
+        )
+
+    def fake_fetch_book(condition_id: str) -> dict:
+        raise AssertionError("fetch_book must not run when poll timed out")
+
+    result = cmd_compute_seed_intent(
+        config=_fake_config(),
+        polymarket_condition_id="0xabc",
+        odds_session_id="ocs_1",
+        polymarket_yes_price=0.0,
+        transport=object(),
+        jwt="eyJ...",
+        poll=fake_poll,
+        fetch_book=fake_fetch_book,
+        poll_timeout_s=180.0,
+    )
+
+    assert result.status == "blocked"
+    assert result.reason == "odds_session_timeout"
+    assert result.payload["timeout_s"] == pytest.approx(180.0)
+    assert result.payload["odds_session_id"] == "ocs_1"
+    assert "OddsSessionTimeout" in result.payload["error"]

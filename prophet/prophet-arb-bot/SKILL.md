@@ -434,6 +434,14 @@ For each `pending_ui_submission` entry:
    - `status=blocked, reason=polymarket_book_unavailable` → the live
      polymarket-data publisher is down, or the book had no usable
      bid/ask to derive a midpoint. Retry on the next tick.
+   - `status=blocked, reason=prophet_unauthorized` (#553) → the cached
+     Privy JWT is stale. Run the **Agent-driven OTP runbook** to refresh
+     it, re-export `PROPHET_SESSION_TOKEN`, and retry the same
+     `compute-seed-intent` call. The market is still in the odds-session
+     window — do not abandon the candidate.
+   - `status=blocked, reason=odds_session_timeout` (#553) → Prophet's
+     6-model AI calc did not complete within `--poll-timeout-s` (default
+     180s). Abandon this entry. No exposure was created on either side.
 
 3. Once the bet form renders, fill the seed side returned by
    `compute-seed-intent` (`buy` or `sell`) and `entry.initial_bet_usdc`,
