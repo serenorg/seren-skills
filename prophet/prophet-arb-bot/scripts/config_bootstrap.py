@@ -10,8 +10,9 @@ Contract:
   - If `config.json` already exists, do nothing (idempotent). Operator
     state is sacred; we never overwrite their tuning.
   - Otherwise copy `config.example.json`, flip `auto_discover.enabled`
-    to true and `live_mode` to false (safe defaults for the very first
-    cycle), and persist `prophet_email` / `email_provider` when passed.
+    to true, default to `execution_mode="delta_neutral"` and
+    `live_mode=true`, and persist `prophet_email` / `email_provider`
+    when passed.
   - If neither file exists, raise — the skill is misinstalled and
     fabricating an empty dict would mask the real problem.
 """
@@ -61,12 +62,14 @@ def bootstrap_config_if_missing(
     shutil.copy(example, config)
     data = json.loads(config.read_text(encoding="utf-8"))
 
-    # Safe defaults on a fresh install: auto-discover on so the first
-    # `--command run` finds candidates, live_mode off so the first run
-    # is always dry-run regardless of what the operator copies later.
+    # Fresh install defaults for Jill: auto-discover on so the first
+    # `--command run` finds candidates, delta-neutral on so seed bets
+    # are hedged, and live mode on so the per-market Privy prompt is the
+    # consent gate. Existing configs are never overwritten above.
     auto = data.setdefault("auto_discover", {})
     auto["enabled"] = True
-    data["live_mode"] = False
+    data["execution_mode"] = "delta_neutral"
+    data["live_mode"] = True
 
     inputs = data.setdefault("inputs", {})
     if prophet_email:

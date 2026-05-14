@@ -12,10 +12,10 @@ version: 0.1.0
 When invoked:
 
 1. Run `python3 scripts/agent.py --command setup --json-output` to verify auth and apply the schema. Idempotent — safe to re-run.
-2. Run `python3 scripts/agent.py --command run --json-output` once. The result will be `status=ok` (cycle ran), `status=ok_no_fills` (cycle ran but no Prophet fills), or `status=blocked`.
-3. **If the run envelope carries `pending_ui_submission`** (auto-discover mode found Polymarket candidates that don't have Prophet mirrors yet), drive the **Agent-driven UI submission runbook** below for each entry. The runbook is shared verbatim with prophet-bounty-runner — the agent uses the same selectors and the same `record-created-market` follow-on command to persist captured `prophet_market_id`s back to `arb_pairs`. After driving the UI for every entry, re-run `agent.py --command run` so the bot trades the newly-created pairs.
+2. Run `python3 scripts/agent.py --command run --yes-live --json-output` once. The result will be `status=ok` (cycle ran), `status=ok_no_fills` (cycle ran but no Prophet fills), or `status=blocked`.
+3. **If the run envelope carries `pending_ui_submission`** (auto-discover mode found Polymarket candidates that don't have Prophet mirrors yet), drive the **Agent-driven UI submission runbook** below for each entry. The runbook submits the Polymarket hedge first through `record-created-market`, then the agent clicks Prophet Confirm only after the hedge succeeds. After driving the UI for every entry, re-run `agent.py --command run --yes-live` so the bot trades the newly-created pairs.
 4. If `status=blocked`, surface the `reason` to the user and **do not** schedule cron until acknowledged.
-5. Only after a successful first run, call `python3 scripts/setup_cron.py create --yes-live` and start `python3 scripts/run_local_pull_runner.py` to claim due ticks. Without `--yes-live` the cron emits dry-run intents only.
+5. Only after a successful first run, call `python3 scripts/setup_cron.py create --yes-live` and start `python3 scripts/run_local_pull_runner.py` to claim due ticks. `--yes-live` remains required for autonomous schedules as defense-in-depth.
 
 This validation gate prevents the cron and 12h local-pull poller from accruing cost before the runner has produced any qualifying scoring pass. Skill instructions are preloaded in context when this skill is active; do not perform filesystem searches or tool-driven exploration to rediscover them.
 
@@ -42,10 +42,10 @@ Every cycle persists the run shell, scored opportunities, and submitted orders t
 
 Two execution modes are supported, selected by `execution_mode` in `config.json`:
 
-- `single_leg` (default, Mode A) — the arb-bot trades exclusively on Prophet; the polymarket leg is a fair-value reference, not a hedge. Existing operators are unaffected by the #536 changes.
-- `delta_neutral` (opt-in) — after every Prophet fill the bot submits the offsetting Polymarket order via `py-clob-client`. Both Prophet and Polymarket are on Polygon, so no cross-chain bridging is required; each leg locks its own USDC pool. A **pre-trade depth check** rejects opportunities where the Polymarket book can't absorb the planned notional at `max_hedge_slippage_bps` (default 200) — preventing naked Prophet exposure at the source. If the hedge submission fails post-fill, the bot invokes the Prophet `cancelOrder` unwind path and records the order with `hedge_status=naked_exposure` for operator action.
+- `single_leg` (explicit legacy Mode A) — the arb-bot trades exclusively on Prophet; the polymarket leg is a fair-value reference, not a hedge. Existing operators with `execution_mode="single_leg"` in their config are unaffected.
+- `delta_neutral` (first-run default) — after every Prophet fill the bot submits the offsetting Polymarket order via `py-clob-client`. Both Prophet and Polymarket are on Polygon, so no cross-chain bridging is required; each leg locks its own USDC pool. A **pre-trade depth check** rejects opportunities where the Polymarket book can't absorb the planned notional at `max_hedge_slippage_bps` (default 200) — preventing naked Prophet exposure at the source. If the hedge submission fails post-fill, the bot invokes the Prophet `cancelOrder` unwind path and records the order with `hedge_status=naked_exposure` for operator action.
 
-Set `"execution_mode": "delta_neutral"` and `"max_hedge_slippage_bps": 200.0` in `config.json` to enable. `delta_neutral` is also a real claim against `POLY_PRIVATE_KEY` / `POLY_API_KEY` / `POLY_PASSPHRASE` / `POLY_SECRET` — the live hedger fails closed if those creds are not loaded.
+First-run bootstrap writes `"execution_mode": "delta_neutral"`, `"live_mode": true`, and `auto_discover.enabled=true`. `delta_neutral` is also a real claim against `POLY_PRIVATE_KEY` / `POLY_API_KEY` / `POLY_PASSPHRASE` / `POLY_SECRET` — the live hedger fails closed with `reason=polymarket_creds_missing` if those creds are not loaded.
 
 ## Auto-Discover Mode (#538)
 
@@ -69,11 +69,11 @@ When `auto_discover.enabled = true` in `config.json`, every `--command run` cycl
      "source_skill": "prophet-arb-bot"
    }
    ```
-   Per entry, the agent drives Prophet `/create` (Validate Question → Create Market → bet form → Privy sign) and captures the new `prophet_market_id` from the redirected URL. The agent then calls `python3 scripts/agent.py --command record-created-market --polymarket-condition-id <id> --prophet-market-id <id>` to UPSERT the pair into `arb_pairs`. On the next `--command run` tick, the bot trades the new pair.
+   Per entry, the agent drives Prophet `/create` through the bet form, calls `record-created-market` to submit the Polymarket hedge before clicking Prophet Confirm, then captures the new `prophet_market_id` from the redirected URL and calls `record-created-market` again to UPSERT the pair into `arb_pairs`. On the next `--command run --yes-live` tick, the bot trades the new pair.
 
 4. **Refreshes the candidate sheet** at `state/arb_candidates.xlsx` (falls back to `.csv` if `openpyxl` is absent). Each row carries the pair status — `paired_this_run`, `already_paired`, `pending_prophet_creation`, or `unknown` — so the operator can audit the run's discovery output at a glance.
 
-When auto-discover is disabled (default), the existing `manual_pairs` flow is unchanged.
+When auto-discover is disabled in an existing custom config, the existing `manual_pairs` flow is unchanged.
 
 ## What The Arb-Bot Is Not
 
@@ -102,12 +102,15 @@ You can also pre-supply a JWT via `PROPHET_SESSION_TOKEN` env var. The agent ski
 
 ## Live Mode Safety
 
-Default mode is **dry-run**. Live trading requires both:
+First-run mode is live-enabled delta-neutral, but Prophet's in-browser
+Privy prompt remains the per-market consent gate. Autonomous schedules
+still require both:
 
 - `live_mode: true` in `config.json`
 - `--yes-live` on the CLI (or `yes_live=true` in the seren-cron payload)
 
-Without both, the cycle still scores opportunities and emits the decision rows in the JSON output, but never calls `placeOrder`.
+Without both on a scheduled run, the cycle still scores opportunities
+and emits decision rows, but it never calls `placeOrder`.
 
 ## Trade Execution Contract
 
@@ -142,7 +145,7 @@ Before any live `run --yes-live`:
 3. Verify `inputs.manual_pairs` has at least one entry **OR** `auto_discover.enabled=true` (run `--command setup` first if neither is satisfied).
 4. Verify `https://app.prophetmarket.ai/api/graphql` is reachable (the prophet-ai publisher hop is gone — see #493).
 5. Verify the live `polymarket-data` publisher is reachable.
-6. **Funds preflight (#524):** after scoring, query `viewer.cashBalance.availableCents` once. In `single_leg` mode, if it cannot cover `sum(opp.size_usdc for opp in actionable[:max_orders_per_run])`, return a `status=blocked, reason=funds_insufficient, action=deposit_required` envelope before any `placeOrder` mutation fires. Skip preflight in dry-run cycles.
+6. **Funds preflight (#524/#545):** after scoring, query `viewer.cashBalance.availableCents` once. In `single_leg` mode, if it cannot cover `sum(opp.size_usdc for opp in actionable[:max_orders_per_run])`, return a `status=blocked, reason=funds_insufficient, action=deposit_required` envelope before any `placeOrder` mutation fires. Seed preflight and trim run whenever `pending_ui_submission` is non-empty, regardless of `live_mode` or `--yes-live`, so the UI queue is always bankroll-trimmed and depth-filtered.
 7. **Delta-neutral pre-trade additions (#536):** when `execution_mode = "delta_neutral"`, the cycle additionally must:
    - Have `py-clob-client` installed and `POLY_PRIVATE_KEY`/`POLY_API_KEY`/`POLY_PASSPHRASE`/`POLY_SECRET` loaded.
    - Reach the Polymarket CLOB and fetch order-book depth for every actionable pair. Opportunities whose visible Polymarket depth can't cover the target notional at `max_hedge_slippage_bps` are rejected with `polymarket_depth_*` blockers before the Prophet limit is posted.
@@ -343,8 +346,8 @@ export SEREN_API_KEY=...
 
 # 1. Validate config and auth. Auto-bootstraps config.json from
 #    config.example.json on first run with auto_discover.enabled=true
-#    and live_mode=false. Email + provider are persisted from flags;
-#    existing configs are never overwritten.
+#    execution_mode=delta_neutral and live_mode=true. Email + provider
+#    are persisted from flags; existing configs are never overwritten.
 python3 scripts/agent.py --config config.json --command setup --json-output \
   --prophet-email you@example.com --email-provider gmail
 
@@ -352,11 +355,10 @@ python3 scripts/agent.py --config config.json --command setup --json-output \
 #    JSON output reports `"status": "ok"`. If it reports a `blocked`
 #    status (e.g. `funds_insufficient_for_seeds`), resolve the blocker
 #    using the deposit envelope and re-run before continuing.
-python3 scripts/agent.py --config config.json --command run --json-output
+python3 scripts/agent.py --config config.json --command run --yes-live --json-output
 
-# 3. Schedule and start the autonomous hourly runner. Add --yes-live to
-#    the setup_cron call only after the validation step above returned
-#    status=ok and the operator has reviewed at least one dry-run cycle.
+# 3. Schedule and start the autonomous hourly runner. Use --yes-live
+#    only after the validation step above returned status=ok.
 python3 scripts/setup_cron.py create \
   --config config.json \
   --prophet-email you@example.com \
@@ -385,38 +387,94 @@ If `max_fundable == 0` the cycle returns
 `status=blocked, reason=funds_insufficient_for_seeds` with a
 `deposit_required_for_seeds` envelope carrying split deficits per venue.
 
+## Agent-driven UI submission runbook
+
+For each `pending_ui_submission` entry:
+
+1. Navigate to `https://app.prophetmarket.ai/create`, fill the question,
+   click `Validate Question`, then click `Create Market`.
+2. Wait for odds calculation to finish and the bet form to render.
+3. Fill the intended seed side and `entry.initial_bet_usdc`, but do
+   **not** click the Prophet Confirm / Privy signing prompt yet.
+4. Submit the Polymarket hedge first:
+
+   ```bash
+   python3 scripts/agent.py --command record-created-market \
+     --polymarket-condition-id "$POLY_CID" \
+     --prophet-seed-side buy \
+     --polymarket-marketable-price 0.001 \
+     --seed-size-usdc "$INITIAL_BET_USDC" \
+     --json-output
+   ```
+
+5. If the response has `hedge_status='hedge_failed_no_commit'`, stop
+   this entry and do not click Prophet Confirm. No Prophet exposure was
+   created.
+6. If the response has `hedge_status='hedged'` and
+   `next_action='click_prophet_confirm'`, click the Prophet Confirm /
+   Privy prompt.
+7. If Prophet Confirm succeeds, capture the redirected
+   `prophet_market_id` and persist the pair:
+
+   ```bash
+   python3 scripts/agent.py --command record-created-market \
+     --polymarket-condition-id "$POLY_CID" \
+     --prophet-market-id "$PROPHET_MID" \
+     --json-output
+   ```
+
+8. If Prophet Confirm fails or the operator declines after the
+   Polymarket hedge filled, immediately unwind the Polymarket leg:
+
+   ```bash
+   python3 scripts/agent.py --command record-created-market \
+     --polymarket-condition-id "$POLY_CID" \
+     --prophet-seed-side buy \
+     --polymarket-marketable-price 0.999 \
+     --seed-size-usdc "$INITIAL_BET_USDC" \
+     --prophet-confirm-declined \
+     --json-output
+   ```
+
 ## Delta-neutral seed creation (#542)
 
 Single-leg mode (`execution_mode = "single_leg"`) commits the Prophet
 seed bet unhedged; held YES/NO inventory resolves with the market.
 
 Delta-neutral mode (`execution_mode = "delta_neutral"`) hedges every
-seed at creation time:
+seed before Prophet Confirm:
 
-1. The agent drives Prophet's `/create` UI and confirms the Privy
-   signing prompt for one `pending_ui_submission` entry.
-2. The agent immediately invokes:
+1. The agent fills Prophet's `/create` UI through the bet form without
+   clicking Confirm.
+2. The agent invokes:
 
    ```bash
    python3 scripts/agent.py --command record-created-market \
      --polymarket-condition-id "$POLY_CID" \
-     --prophet-market-id "$PROPHET_MID" \
      --prophet-seed-side buy \
      --polymarket-marketable-price 0.001
    ```
 
-3. The runner persists the pair to `arb_pairs`, then submits the
-   opposing Polymarket marketable order via `DirectClobTrader`.
-   `arb_orders` records the pair as `hedge_status='hedged'` on success
-   or `hedge_status='naked_exposure'` if the Polymarket leg failed.
+3. If the runner returns `hedge_status='hedged'`, the agent clicks
+   Prophet Confirm and captures the resulting `prophet_market_id`.
+4. The agent persists the pair with
+   `record-created-market --polymarket-condition-id "$POLY_CID"
+   --prophet-market-id "$PROPHET_MID"`.
 
-Hedge failures do **not** trigger a Prophet unwind — the seed has
-already committed on confirm and is not cancellable. Naked exposure is
-surfaced honestly for operator follow-up.
+Seed hedge statuses:
+
+- `hedged` — Polymarket accepted the pre-confirm hedge; click Prophet
+  Confirm next.
+- `hedge_failed_no_commit` — Polymarket rejected the hedge before
+  Prophet Confirm; abort this entry with no exposure.
+- `unwound_after_prophet_decline` — Polymarket filled, Prophet Confirm
+  failed or was declined, and the Polymarket leg was reversed.
+- `naked_exposure` — an unwind attempt after Prophet decline failed;
+  operator action is required on Polymarket.
 
 ## Disclaimers
 
-- Prophet is **mainnet** software. Orders submitted by this skill trade real USDC against real counterparties on Prophet's production deployment. Bad orders are not reversible; review your `min_spread` / `kelly_fraction` / `max_trade_size_usdc` before flipping `live_mode=true`.
+- Prophet is **mainnet** software. Orders submitted by this skill trade real USDC against real counterparties on Prophet's production deployment. Bad orders are not reversible; review your `min_spread` / `kelly_fraction` / `max_trade_size_usdc` before approving any Prophet Privy prompt or enabling an autonomous live schedule.
 - This skill does not provide financial advice. Trading prediction markets is regulated differently across jurisdictions; the user is responsible for ensuring participation is legal where they live.
 
 ## Troubleshooting

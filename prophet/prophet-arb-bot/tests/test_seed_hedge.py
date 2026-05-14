@@ -7,16 +7,18 @@ resolves YES/NO with the market, which violates the bot's delta-neutral
 contract.
 
 `hedge_seed_bet` is the parallel entry point. The agent invokes it
-immediately after confirming the Privy signing prompt for a given
+before confirming the Privy signing prompt for a given
 `pending_ui_submission` entry. Behavior contract:
 
   - **Success:** submit the opposing Polymarket marketable order via
     the same `submit_hedge` path the trading-side hedger uses; return
     `hedge_status='hedged'` with the polymarket order id + fill data.
-  - **Failure:** record `hedge_status='naked_exposure'` and surface
-    the original submission error. Crucially, we do NOT try to unwind
-    the Prophet seed — the market has already been created on confirm
-    and there is no "cancel" primitive for it.
+  - **Failure before Prophet confirm:** record
+    `hedge_status='hedge_failed_no_commit'` and surface the original
+    submission error. The agent must not click Prophet Confirm.
+  - **Prophet decline after a successful Polymarket hedge:** submit an
+    opposing Polymarket marketable order and record
+    `hedge_status='unwound_after_prophet_decline'`.
 
 Same `Hedger` protocol the trading-side path uses, so the production
 wiring is `DirectClobTrader` and the tests use an in-memory stub.
@@ -31,6 +33,7 @@ import pytest
 from arbitrage.hedge import (
     HedgeOutcome,
     hedge_seed_bet,
+    unwind_seed_hedge_after_prophet_decline,
 )
 
 
@@ -110,10 +113,9 @@ def test_seed_hedge_success_records_hedged_outcome() -> None:
     assert hedger.unwind_calls == []
 
 
-def test_seed_hedge_failure_records_naked_exposure_no_unwind() -> None:
-    """Phase 15 has already committed the Prophet seed at confirm-time.
-    A hedge failure must NOT trigger `unwind_prophet` — there is no
-    cancel for a committed seed."""
+def test_seed_hedge_failure_records_no_commit_status() -> None:
+    """Polymarket is submitted before Prophet Confirm. If it fails, the
+    agent must not click Confirm, so no Prophet exposure exists."""
     hedger = _StubHedger(submit_error=RuntimeError("CLOB rejected"))
 
     outcome = hedge_seed_bet(
@@ -125,17 +127,16 @@ def test_seed_hedge_failure_records_naked_exposure_no_unwind() -> None:
         hedger=hedger,
     )
 
-    assert outcome.hedge_status == "naked_exposure"
+    assert outcome.hedge_status == "hedge_failed_no_commit"
     assert outcome.polymarket_order_id is None
     assert outcome.error is not None
     assert "CLOB rejected" in outcome.error
-    # The critical assertion: we do NOT call unwind_prophet on the seed.
     assert hedger.unwind_calls == []
 
 
-def test_seed_hedge_missing_order_id_is_naked_exposure() -> None:
-    """If submit_hedge succeeds but returns no order id, treat as soft
-    failure: naked exposure, no unwind."""
+def test_seed_hedge_missing_order_id_is_no_commit_failure() -> None:
+    """If submit_hedge returns no order id, the agent still has not
+    clicked Prophet Confirm. Treat it as a no-commit hedge failure."""
     hedger = _StubHedger(
         submit_response={"polymarket_order_id": "", "filled_qty": 0.0, "fill_price": 0.0}
     )
@@ -149,7 +150,7 @@ def test_seed_hedge_missing_order_id_is_naked_exposure() -> None:
         hedger=hedger,
     )
 
-    assert outcome.hedge_status == "naked_exposure"
+    assert outcome.hedge_status == "hedge_failed_no_commit"
     assert outcome.polymarket_order_id is None
     assert outcome.error == "polymarket_submit_returned_no_order_id"
     assert hedger.unwind_calls == []
@@ -176,3 +177,36 @@ def test_seed_hedge_uses_opposite_side_for_sell_seed() -> None:
     )
 
     assert hedger.submit_calls[0]["hedge_side"] == "buy"
+
+
+def test_seed_hedge_unwinds_polymarket_when_prophet_confirm_declines() -> None:
+    """If Polymarket filled but Prophet Confirm fails or is declined,
+    the recoverable leg is Polymarket. The unwind uses the opposite of
+    the already-submitted hedge side, which is the original Prophet seed
+    side."""
+    hedger = _StubHedger(
+        submit_response={
+            "polymarket_order_id": "POLY-unwind",
+            "filled_qty": 1.0,
+            "fill_price": 0.61,
+        }
+    )
+
+    outcome = unwind_seed_hedge_after_prophet_decline(
+        polymarket_condition_id="0xCOND",
+        prophet_seed_side="buy",
+        size_usdc=1.0,
+        marketable_price=0.61,
+        hedger=hedger,
+    )
+
+    assert outcome.hedge_status == "unwound_after_prophet_decline"
+    assert outcome.polymarket_order_id == "POLY-unwind"
+    assert hedger.submit_calls == [
+        {
+            "condition_id": "0xCOND",
+            "hedge_side": "buy",
+            "size_usdc": 1.0,
+            "marketable_price": 0.61,
+        }
+    ]

@@ -36,9 +36,9 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from arbitrage.hedge import (
     DepthAssessment,
-    HedgeOutcome,
     assess_polymarket_depth,
     hedge_filled_order,
+    unwind_seed_hedge_after_prophet_decline,
 )
 from arbitrage.intelligence import IntelligenceConfig, assess_pair_health
 from arbitrage.scoring import (
@@ -101,6 +101,22 @@ SCHEMA_PATH = SCRIPT_DIR.parent / "serendb_schema.sql"
 EXECUTION_MODE_SINGLE_LEG = "single_leg"
 EXECUTION_MODE_DELTA_NEUTRAL = "delta_neutral"
 _VALID_EXECUTION_MODES = {EXECUTION_MODE_SINGLE_LEG, EXECUTION_MODE_DELTA_NEUTRAL}
+POLYMARKET_REQUIRED_ENV_VARS = (
+    "POLY_PRIVATE_KEY",
+    "POLY_API_KEY",
+    "POLY_PASSPHRASE",
+    "POLY_SECRET",
+)
+
+
+class PolymarketCredentialsMissing(RuntimeError):
+    """Raised when delta-neutral execution cannot sign Polymarket legs."""
+
+    def __init__(self, missing_env_vars: list[str]) -> None:
+        self.missing_env_vars = missing_env_vars
+        super().__init__(
+            "missing Polymarket credentials: " + ", ".join(missing_env_vars)
+        )
 
 
 @dataclass
@@ -324,15 +340,45 @@ def _acquire_jwt(
 # Run
 
 
+def _missing_polymarket_env_vars() -> list[str]:
+    return [name for name in POLYMARKET_REQUIRED_ENV_VARS if not os.environ.get(name)]
+
+
+def _polymarket_creds_missing_result(missing_env_vars: list[str]) -> CycleResult:
+    return CycleResult(
+        status="blocked",
+        reason="polymarket_creds_missing",
+        payload={
+            "payload": {
+                "missing_env_vars": list(missing_env_vars),
+                "action": "set_polymarket_credentials",
+            }
+        },
+    )
+
+
+def _hedger_init_failed_result(exc: Exception) -> CycleResult:
+    return CycleResult(
+        status="blocked",
+        reason="hedger_init_failed",
+        payload={"payload": {"error": f"{type(exc).__name__}:{str(exc)[:200]}"}},
+    )
+
+
 def _build_hedger(config: AgentConfig) -> Any:
     """Construct the live Polymarket hedger when delta-neutral is on.
 
     Importing `DirectClobTrader` lazily keeps the test suite from
-    requiring `py-clob-client` for single-leg paths. Returns ``None``
-    if the deps aren't installed — the agent records a blocker and
-    falls back to single-leg semantics for the cycle.
+    requiring `py-clob-client` for single-leg paths. Delta-neutral does
+    not silently fall back to single-leg semantics: missing credentials
+    raise a typed exception so the caller can return the exact blocked
+    envelope.
     """
     from pathlib import Path
+
+    missing = _missing_polymarket_env_vars()
+    if missing:
+        raise PolymarketCredentialsMissing(missing)
 
     skill_root = Path(__file__).resolve().parent.parent
     try:
@@ -575,6 +621,9 @@ def cmd_run(
 
     recorder = RunRecorder(run_id=uuid.uuid4().hex, target=target)
     recorder.summary["live_mode"] = config.live_mode and yes_live
+    recorder.summary["execution_mode"] = config.execution_mode
+    delta_neutral = config.execution_mode == EXECUTION_MODE_DELTA_NEUTRAL
+    live_hedger: Any = hedger  # tests inject; runtime constructs lazily
 
     pairs = list_arb_pairs(target=target)
     recorder.summary["pairs_pre_discover"] = len(pairs)
@@ -646,12 +695,18 @@ def cmd_run(
             # Reload pairs — auto_paired rows are now in arb_pairs.
             pairs = list_arb_pairs(target=target)
 
-            # #542 Fix 2 — seed preflight + trim. Cap the pending list by
-            # what the operator can actually fund right now on BOTH venues
-            # so the agent doesn't approve 12 Privy prompts when only 5
-            # have backing collateral. Skip the trim in dry-run cycles —
-            # the operator isn't being asked to commit capital yet.
-            if pending_ui_submission and config.live_mode and yes_live:
+            # #542 Fix 2 — seed preflight + trim. Cap the pending list
+            # by what the operator can actually fund right now on BOTH
+            # venues. This is intentionally independent of live_mode /
+            # --yes-live so the pending list is never misleading.
+            if pending_ui_submission:
+                if delta_neutral and live_hedger is None:
+                    try:
+                        live_hedger = _build_hedger(config)
+                    except PolymarketCredentialsMissing as exc:
+                        return _polymarket_creds_missing_result(exc.missing_env_vars)
+                    except Exception as exc:
+                        return _hedger_init_failed_result(exc)
                 seed_block = _apply_seed_preflight_and_trim(
                     pending=pending_ui_submission,
                     initial_bet_usdc=config.auto_discover.initial_bet_usdc,
@@ -696,10 +751,6 @@ def cmd_run(
 
     order_client = ProphetOrderClient(transport=transport)
 
-    recorder.summary["execution_mode"] = config.execution_mode
-    delta_neutral = config.execution_mode == EXECUTION_MODE_DELTA_NEUTRAL
-    live_hedger: Any = hedger  # tests inject; runtime constructs lazily
-
     open_orders_by_pair: dict[tuple[str, str, str], ProphetOrder] = {}
     existing_orders: list[ProphetOrder] = []
     try:
@@ -729,11 +780,12 @@ def cmd_run(
             try:
                 live_hedger = _build_hedger(config)
                 live_hedger.bind_prophet_cancel(order_client, jwt)
+            except PolymarketCredentialsMissing as exc:
+                return _polymarket_creds_missing_result(exc.missing_env_vars)
             except Exception as exc:
-                recorder.record_blocker(
-                    f"hedger_init_failed:{type(exc).__name__}:{str(exc)[:120]}"
-                )
-                live_hedger = None
+                return _hedger_init_failed_result(exc)
+        elif hasattr(live_hedger, "bind_prophet_cancel"):
+            live_hedger.bind_prophet_cancel(order_client, jwt)
         # Map prophet_market_id → polymarket_condition_id for hedge submission.
         pair_lookup = {
             p["prophet_market_id"]: p["polymarket_condition_id"] for p in pairs
@@ -1092,16 +1144,24 @@ def cmd_record_created_market(
     prophet_seed_side: str = "",
     polymarket_marketable_price: float = 0.0,
     seed_size_usdc: float | None = None,
+    prophet_confirm_declined: bool = False,
 ) -> CycleResult:
-    """Persist a pair the agent just created via the Prophet UI.
+    """Handle one agent-driven Prophet `/create` result.
 
-    In ``execution_mode="delta_neutral"`` and with ``prophet_seed_side``
-    + ``polymarket_marketable_price`` provided, also submits the
-    opposing Polymarket order via the live hedger (#542 Fix 3). The
-    hedge outcome is surfaced in the payload so the agent can log
-    ``hedge_status='hedged'`` or ``'naked_exposure'`` per market.
+    Delta-neutral seed creation is Polymarket-first:
+
+    1. Call this command *before* Prophet Confirm with a condition id,
+       seed side, and marketable price but no prophet_market_id. It
+       submits the Polymarket hedge and returns either
+       ``hedge_status='hedged'`` (agent may click Confirm) or
+       ``hedge_status='hedge_failed_no_commit'`` (agent must abort).
+    2. If Prophet Confirm succeeds, call again with the captured
+       prophet_market_id to persist the pair.
+    3. If Prophet Confirm fails/declines after a successful hedge, call
+       with ``prophet_confirm_declined=True`` to reverse the Polymarket
+       hedge.
     """
-    if not polymarket_condition_id or not prophet_market_id:
+    if not polymarket_condition_id:
         return CycleResult(
             status="blocked",
             reason="missing_ids",
@@ -1110,6 +1170,98 @@ def cmd_record_created_market(
                 "prophet_market_id": prophet_market_id,
             },
         )
+    payload: dict[str, Any] = {
+        "prophet_market_id": prophet_market_id,
+        "polymarket_condition_id": polymarket_condition_id,
+    }
+
+    delta_neutral = config.execution_mode == EXECUTION_MODE_DELTA_NEUTRAL
+    wants_seed_action = (
+        delta_neutral and prophet_seed_side and polymarket_marketable_price > 0
+    )
+    size = float(seed_size_usdc) if seed_size_usdc is not None else float(
+        config.auto_discover.initial_bet_usdc
+    )
+
+    if prophet_confirm_declined:
+        if not wants_seed_action:
+            return CycleResult(
+                status="blocked",
+                reason="missing_seed_hedge_inputs",
+                payload=payload,
+            )
+        try:
+            hedger = _build_hedger(config)
+        except PolymarketCredentialsMissing as exc:
+            return _polymarket_creds_missing_result(exc.missing_env_vars)
+        except Exception as exc:
+            return _hedger_init_failed_result(exc)
+
+        outcome = unwind_seed_hedge_after_prophet_decline(
+            polymarket_condition_id=polymarket_condition_id,
+            prophet_seed_side=prophet_seed_side,
+            size_usdc=size,
+            marketable_price=float(polymarket_marketable_price),
+            hedger=hedger,
+        )
+        payload["hedge_status"] = outcome.hedge_status
+        payload["polymarket_order_id"] = outcome.polymarket_order_id
+        payload["polymarket_filled_qty"] = outcome.polymarket_filled_qty
+        payload["polymarket_fill_price"] = outcome.polymarket_fill_price
+        if outcome.error:
+            payload["hedge_error"] = outcome.error
+        return CycleResult(
+            status=(
+                "ok"
+                if outcome.hedge_status == "unwound_after_prophet_decline"
+                else "blocked"
+            ),
+            reason="prophet_confirm_declined",
+            payload=payload,
+        )
+
+    if wants_seed_action and not prophet_market_id:
+        try:
+            hedger = _build_hedger(config)
+        except PolymarketCredentialsMissing as exc:
+            return _polymarket_creds_missing_result(exc.missing_env_vars)
+        except Exception as exc:
+            return _hedger_init_failed_result(exc)
+
+        outcome = hedge_seed_bet(
+            prophet_market_id="",
+            polymarket_condition_id=polymarket_condition_id,
+            prophet_seed_side=prophet_seed_side,
+            size_usdc=size,
+            marketable_price=float(polymarket_marketable_price),
+            hedger=hedger,
+        )
+        payload["hedge_status"] = outcome.hedge_status
+        payload["polymarket_order_id"] = outcome.polymarket_order_id
+        payload["polymarket_filled_qty"] = outcome.polymarket_filled_qty
+        payload["polymarket_fill_price"] = outcome.polymarket_fill_price
+        if outcome.error:
+            payload["hedge_error"] = outcome.error
+        if outcome.hedge_status != "hedged":
+            return CycleResult(
+                status="blocked",
+                reason="seed_hedge_failed_no_commit",
+                payload=payload,
+            )
+        payload["next_action"] = "click_prophet_confirm"
+        return CycleResult(
+            status="ok",
+            reason="seed_hedge_ready_for_prophet_confirm",
+            payload=payload,
+        )
+
+    if not prophet_market_id:
+        return CycleResult(
+            status="blocked",
+            reason="missing_ids",
+            payload=payload,
+        )
+
     try:
         target = _resolve_target(config)
     except Exception as exc:
@@ -1131,42 +1283,6 @@ def cmd_record_created_market(
             reason="persist_failed",
             payload={"error": f"{type(exc).__name__}:{str(exc)[:200]}"},
         )
-
-    payload: dict[str, Any] = {
-        "prophet_market_id": prophet_market_id,
-        "polymarket_condition_id": polymarket_condition_id,
-    }
-
-    # #542 Fix 3 — delta-neutral seed hedge. Only fires when:
-    #   - delta_neutral mode is on, AND
-    #   - the agent supplied the seed side + a marketable hedge price.
-    # Otherwise back-compat behavior (upsert-only) is preserved.
-    delta_neutral = config.execution_mode == EXECUTION_MODE_DELTA_NEUTRAL
-    if delta_neutral and prophet_seed_side and polymarket_marketable_price > 0:
-        try:
-            hedger = _build_hedger(config)
-        except Exception as exc:
-            payload["hedge_status"] = "naked_exposure"
-            payload["hedge_error"] = f"hedger_unavailable:{str(exc)[:200]}"
-            return CycleResult(status="ok", reason="pair_recorded_no_hedge", payload=payload)
-
-        size = float(seed_size_usdc) if seed_size_usdc is not None else float(
-            config.auto_discover.initial_bet_usdc
-        )
-        outcome = hedge_seed_bet(
-            prophet_market_id=prophet_market_id,
-            polymarket_condition_id=polymarket_condition_id,
-            prophet_seed_side=prophet_seed_side,
-            size_usdc=size,
-            marketable_price=float(polymarket_marketable_price),
-            hedger=hedger,
-        )
-        payload["hedge_status"] = outcome.hedge_status
-        payload["polymarket_order_id"] = outcome.polymarket_order_id
-        payload["polymarket_filled_qty"] = outcome.polymarket_filled_qty
-        payload["polymarket_fill_price"] = outcome.polymarket_fill_price
-        if outcome.error:
-            payload["hedge_error"] = outcome.error
 
     return CycleResult(
         status="ok",
@@ -1262,6 +1378,23 @@ def main(argv: list[str] | None = None) -> int:
             "hedge. Required in delta_neutral mode."
         ),
     )
+    parser.add_argument(
+        "--seed-size-usdc",
+        default=None,
+        type=float,
+        help=(
+            "(record-created-market) Seed notional to hedge/unwind. "
+            "Defaults to auto_discover.initial_bet_usdc."
+        ),
+    )
+    parser.add_argument(
+        "--prophet-confirm-declined",
+        action="store_true",
+        help=(
+            "(record-created-market) Prophet Confirm failed or was declined "
+            "after the Polymarket seed hedge filled; unwind the Polymarket leg."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.command == "probe-schema":
@@ -1307,6 +1440,8 @@ def main(argv: list[str] | None = None) -> int:
             prophet_market_id=args.prophet_market_id,
             prophet_seed_side=args.prophet_seed_side,
             polymarket_marketable_price=args.polymarket_marketable_price,
+            seed_size_usdc=args.seed_size_usdc,
+            prophet_confirm_declined=args.prophet_confirm_declined,
         )
     else:
         parser.error(f"unknown command: {args.command}")

@@ -5,8 +5,8 @@ operator should not have to `cp config.example.json config.json` or edit
 fields by hand. The bootstrap helper:
 
   1. Copies `config.example.json` to the target path if absent.
-  2. Forces `auto_discover.enabled=true` and `live_mode=false` on new
-     configs (safe defaults for first-time operators).
+  2. Forces `auto_discover.enabled=true`, `execution_mode=delta_neutral`,
+     and `live_mode=true` on new configs.
   3. Persists `--prophet-email` / `--email-provider` into
      `inputs.prophet_email` / `inputs.email_provider`.
   4. Is idempotent on existing configs — never overwrites.
@@ -83,7 +83,8 @@ def test_bootstrap_creates_config_from_example_when_missing(skill_root: Path) ->
     data = json.loads(target.read_text())
     # Defaults flipped on for first-time operators:
     assert data["auto_discover"]["enabled"] is True
-    assert data["live_mode"] is False
+    assert data["execution_mode"] == "delta_neutral"
+    assert data["live_mode"] is True
 
 
 def test_bootstrap_persists_email_flags(skill_root: Path) -> None:
