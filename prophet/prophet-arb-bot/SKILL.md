@@ -55,7 +55,7 @@ When `auto_discover.enabled = true` in `config.json`, every `--command run` cycl
 
 2. **Looks up matching Prophet markets** via `viewer.markets`. Matched pairs are UPSERTed into `arb_pairs` with `source_skill='auto_discover'` and arbed on the same cycle. Question matching is normalized substring (lowercase, punctuation stripped) — Prophet's `/create` AI preserves question text near-verbatim from the operator's spreadsheet, so the matcher is tight enough to avoid false positives.
 
-3. **Emits `pending_ui_submission`** for candidates Prophet hasn't created yet. The envelope shape is identical to the bounty-runner's, so the **Agent-driven UI submission runbook** below works for both skills without branching:
+3. **Emits `pending_ui_submission`** for candidates Prophet hasn't created yet. The agent drives Prophet's `/create` UI via the **Agent-driven UI submission runbook** below:
    ```json
    {
      "polymarket_market_id": "0x...",
@@ -83,20 +83,20 @@ When auto-discover is disabled in an existing custom config, the existing `manua
 
 ## Required Inputs
 
-- `inputs.prophet_email` — same Privy account as the bounty-runner. Reuses the bounty-runner's session cache by default so the OTP flow only fires when both skills' caches are simultaneously stale.
+- `inputs.prophet_email` — Privy account email. The arb-bot caches the JWT so the OTP flow only fires when the cache is stale.
 - `inputs.email_provider` — `gmail` or `outlook`. Used only on cold-start cache refresh.
 - `inputs.manual_pairs` — explicit (prophet_market_id, polymarket_condition_id) pairs. **Optional when `auto_discover.enabled=true`** — auto-discover refreshes the candidate set from live Polymarket each cycle. Use `manual_pairs` for pairs outside the campaign filter or to force-pin a specific market.
 - `SEREN_API_KEY` — environment or `API_KEY` injected by Seren Desktop.
 
 ## Authentication
 
-The arb-bot reuses prophet-bounty-runner's `~/.config/seren/skills/prophet-bounty-runner/state/privy_session.json` cache. If the cache is fresh (default leeway 60s before JWT expiry) the agent uses the cached JWT directly with **zero OTP emails**. If the cache is stale, the agent silently refreshes via the in-process refresh worker. Only when both fail does the cold-start OTP flow fire.
+The arb-bot owns its Privy session cache at `~/.config/seren/skills/prophet-arb-bot/state/privy_session.json` (override with `PROPHET_ARB_STATE_DIR`). If the cache is fresh (default leeway 60s before JWT expiry) the agent uses the cached JWT directly with **zero OTP emails**. If the cache is stale, the agent silently refreshes via the in-process refresh worker. Only when both fail does the cold-start OTP flow fire.
 
-In practice:
+Expected cadence:
 
-- **Both skills running**: 0 extra OTP emails. The bounty-runner's 6h refresh keeps the cache fresh; the arb-bot rides along.
-- **Arb-bot alone**: ~1 OTP/week.
-- **Worst case**: 24/day (one per hourly tick) if every refresh fails.
+- **Cache fresh**: 0 OTP emails per tick.
+- **Cache stale but refresh succeeds**: 0 OTP emails per tick.
+- **Cache stale and refresh fails**: 1 OTP per refresh attempt.
 
 You can also pre-supply a JWT via `PROPHET_SESSION_TOKEN` env var. The agent skips the OTP flow entirely in that case.
 
@@ -141,7 +141,7 @@ If the user needs immediate exposure removal (close all / unwind / flatten), the
 Before any live `run --yes-live`:
 
 1. Verify `SEREN_API_KEY` is loaded.
-2. Verify a fresh JWT is available — either via `PROPHET_SESSION_TOKEN` env or the bounty-runner's session cache.
+2. Verify a fresh JWT is available — either via `PROPHET_SESSION_TOKEN` env or the arb-bot's session cache.
 3. Verify `inputs.manual_pairs` has at least one entry **OR** `auto_discover.enabled=true` (run `--command setup` first if neither is satisfied).
 4. Verify `https://app.prophetmarket.ai/api/graphql` is reachable (the prophet-ai publisher hop is gone — see #493).
 5. Verify the live `polymarket-data` publisher is reachable.
@@ -323,7 +323,7 @@ Transient failures (Prophet GraphQL down, polymarket-data 5xx, OTP not delivered
 
 ## Persistence
 
-The skill writes to SerenDB project=`prophet`, database=`prophet` (shared with the bounty-runner). On `--command setup` the agent resolves the project/database via the `seren-db` publisher's `/projects` + `/databases` endpoints, fetches a Postgres connection URI from `/projects/{id}/connection_uri`, and applies `serendb_schema.sql` over a `psycopg2` connection. Every cycle then writes opportunities and orders to that database.
+The skill writes to SerenDB project=`prophet`, database=`prophet`. On `--command setup` the agent resolves the project/database via the `seren-db` publisher's `/projects` + `/databases` endpoints, fetches a Postgres connection URI from `/projects/{id}/connection_uri`, and applies `serendb_schema.sql` over a `psycopg2` connection. Every cycle then writes opportunities and orders to that database.
 
 Tables (created on first `setup`):
 - `arb_pairs` — prophet ↔ polymarket binding
@@ -334,8 +334,6 @@ Tables (created on first `setup`):
 - `arb_pnl_snapshots` — daily mark-to-market (populated in a future revision)
 
 The seren-db publisher does not expose an HTTP `run-sql` endpoint; SQL execution happens via the connection URI it returns. `psycopg2-binary` is a runtime dependency (see `requirements.txt`).
-
-Cross-skill read: `discover_pairs_from_bounty_runner` SELECTs from `markets_created` if the bounty-runner has migrated to SerenDB persistence. Until then it returns [] silently and the operator seeds pairs via `inputs.manual_pairs`.
 
 ## Minimal Run
 
@@ -538,11 +536,11 @@ Seed hedge statuses:
 
 **`reason=blocked_otp_email_missing`.**
 
-- `inputs.prophet_email` is empty in `config.json`. Set it to the same email the bounty-runner uses.
+- `inputs.prophet_email` is empty in `config.json`. Set it to the Privy account email the operator uses for Prophet.
 
 **`reason=prophet_unauthorized` on every tick.**
 
-- The session cache is stale and the silent refresh path failed. Restart the bounty-runner once to refresh the cache, or run `agent.py --command run` interactively to trigger the OTP flow.
+- The session cache is stale and the silent refresh path failed. Run `agent.py --command run` interactively to trigger the OTP flow.
 
 **`blockers` contains `place_order_failed:ProphetSchemaError`.**
 

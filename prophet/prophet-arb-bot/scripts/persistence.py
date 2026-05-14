@@ -17,11 +17,6 @@ Idempotency contract:
   - `arb_opportunities` has no natural key — re-running a tick re-inserts.
     The cron is hourly so duplicates are bounded; the operator dashboard
     de-duplicates on (run_id, prophet_market_id) for display.
-
-Cross-skill read:
-  `discover_pairs_from_bounty_runner` SELECTs from a sibling table
-  `markets_created` if the bounty-runner has migrated to SerenDB
-  persistence. If the table is absent, returns [] silently.
 """
 
 from __future__ import annotations
@@ -264,35 +259,6 @@ def list_arb_pairs(*, target: ResolvedTarget) -> list[dict[str, str]]:
                 """
             )
             rows = cur.fetchall()
-    return [
-        {"prophet_market_id": r[0], "polymarket_condition_id": r[1]}
-        for r in rows
-        if r[0] and r[1]
-    ]
-
-
-def discover_pairs_from_bounty_runner(
-    *, target: ResolvedTarget
-) -> list[dict[str, str]]:
-    """Cross-skill read. Returns [] silently if the bounty-runner has
-    not migrated to SerenDB persistence (their `markets_created` table
-    does not yet exist in v1)."""
-    try:
-        with open_connection(target) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT prophet_market_id, polymarket_condition_id
-                    FROM markets_created
-                    WHERE prophet_market_id IS NOT NULL
-                      AND polymarket_condition_id IS NOT NULL
-                    ORDER BY created_at DESC
-                    LIMIT 200
-                    """
-                )
-                rows = cur.fetchall()
-    except Exception:
-        return []
     return [
         {"prophet_market_id": r[0], "polymarket_condition_id": r[1]}
         for r in rows

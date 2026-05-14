@@ -21,9 +21,6 @@ TRADING_SKILLS_WITH_AGENT_PY: list[str] = [
     "curve/curve-gauge-yield-trader",
     "spectra/spectra-pt-yield-trader",
     "alphagrowth/euler-base-vault-bot",
-    "prophet/prophet-adversarial-auditor",
-    "prophet/prophet-growth-agent",
-    "prophet/prophet-market-seeder",
 ]
 
 

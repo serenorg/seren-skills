@@ -1,21 +1,17 @@
 -- prophet-arb-bot SerenDB schema (v1).
 --
--- Lives in project=prophet, database=prophet (shared with prophet-bounty-runner).
--- Every table is created with IF NOT EXISTS so re-running the bootstrap is safe.
---
--- Cross-skill table reuse:
---   - bounty-runner owns `markets_created`. The arb-bot reads it (read-only)
---     to seed `arb_pairs`. We do not modify that table here.
+-- Lives in project=prophet, database=prophet. Every table is created with
+-- IF NOT EXISTS so re-running the bootstrap is safe.
 
 -- ---------------------------------------------------------------------------
 -- arb_pairs — prophet ↔ polymarket pair binding the arb-bot trades.
--- Sourced from bounty-runner's markets_created on bootstrap, but
--- the operator can also seed pairs by hand.
+-- Seeded by the operator (inputs.manual_pairs in config.json) or by
+-- auto-discover during a `--command run` cycle.
 
 CREATE TABLE IF NOT EXISTS arb_pairs (
     prophet_market_id            TEXT PRIMARY KEY,
     polymarket_condition_id      TEXT NOT NULL,
-    source_skill                 TEXT NOT NULL DEFAULT 'prophet-bounty-runner',
+    source_skill                 TEXT NOT NULL DEFAULT 'manual',
     last_seen_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

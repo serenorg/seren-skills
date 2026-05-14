@@ -18,11 +18,6 @@ SERENDB_FILES: list[tuple[str, str]] = [
     ("crypto-bullseye-zone/tax/scripts/serendb_store.py", "_api_base"),
     ("alpaca/saas-short-trader/scripts/serendb_bootstrap.py", "api_base"),
     ("alpaca/sass-short-trader-delta-neutral/scripts/serendb_bootstrap.py", "api_base"),
-    # prophet skills bake /publishers/seren-db into api_base itself, so path
-    # strings like /projects/... resolve correctly without prefixing.
-    ("prophet/prophet-growth-agent/scripts/agent.py", "api_base"),
-    ("prophet/prophet-adversarial-auditor/scripts/agent.py", "api_base"),
-    ("prophet/prophet-market-seeder/scripts/agent.py", "api_base"),
 ]
 
 IDS = [t[0] for t in SERENDB_FILES]

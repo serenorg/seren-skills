@@ -30,9 +30,6 @@ TAARIQ_SKILLS: list[str] = [
     "crypto-bullseye-zone/tax",
     "apollo/api",
     "curve/curve-gauge-yield-trader",
-    "prophet/prophet-growth-agent",
-    "prophet/prophet-adversarial-auditor",
-    "prophet/prophet-market-seeder",
     "sidepit/auction-trader",
 ]
 
@@ -41,9 +38,6 @@ SKILLS_WITH_SETUP_SECTION: list[str] = [
     s for s in TAARIQ_SKILLS
     if s not in {
         "curve/curve-gauge-yield-trader",
-        "prophet/prophet-growth-agent",
-        "prophet/prophet-adversarial-auditor",
-        "prophet/prophet-market-seeder",
     }
 ]
 

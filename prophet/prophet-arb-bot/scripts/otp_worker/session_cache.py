@@ -1,9 +1,10 @@
 """JWT + refresh-token cache for the Privy session.
 
-Plan §11.3: a single JSON file at
-~/.config/seren/skills/prophet-bounty-runner/state/privy_session.json
+A single JSON file at
+~/.config/seren/skills/prophet-arb-bot/state/privy_session.json
 with permissions 0600. Atomic writes (write-then-rename). Never logged,
-never persisted to SerenDB.
+never persisted to SerenDB. The path can be overridden with the
+`PROPHET_ARB_STATE_DIR` environment variable.
 """
 
 from __future__ import annotations
@@ -44,9 +45,10 @@ class SessionCacheEntry:
 
 
 def default_cache_path() -> Path:
-    base = Path(os.environ.get("PROPHET_BOUNTY_STATE_DIR") or "").expanduser()
-    if not base:
-        base = Path.home() / ".config" / "seren" / "skills" / "prophet-bounty-runner" / "state"
+    override = os.environ.get("PROPHET_ARB_STATE_DIR") or ""
+    base = Path(override).expanduser() if override else None
+    if base is None:
+        base = Path.home() / ".config" / "seren" / "skills" / "prophet-arb-bot" / "state"
     return base / "privy_session.json"
 
 
