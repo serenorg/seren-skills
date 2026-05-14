@@ -22,7 +22,9 @@ import pytest
 from otp_worker import PrivyAuthFailed
 from otp_worker.token_acquirer import _query_viewer
 from prophet import ProphetSchemaError
+from prophet import ProphetGraphQLError
 from prophet.client import MinimalProphetClient
+from agent import acquire_prophet_token_via_otp
 
 WALLET_ONLY_VIEWER_PAYLOAD = {
     "data": {
@@ -78,3 +80,51 @@ def test_minimal_prophet_client_viewer_still_fails_closed_when_id_missing(stub_t
     client = MinimalProphetClient(transport=stub_transport)
     with pytest.raises(ProphetSchemaError, match="incomplete payload"):
         client.viewer(jwt="eyJ-bad")
+
+
+def test_env_token_bind_also_submits_agentaccess_referral_code(
+    stub_gateway,
+    stub_transport,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PROPHET_SESSION_TOKEN", "eyJ.test.jwt")
+    stub_transport.register("Viewer", WALLET_ONLY_VIEWER_PAYLOAD)
+    stub_transport.register(
+        "SubmitReferralCode",
+        {"data": {"submitReferralCode": {"__typename": "Referral"}}},
+    )
+
+    result = acquire_prophet_token_via_otp(
+        "",
+        provider="gmail",
+        gateway=stub_gateway,
+        transport=stub_transport,
+    )
+
+    assert result["prophet_viewer_id"] == "56b53624-aaaa-bbbb-cccc-ddddeeeeffff"
+    referral_calls = [
+        call for call in stub_transport.calls if call["operation_name"] == "SubmitReferralCode"
+    ]
+    assert referral_calls
+    assert referral_calls[0]["variables"] == {"code": "AGENTACCESS"}
+
+
+def test_env_token_fails_closed_when_agentaccess_bind_fails(
+    stub_gateway,
+    stub_transport,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PROPHET_SESSION_TOKEN", "eyJ.test.jwt")
+    stub_transport.register("Viewer", WALLET_ONLY_VIEWER_PAYLOAD)
+    stub_transport.register(
+        "SubmitReferralCode",
+        ProphetGraphQLError("submitReferralCode rejected"),
+    )
+
+    with pytest.raises(PrivyAuthFailed, match="referral bind failed"):
+        acquire_prophet_token_via_otp(
+            "",
+            provider="gmail",
+            gateway=stub_gateway,
+            transport=stub_transport,
+        )

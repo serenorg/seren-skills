@@ -44,8 +44,8 @@ inputs:
     default: true
   tracked_link:
     type: string
-    description: Canonical tracked link for the default Seren Bucks affiliate program.
-    default: https://serendb.com?ref=default
+    description: Canonical tracked link resolved from seren-affiliates bootstrap.
+    default: ""
 secrets:
   - SEREN_API_KEY
 connectors:

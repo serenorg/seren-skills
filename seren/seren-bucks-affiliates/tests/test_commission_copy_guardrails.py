@@ -45,22 +45,21 @@ def test_skill_md_documents_three_tier_unilevel_structure() -> None:
     )
 
 
-def test_default_tracked_link_uses_serendb_domain() -> None:
-    """P1 #403: all defaults must use serendb.com, not the obsolete seren.ai URL."""
+def test_static_config_does_not_ship_default_tracked_link() -> None:
+    """#528: static config must not ship a fallback ref=default link."""
     offenders = []
     for path in (COMMON_PY, CONFIG_EXAMPLE, SKILL_SPEC):
-        if "seren.ai/serenbucks" in path.read_text(encoding="utf-8"):
+        body = path.read_text(encoding="utf-8")
+        if "seren.ai/serenbucks" in body or "ref=default" in body:
             offenders.append(path.name)
-    assert not offenders, f"obsolete seren.ai/serenbucks domain in: {offenders}"
+    assert not offenders, f"obsolete/default tracked_link found in: {offenders}"
 
     config = json.loads(CONFIG_EXAMPLE.read_text(encoding="utf-8"))
     for link in (
         config["program"]["tracked_link"],
         config["inputs"]["tracked_link"],
     ):
-        assert link.startswith("https://serendb.com"), (
-            f"default tracked_link must use serendb.com, got: {link}"
-        )
+        assert link == "", f"tracked_link must be resolved during bootstrap, got: {link}"
 
 
 def test_publish_metadata_matches_seren_relocation() -> None:

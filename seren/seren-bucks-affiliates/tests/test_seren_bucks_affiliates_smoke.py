@@ -17,7 +17,7 @@ def test_happy_path_fixture_is_successful() -> None:
     payload = _read_fixture("happy_path.json")
     assert payload["status"] == "ok"
     assert payload["skill"] == "seren-bucks-affiliates"
-    assert payload["tracked_link"] == "https://serendb.com?ref=default"
+    assert payload["tracked_link"] == "https://serendb.com?ref=SRN_DRYRUN"
     assert payload["program"]["program_id"] == "seren-bucks-default"
     assert payload["proposal"]["editable"] is True
     assert payload["proposal"]["quota_shortfall"] is True
@@ -49,7 +49,7 @@ def test_runtime_payload_matches_output_contract() -> None:
     )
     payload = json.loads(output)
 
-    assert payload["tracked_link"] == "https://serendb.com?ref=default"
+    assert payload["tracked_link"] == "https://serendb.com?ref=SRN_DRYRUN"
     assert payload["program"]["tracked_link"] == payload["tracked_link"]
     assert payload["candidate_sync"]["quota_shortfall"] is True
     assert payload["candidate_sync"]["qualified_count"] == 5

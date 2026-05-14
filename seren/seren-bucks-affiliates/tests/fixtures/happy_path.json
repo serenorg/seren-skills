@@ -1,12 +1,12 @@
 {
   "status": "ok",
   "skill": "seren-bucks-affiliates",
-  "tracked_link": "https://serendb.com?ref=default",
+  "tracked_link": "https://serendb.com?ref=SRN_DRYRUN",
   "workflow_step_count": 12,
   "dry_run": true,
   "program": {
     "program_id": "seren-bucks-default",
-    "tracked_link": "https://serendb.com?ref=default",
+    "tracked_link": "https://serendb.com?ref=SRN_DRYRUN",
     "source_of_truth": "seren-affiliates"
   },
   "bootstrap": {
