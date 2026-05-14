@@ -48,6 +48,7 @@ from arbitrage.scoring import (
     score_batch,
 )
 from db import ResolvedTarget, get_target
+from discovery import AutoDiscoverConfig, AutoDiscoverResult, run_auto_discover
 from otp_worker import (
     EmailPublisherUnavailable,
     IdentityMismatch,
@@ -102,6 +103,7 @@ class AgentConfig:
     database_name: str
     scoring: ScoringConfig
     intelligence: IntelligenceConfig
+    auto_discover: AutoDiscoverConfig
     live_mode: bool
     max_orders_per_run: int
     execution_mode: str
@@ -115,6 +117,7 @@ class AgentConfig:
         storage_raw = raw.get("storage") or {}
         scoring_raw = raw.get("scoring") or {}
         intel_raw = raw.get("intelligence") or {}
+        auto_raw = raw.get("auto_discover") or {}
         execution_mode = str(
             raw.get("execution_mode") or EXECUTION_MODE_SINGLE_LEG
         ).strip().lower()
@@ -140,6 +143,7 @@ class AgentConfig:
                 max_basis_volatility=float(intel_raw.get("max_basis_volatility", 0.05)),
                 fetch_correlations=bool(intel_raw.get("fetch_correlations", True)),
             ),
+            auto_discover=AutoDiscoverConfig.from_dict(auto_raw),
             live_mode=bool(raw.get("live_mode", False)),
             max_orders_per_run=int(raw.get("max_orders_per_run", 5)),
             execution_mode=execution_mode,
@@ -442,21 +446,23 @@ def cmd_run(
     recorder.summary["live_mode"] = config.live_mode and yes_live
 
     pairs = list_arb_pairs(target=target)
-    for p in pairs:
-        recorder.record_pair(p["prophet_market_id"], p["polymarket_condition_id"])
-    recorder.summary["pairs_evaluated"] = len(pairs)
-    if not pairs:
+    recorder.summary["pairs_pre_discover"] = len(pairs)
+
+    # #538 — auto-discover the campaign candidate set. When disabled
+    # we keep the old single-leg semantics: empty `arb_pairs` short-
+    # circuits to `no_pairs_seeded` before any JWT acquisition. When
+    # enabled, we always acquire the JWT (needed for the Prophet pair
+    # lookup), discover live candidates, and either auto-pair them or
+    # emit `pending_ui_submission` entries the agent's `/create` runbook
+    # drives.
+    auto_result: AutoDiscoverResult | None = None
+    pending_ui_submission: list[dict] = []
+    if not pairs and not config.auto_discover.enabled:
         return CycleResult(
             status="ok",
             reason="no_pairs_seeded",
             payload=recorder.finish("ok", "no_pairs_seeded"),
         )
-
-    condition_ids = [p["polymarket_condition_id"] for p in pairs]
-    polymarket_prices = fetch_market_prices(
-        gateway=gateway, condition_ids=condition_ids
-    )
-    recorder.summary["polymarket_prices_fetched"] = len(polymarket_prices)
 
     jwt, viewer_id, jwt_source = _acquire_jwt(
         config=config, gateway=gateway, transport=transport
@@ -470,6 +476,67 @@ def cmd_run(
     recorder.summary["jwt_source"] = jwt_source
     if viewer_id:
         recorder.summary["prophet_viewer_id"] = viewer_id
+
+    if config.auto_discover.enabled:
+        prophet_client_for_discovery = MinimalProphetClient(transport=transport)
+        try:
+            auto_result = run_auto_discover(
+                gateway=gateway,
+                prophet_client=prophet_client_for_discovery,
+                jwt=jwt,
+                target=target,
+                config=config.auto_discover,
+                viewer_id=viewer_id or "",
+            )
+        except Exception as exc:
+            recorder.record_blocker(
+                f"auto_discover_failed:{type(exc).__name__}:{str(exc)[:120]}"
+            )
+            auto_result = None
+        if auto_result is not None:
+            recorder.summary["auto_discover_candidates_found"] = (
+                auto_result.candidates_found
+            )
+            recorder.summary["auto_discover_auto_paired"] = len(
+                auto_result.auto_paired
+            )
+            recorder.summary["auto_discover_already_paired"] = (
+                auto_result.already_paired
+            )
+            recorder.summary["auto_discover_pending_ui"] = len(
+                auto_result.pending_ui_submission
+            )
+            recorder.summary["auto_discover_prophet_lookup_failed"] = (
+                auto_result.prophet_lookup_failed
+            )
+            if auto_result.sheet_path:
+                recorder.summary["arb_candidates_sheet"] = auto_result.sheet_path
+            pending_ui_submission = auto_result.pending_ui_submission
+            # Reload pairs — auto_paired rows are now in arb_pairs.
+            pairs = list_arb_pairs(target=target)
+
+    for p in pairs:
+        recorder.record_pair(p["prophet_market_id"], p["polymarket_condition_id"])
+    recorder.summary["pairs_evaluated"] = len(pairs)
+
+    if not pairs:
+        # Auto-discover ran but Prophet hasn't created any matching
+        # markets yet. Surface pending_ui_submission so the agent drives
+        # `/create` for each row, then re-run the cycle to trade them.
+        payload = recorder.finish("ok", "no_pairs_seeded_pending_ui_submission")
+        if pending_ui_submission:
+            payload["pending_ui_submission"] = pending_ui_submission
+        return CycleResult(
+            status="ok",
+            reason="no_pairs_seeded_pending_ui_submission",
+            payload=payload,
+        )
+
+    condition_ids = [p["polymarket_condition_id"] for p in pairs]
+    polymarket_prices = fetch_market_prices(
+        gateway=gateway, condition_ids=condition_ids
+    )
+    recorder.summary["polymarket_prices_fetched"] = len(polymarket_prices)
 
     order_client = ProphetOrderClient(transport=transport)
 
@@ -764,22 +831,30 @@ def cmd_run(
     recorder.summary["orders_submitted"] = submitted
     recorder.summary["actionable_opportunities"] = len(actionable)
 
+    def _attach_pending(payload: dict[str, Any]) -> dict[str, Any]:
+        # Always surface pending_ui_submission so the agent can drive
+        # Prophet `/create` for unmatched candidates in parallel with
+        # the scoring loop's normal trading work.
+        if pending_ui_submission:
+            payload["pending_ui_submission"] = pending_ui_submission
+        return payload
+
     if not (config.live_mode and yes_live) and len(actionable) > 0:
         return CycleResult(
             status="ok",
             reason="cycle_complete_dry_run",
-            payload=recorder.finish("ok", "cycle_complete_dry_run"),
+            payload=_attach_pending(recorder.finish("ok", "cycle_complete_dry_run")),
         )
     if submitted == 0 and len(actionable) > 0:
         return CycleResult(
             status="ok_no_fills",
             reason="all_orders_blocked",
-            payload=recorder.finish("ok_no_fills", "all_orders_blocked"),
+            payload=_attach_pending(recorder.finish("ok_no_fills", "all_orders_blocked")),
         )
     return CycleResult(
         status="ok",
         reason="cycle_complete",
-        payload=recorder.finish("ok", "cycle_complete"),
+        payload=_attach_pending(recorder.finish("ok", "cycle_complete")),
     )
 
 
@@ -845,6 +920,62 @@ def cmd_status(
 
 
 # ---------------------------------------------------------------------------
+# Record-created-market (#538)
+#
+# After the agent drives Prophet's `/create` UI for a `pending_ui_submission`
+# entry, it captures the new `prophet_market_id` and calls this command to
+# persist the pair. The next `cmd_run` cycle picks the pair up via
+# `list_arb_pairs` and starts arbing it.
+
+
+def cmd_record_created_market(
+    *,
+    config: AgentConfig,
+    polymarket_condition_id: str,
+    prophet_market_id: str,
+) -> CycleResult:
+    """Persist a pair the agent just created via the Prophet UI."""
+    if not polymarket_condition_id or not prophet_market_id:
+        return CycleResult(
+            status="blocked",
+            reason="missing_ids",
+            payload={
+                "polymarket_condition_id": polymarket_condition_id,
+                "prophet_market_id": prophet_market_id,
+            },
+        )
+    try:
+        target = _resolve_target(config)
+    except Exception as exc:
+        return CycleResult(
+            status="blocked",
+            reason="target_resolution_failed",
+            payload={"error": str(exc)[:300]},
+        )
+    try:
+        upsert_arb_pair(
+            target=target,
+            prophet_market_id=prophet_market_id,
+            polymarket_condition_id=polymarket_condition_id,
+            source_skill="auto_discover_ui",
+        )
+    except Exception as exc:
+        return CycleResult(
+            status="blocked",
+            reason="persist_failed",
+            payload={"error": f"{type(exc).__name__}:{str(exc)[:200]}"},
+        )
+    return CycleResult(
+        status="ok",
+        reason="pair_recorded",
+        payload={
+            "prophet_market_id": prophet_market_id,
+            "polymarket_condition_id": polymarket_condition_id,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # CLI
 
 
@@ -867,7 +998,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--command",
-        choices=["setup", "run", "status", "probe-schema"],
+        choices=[
+            "setup",
+            "run",
+            "status",
+            "probe-schema",
+            "record-created-market",
+        ],
         default="run",
     )
     parser.add_argument(
@@ -879,6 +1016,16 @@ def main(argv: list[str] | None = None) -> int:
         "--json-output",
         action="store_true",
         help="Emit a single JSON envelope (suitable for cron consumption).",
+    )
+    parser.add_argument(
+        "--polymarket-condition-id",
+        default="",
+        help="(record-created-market) Polymarket conditionId for the pair.",
+    )
+    parser.add_argument(
+        "--prophet-market-id",
+        default="",
+        help="(record-created-market) Prophet market id the agent just created.",
     )
     args = parser.parse_args(argv)
 
@@ -907,6 +1054,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.command == "status":
         result = cmd_status(config=config, gateway=gateway, transport=transport)
+    elif args.command == "record-created-market":
+        result = cmd_record_created_market(
+            config=config,
+            polymarket_condition_id=args.polymarket_condition_id,
+            prophet_market_id=args.prophet_market_id,
+        )
     else:
         parser.error(f"unknown command: {args.command}")
         return 2
