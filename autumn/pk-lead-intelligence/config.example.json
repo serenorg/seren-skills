@@ -1,0 +1,27 @@
+{
+  "inputs": {
+    "salesforce_org_url": "https://<org-subdomain>.lightning.force.com",
+    "salesforce_owner_email": "<owner-email>",
+    "live_mode": false,
+    "monthly_close_target_usd": 500000,
+    "google_drive_folder_id": "<paste-folder-id-from-google-drive>",
+    "nathan_share_email": "<paste-share-recipient-email>"
+  },
+  "perplexity": {
+    "model": "sonar",
+    "max_tokens": 1500
+  },
+  "claude": {
+    "model": "anthropic/claude-sonnet-4.5",
+    "max_tokens": 400
+  },
+  "schedule": {
+    "daily_cron": "0 6 * * 1-5",
+    "weekly_cron": "0 7 * * 2",
+    "timezone": "America/New_York"
+  },
+  "limits": {
+    "max_leads_per_daily_run": 50,
+    "min_seconds_between_external_fetches": 1
+  }
+}

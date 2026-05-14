@@ -1,0 +1,12 @@
+.env
+config.json
+state/
+output/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.docx
+*.png
+.DS_Store

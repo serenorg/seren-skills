@@ -1,0 +1,3 @@
+-- pk-lead-intelligence SerenDB schema.
+-- Populated incrementally across phases 1-4. The schema-guard step
+-- applies this file inside an idempotent transaction on every invoke.
