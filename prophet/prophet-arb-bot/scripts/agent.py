@@ -295,7 +295,10 @@ def _acquire_jwt(
 
     facade = AuthFacade(cache=cache)
     try:
-        with RealBrowserSession() as session:
+        # Issue #571: `RealBrowserSession.__init__` makes `gateway` a
+        # required keyword-only arg. Calling it bare raises TypeError on
+        # the first cold-start (no cache, no `PROPHET_SESSION_TOKEN`).
+        with RealBrowserSession(gateway=gateway) as session:
             fresh = facade.get_fresh_jwt(
                 email=email,
                 provider=provider,
@@ -312,9 +315,26 @@ def _acquire_jwt(
         PrivyAuthFailed,
         IdentityMismatch,
     ) as exc:
-        return None, None, f"blocked_otp:{type(exc).__name__}"
+        # Issue #571: keep the exception message in the envelope so the
+        # operator can self-diagnose without re-running with a debugger.
+        return None, None, _format_auth_failure_reason("blocked_otp", exc)
     except Exception as exc:
-        return None, None, f"blocked_auth_unexpected:{type(exc).__name__}"
+        return None, None, _format_auth_failure_reason(
+            "blocked_auth_unexpected", exc
+        )
+
+
+def _format_auth_failure_reason(prefix: str, exc: BaseException) -> str:
+    """Build a `<prefix>:<ExcType>[:<message>]` reason string.
+
+    The exception message is truncated to 200 chars to bound the cron
+    runner's JSON envelope size. Internal whitespace is collapsed so a
+    multi-line traceback string can't break the reason field.
+    """
+    detail = " ".join(str(exc).split())[:200]
+    if not detail:
+        return f"{prefix}:{type(exc).__name__}"
+    return f"{prefix}:{type(exc).__name__}:{detail}"
 
 
 # ---------------------------------------------------------------------------
