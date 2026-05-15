@@ -72,11 +72,32 @@ def test_acquire_jwt_passes_gateway_to_real_browser_session(
 
     `RealBrowserSession.__init__(self, *, gateway, headless=True)` makes
     `gateway` a required keyword argument. Calling `RealBrowserSession()`
-    without it raises `TypeError`. The test captures the constructor
-    kwargs from a real cold-start dispatch and asserts the live gateway
-    was forwarded.
+    without it raises `TypeError`. Issue #580 changed which gateway gets
+    passed (now the spawned PlaywrightStealthGateway, not the publisher
+    HttpGateway), but the keyword-only contract is the original
+    regression and still holds.
     """
     _force_cold_start(monkeypatch)
+
+    from otp_worker import playwright_mcp_gateway as pmg
+
+    monkeypatch.setattr(
+        pmg.PlaywrightStealthGateway,
+        "_resolve_default_command",
+        classmethod(lambda cls: ["/usr/bin/true"]),
+    )
+
+    class _StubPlaywrightGateway:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def __enter__(self) -> "_StubPlaywrightGateway":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+    monkeypatch.setattr(agent, "PlaywrightStealthGateway", _StubPlaywrightGateway)
 
     captured: dict[str, Any] = {}
 
@@ -93,8 +114,6 @@ def test_acquire_jwt_passes_gateway_to_real_browser_session(
 
     monkeypatch.setattr(agent, "RealBrowserSession", _CapturingSession)
 
-    # AuthFacade is exercised separately; here we just need any return
-    # so `_acquire_jwt` exits cleanly after `with RealBrowserSession()`.
     class _StubFacade:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
@@ -106,18 +125,18 @@ def test_acquire_jwt_passes_gateway_to_real_browser_session(
 
     monkeypatch.setattr(agent, "AuthFacade", _StubFacade)
 
-    sentinel_gateway = object()
     jwt, viewer_id, source = agent._acquire_jwt(
-        config=_config(), gateway=sentinel_gateway, transport=object()
+        config=_config(), gateway=object(), transport=object()
     )
 
     assert jwt == "eyJ.j.w.t"
     assert viewer_id == "vid_x"
     assert source == "otp"
-    # The args list must be empty (the bug was a positional/no-arg call);
-    # `gateway` must arrive as a keyword.
+    # The keyword-only contract — `gateway` arrives as a kwarg, not a
+    # positional. After #580 it's the PlaywrightStealthGateway instance,
+    # but the kwarg shape is unchanged.
     assert captured["args"] == ()
-    assert captured["kwargs"].get("gateway") is sentinel_gateway
+    assert isinstance(captured["kwargs"].get("gateway"), _StubPlaywrightGateway)
 
 
 def test_acquire_jwt_surfaces_exception_message_on_unexpected_failure(
@@ -129,6 +148,26 @@ def test_acquire_jwt_surfaces_exception_message_on_unexpected_failure(
     `ValueError` from a deserialization fault.
     """
     _force_cold_start(monkeypatch)
+
+    from otp_worker import playwright_mcp_gateway as pmg
+
+    monkeypatch.setattr(
+        pmg.PlaywrightStealthGateway,
+        "_resolve_default_command",
+        classmethod(lambda cls: ["/usr/bin/true"]),
+    )
+
+    class _StubPlaywrightGateway:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def __enter__(self) -> "_StubPlaywrightGateway":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+    monkeypatch.setattr(agent, "PlaywrightStealthGateway", _StubPlaywrightGateway)
 
     class _ExplodingSession:
         def __init__(self, *args: Any, **kwargs: Any) -> None:

@@ -63,6 +63,11 @@ from otp_worker import (
 )
 from otp_worker.auth_facade import AuthFacade
 from otp_worker.playwright_client import RealBrowserSession
+from otp_worker import playwright_mcp_gateway as _playwright_mcp_gateway
+from otp_worker.playwright_mcp_gateway import (
+    PlaywrightMcpUnavailable,
+    PlaywrightStealthGateway,
+)
 from otp_worker.session_cache import SessionCache
 from persistence import (
     RunRecorder,
@@ -293,12 +298,29 @@ def _acquire_jwt(
     if not email or provider not in ("gmail", "outlook"):
         return None, None, "blocked_otp_email_missing"
 
+    # Issue #580: cold-start needs Playwright MCP. The publisher-side
+    # `gateway` (HttpGateway) carries no MCP attributes, so the bundled
+    # `playwright-stealth` MCP server has to be spawned as a stdio
+    # subprocess. If neither the bundled binary nor an
+    # `SEREN_PLAYWRIGHT_MCP_COMMAND` override is reachable, fail closed
+    # with a structured reason instead of raising RuntimeError deep in
+    # `_resolve_mcp_callable`.
+    if (
+        _playwright_mcp_gateway.PlaywrightStealthGateway._resolve_default_command()
+        is None
+    ):
+        return (
+            None,
+            None,
+            "blocked_otp_browser_unavailable:"
+            "set_PROPHET_SESSION_TOKEN_or_seed_session_cache",
+        )
+
     facade = AuthFacade(cache=cache)
     try:
-        # Issue #571: `RealBrowserSession.__init__` makes `gateway` a
-        # required keyword-only arg. Calling it bare raises TypeError on
-        # the first cold-start (no cache, no `PROPHET_SESSION_TOKEN`).
-        with RealBrowserSession(gateway=gateway) as session:
+        with PlaywrightStealthGateway() as pw_gateway, RealBrowserSession(
+            gateway=pw_gateway
+        ) as session:
             fresh = facade.get_fresh_jwt(
                 email=email,
                 provider=provider,
@@ -309,6 +331,13 @@ def _acquire_jwt(
                 transport=transport,
             )
         return fresh.jwt, fresh.prophet_viewer_id, fresh.source
+    except PlaywrightMcpUnavailable:
+        return (
+            None,
+            None,
+            "blocked_otp_browser_unavailable:"
+            "set_PROPHET_SESSION_TOKEN_or_seed_session_cache",
+        )
     except (
         OtpEmailTimeout,
         EmailPublisherUnavailable,

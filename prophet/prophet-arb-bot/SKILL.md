@@ -121,6 +121,18 @@ Expected cadence:
 
 You can also pre-supply a JWT via `PROPHET_SESSION_TOKEN` env var. The agent skips the OTP flow entirely in that case.
 
+When the cold-start OTP flow does fire, the Python subprocess spawns the
+bundled `playwright-stealth` MCP server from
+`/Applications/SerenDesktop.app/Contents/Resources/mcp-servers/playwright-stealth/`
+as a stdio child process and drives the Privy modal through it. No
+publisher round-trip is involved — the gateway is local. Override the
+spawn command with `SEREN_PLAYWRIGHT_MCP_COMMAND` (a shell-quoted full
+command string) when running outside Seren Desktop. If neither the
+bundled binary nor the env override is reachable, cold start returns
+`status=blocked, reason=blocked_otp_browser_unavailable:set_PROPHET_SESSION_TOKEN_or_seed_session_cache`
+and the operator must pre-supply a JWT or seed `state/session_cache.json`
+by hand.
+
 ## Live Mode Safety
 
 First-run mode is live-enabled delta-neutral, but Prophet's in-browser
@@ -573,7 +585,11 @@ Seed hedge statuses:
 
 **`reason=prophet_unauthorized` on every tick.**
 
-- The session cache is stale and the silent refresh path failed. Run `agent.py --command run` interactively to trigger the OTP flow.
+- The session cache is stale and the silent refresh path failed. On Seren Desktop, `agent.py --command run` will drive the bundled `playwright-stealth` MCP automatically to refresh — no shell flag needed. Outside Seren Desktop, set `SEREN_PLAYWRIGHT_MCP_COMMAND` to a working `playwright-stealth` command before re-running, or pre-supply a fresh JWT via `PROPHET_SESSION_TOKEN`.
+
+**`reason=blocked_otp_browser_unavailable:set_PROPHET_SESSION_TOKEN_or_seed_session_cache`.**
+
+- The Python subprocess could not resolve a `playwright-stealth` MCP command. Either run on Seren Desktop (which ships the bundled binary), set `SEREN_PLAYWRIGHT_MCP_COMMAND="node /path/to/playwright-stealth/dist/index.js"`, or pre-supply `PROPHET_SESSION_TOKEN` to skip the cold-start flow entirely.
 
 **`blockers` contains `place_order_failed:ProphetSchemaError`.**
 
