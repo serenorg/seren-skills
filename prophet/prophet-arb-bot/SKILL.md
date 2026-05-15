@@ -18,6 +18,12 @@ When invoked:
 
 This validation gate prevents the cron and 12h local-pull poller from accruing cost before the runner has produced any qualifying scoring pass. Skill instructions are preloaded in context when this skill is active; do not perform filesystem searches or tool-driven exploration to rediscover them.
 
+### Seren Desktop tool routing guardrails
+
+- **Playwright is a Seren Desktop MCP connected service, not a Seren publisher.** Do not call publisher discovery (`seren__suggest_for_task`, `seren__list_agent_publishers`) or `seren__call_publisher` for Playwright.
+- For Prophet UI automation, use the connected Playwright MCP tool namespace directly: `mcp__playwright__playwright_navigate`, `mcp__playwright__playwright_click`, `mcp__playwright__playwright_fill`, `mcp__playwright__playwright_evaluate`, and related `mcp__playwright__...` tools.
+- Only use publishers for actual publisher-backed data/API calls called out below (for example `polymarket-data`, `seren-polygon`, or SerenDB setup paths). Browser UI driving in `/create` and `/wallet` stays on Playwright MCP.
+
 ## API Key Setup
 
 **MCP-first (default on Seren Desktop).** Before any subprocess call, probe auth with `mcp__seren-mcp__list_projects`. If it returns a project list, you are authenticated — done. Schema bootstrap and project/database creation can also be performed entirely over MCP (`list_projects` / `create_project`, `list_databases` / `create_database`, `run_sql_transaction`), so on Seren Desktop the agent never needs `SEREN_API_KEY` in the subprocess environment for setup.
@@ -223,9 +229,11 @@ DEPOSIT_CONFIRM_BUTTON         = 'button:has-text("Confirm")'
 1. Read `deposit.safe_wallet_address` (when surfaced) from the blocked envelope.
 2. Query on-chain USDC at that address via `seren-polygon`.
 3. If on-chain USDC < `deposit.deficit_usdc`, surface and stop.
-4. Otherwise navigate to `PROPHET_WALLET_URL`, click Deposit, fill
-   the amount = `deficit_usdc`, click Confirm, accept the Prophet
-   signing prompt.
+4. Otherwise use Playwright MCP (`mcp__playwright__playwright_navigate`,
+   `mcp__playwright__playwright_click`, and
+   `mcp__playwright__playwright_fill`) to navigate to
+   `PROPHET_WALLET_URL`, click Deposit, fill the amount =
+   `deficit_usdc`, click Confirm, and accept the Prophet signing prompt.
 5. Poll `viewer.cashBalance.availableCents` until the deposit lands.
 6. Re-run `agent.py --command run --json-output`.
 
@@ -408,10 +416,16 @@ If `max_fundable == 0` the cycle returns
 
 For each `pending_ui_submission` entry:
 
-1. Navigate to `https://app.prophetmarket.ai/create`, fill the question,
-   click `Validate Question`, then click `Create Market`. Capture the
-   `OddsCalculationSession.id` returned by `startOddsCalculation` — the
-   agent reads it from the network response or the page state.
+1. Use Playwright MCP — specifically
+   `mcp__playwright__playwright_navigate`,
+   `mcp__playwright__playwright_fill`,
+   `mcp__playwright__playwright_click`, and, when needed,
+   `mcp__playwright__playwright_evaluate` — to navigate to
+   `https://app.prophetmarket.ai/create`, fill the question, click
+   `Validate Question`, then click `Create Market`. Capture the
+   `OddsCalculationSession.id` returned by `startOddsCalculation` from
+   the network response or page state. Do not search for or call a
+   Playwright publisher; this is a Seren Desktop MCP flow.
 
 2. **Compute the seed-side decision from Prophet's AI fair value (#548 / #551).**
    The 6-model calc runs for 60–180s. Poll the session and derive the

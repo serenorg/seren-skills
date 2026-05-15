@@ -110,3 +110,28 @@ def test_skill_md_drops_posix_only_setup_commands() -> None:
         "they're POSIX-only and the MCP-first flow doesn't need them. "
         "See issue #568."
     )
+
+
+def test_skill_md_routes_playwright_to_desktop_mcp_not_publisher() -> None:
+    """Issue #576: UI automation must use Playwright MCP, not publisher lookup.
+
+    Opus 4.5 regressed by searching/querying for a Playwright publisher
+    during the Prophet `/create` flow. In Seren Desktop, Playwright is a
+    connected MCP service exposed as the `mcp__playwright__...` tool
+    namespace, so the runbook must anchor that exact route.
+    """
+    body = SKILL_MD.read_text(encoding="utf-8")
+
+    assert "mcp__playwright__playwright_navigate" in body, (
+        "SKILL.md must name the Playwright MCP tool namespace so agents "
+        "drive Prophet's UI with Seren Desktop's connected MCP service. "
+        "See issue #576."
+    )
+    assert re.search(r"Playwright\s+is\s+.*MCP\s+connected\s+service", body, re.IGNORECASE | re.DOTALL), (
+        "SKILL.md must explicitly say Playwright is an MCP connected "
+        "service in Seren Desktop. See issue #576."
+    )
+    assert re.search(r"not\s+.*Playwright\s+publisher", body, re.IGNORECASE | re.DOTALL), (
+        "SKILL.md must explicitly prohibit Playwright publisher routing. "
+        "See issue #576."
+    )

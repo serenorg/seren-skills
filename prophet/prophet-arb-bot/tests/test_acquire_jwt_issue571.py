@@ -150,3 +150,52 @@ def test_acquire_jwt_surfaces_exception_message_on_unexpected_failure(
     assert viewer_id is None
     assert reason.startswith("blocked_auth_unexpected:ValueError:"), reason
     assert "custom-msg-12345" in reason
+
+
+def test_real_browser_session_uses_mcp_gateway_when_available() -> None:
+    """Issue #576: direct MCP dispatch must win over Playwright publisher calls.
+
+    Seren Desktop exposes Playwright as connected MCP tools, not a paid
+    publisher. If the runtime gateway supplies MCP callables,
+    RealBrowserSession must call those methods and must not call
+    gateway.call("playwright", ...), which fails with "Publisher
+    'playwright' not found".
+    """
+
+    class _McpGateway:
+        def __init__(self) -> None:
+            self.navigate_calls: list[dict[str, str]] = []
+            self.publisher_calls: list[tuple[Any, ...]] = []
+
+        def mcp_playwright_navigate(self, *, url: str) -> dict[str, bool]:
+            self.navigate_calls.append({"url": url})
+            return {"ok": True}
+
+        def call(self, *args: Any, **kwargs: Any) -> Any:
+            self.publisher_calls.append(args)
+            raise AssertionError("Playwright publisher must not be called")
+
+    from otp_worker.playwright_client import RealBrowserSession
+
+    gateway = _McpGateway()
+    session = RealBrowserSession(gateway=gateway)
+
+    session.navigate("https://app.prophetmarket.ai")
+
+    assert gateway.navigate_calls == [{"url": "https://app.prophetmarket.ai"}]
+    assert gateway.publisher_calls == []
+
+
+def test_real_browser_session_reports_mcp_requirement_without_gateway_method() -> None:
+    """Issue #576: no silent fallback to the missing Playwright publisher."""
+
+    class _PublisherOnlyGateway:
+        def call(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("Playwright publisher must not be called")
+
+    from otp_worker.playwright_client import RealBrowserSession
+
+    session = RealBrowserSession(gateway=_PublisherOnlyGateway())
+
+    with pytest.raises(RuntimeError, match="Playwright MCP"):
+        session.navigate("https://app.prophetmarket.ai")
