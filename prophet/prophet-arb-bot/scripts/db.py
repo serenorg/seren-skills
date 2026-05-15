@@ -57,25 +57,45 @@ class ResolvedTarget:
 
 
 def _http_get(path: str, *, api_key: str) -> Any:
+    return _http_request("GET", path, api_key=api_key, body=None)
+
+
+def _http_post(path: str, *, api_key: str, body: dict[str, Any]) -> Any:
+    return _http_request("POST", path, api_key=api_key, body=body)
+
+
+def _http_request(
+    method: str,
+    path: str,
+    *,
+    api_key: str,
+    body: dict[str, Any] | None,
+) -> Any:
+    data: bytes | None = None
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
     req = Request(
         f"{PUBLISHER_HOST}{PUBLISHER_PREFIX}{path}",
-        headers={
-            "Accept": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="GET",
+        headers=headers,
+        method=method,
+        data=data,
     )
     try:
         with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS, context=_ssl_context()) as r:
             text = r.read().decode("utf-8")
     except HTTPError as exc:
-        body = ""
+        body_text = ""
         try:
-            body = exc.read().decode("utf-8")
+            body_text = exc.read().decode("utf-8")
         except Exception:
             pass
         raise RuntimeError(
-            f"seren-db {path} failed: HTTP {exc.code} body={body[:300]}"
+            f"seren-db {method} {path} failed: HTTP {exc.code} body={body_text[:300]}"
         ) from exc
     payload = json.loads(text) if text else {}
     # The seren-db publisher uses two envelope shapes:
@@ -99,10 +119,16 @@ def resolve_target(
 ) -> ResolvedTarget:
     """Look up project + branch + database and return a Postgres URI.
 
+    Auto-provisions the database on the project's default branch when it
+    does not exist yet — `--command setup` is the canonical bootstrap
+    surface and operators should not need to drop to a side-channel
+    `create_database` MCP call before running it. See issue #573.
+
     Fails closed (RuntimeError) if any of:
       - project_name is not found in the caller's organization
       - the project has no default branch
-      - the database does not exist on that branch
+      - the auto-create POST fails (operator must address the underlying
+        permission or quota issue before retrying)
       - the connection_uri endpoint returns no usable URI
     """
     projects_payload = _http_get("/projects", api_key=api_key)
@@ -144,10 +170,37 @@ def resolve_target(
         None,
     )
     if db is None:
-        raise RuntimeError(
-            f"database '{database_name}' not found on project '{project_name}'. "
-            f"Create it before running setup."
+        # Auto-create the database on the project's default branch.
+        # Why: setup is the bootstrap surface; requiring a side-channel
+        # `seren__create_database` MCP call before setup is exactly the
+        # snag #573 reported (operator hung 5–10 min on the error).
+        _http_post(
+            f"/projects/{project_id}/branches/{branch_id}/databases",
+            api_key=api_key,
+            body={"name": database_name},
         )
+        databases = _http_get(
+            f"/projects/{project_id}/branches/{branch_id}/databases",
+            api_key=api_key,
+        )
+        if not isinstance(databases, list):
+            raise RuntimeError(
+                f"seren-db databases endpoint returned non-list after create: "
+                f"{type(databases).__name__}"
+            )
+        db = next(
+            (
+                d
+                for d in databases
+                if isinstance(d, dict) and d.get("name") == database_name
+            ),
+            None,
+        )
+        if db is None:
+            raise RuntimeError(
+                f"database '{database_name}' still missing on project "
+                f"'{project_name}' after auto-create POST."
+            )
 
     # Fetch the connection URI. The publisher returns the project's
     # default database name in the URI path; substitute the requested

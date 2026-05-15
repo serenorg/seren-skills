@@ -45,7 +45,7 @@ Reference: [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.
 
 Mode A operator-arb. For each operator-supplied (prophet_market_id, polymarket_condition_id) pair the agent:
 
-1. Fetches Prophet's current YES/NO odds directly from `https://app.prophetmarket.ai/api/graphql` (#493: the previous `prophet-ai` Seren publisher hop is gone — see `scripts/prophet/transport.py`).
+1. Fetches Prophet's current YES/NO odds directly from `https://app.prophetmarket.ai/api/graphql`. The `prophet-ai` Seren publisher is still listed in the gateway, but the bot bypasses it: Prophet's GraphQL only honors `Authorization: Bearer <Prophet session JWT>`, the Seren gateway claims `Authorization` for `SEREN_API_KEY` billing auth, and Prophet ignores cookie passthrough — so a Prophet session JWT cannot ride through the proxy. See `scripts/prophet/transport.py` for the direct-transport seam (#493).
 2. Fetches Polymarket's current YES/NO mid-price via the `polymarket-data` publisher.
 3. Scores the spread `prophet_yes − polymarket_yes`. If the absolute spread exceeds the configured `min_spread` (default 3 ¢) and stays under `max_spread` (default 30 ¢), the agent emits a quoted limit order on Prophet that fades the drift.
 4. Optionally enriches each pair with `seren-polymarket-intelligence` correlation/volatility data; high polymarket volatility downgrades the opportunity to watchlist-only.
@@ -158,7 +158,7 @@ Before any live `run --yes-live`:
 1. Verify `SEREN_API_KEY` is loaded.
 2. Verify a fresh JWT is available — either via `PROPHET_SESSION_TOKEN` env or the arb-bot's session cache.
 3. Verify `inputs.manual_pairs` has at least one entry **OR** `auto_discover.enabled=true` (run `--command setup` first if neither is satisfied).
-4. Verify `https://app.prophetmarket.ai/api/graphql` is reachable (the prophet-ai publisher hop is gone — see #493).
+4. Verify `https://app.prophetmarket.ai/api/graphql` is reachable directly (the bot bypasses the `prophet-ai` publisher because the proxy can't pass the Prophet session JWT through `Authorization` — see `scripts/prophet/transport.py` and #493).
 5. Verify the live `polymarket-data` publisher is reachable.
 6. **Funds preflight (#524/#545):** after scoring, query `viewer.cashBalance.availableCents` once. In `single_leg` mode, if it cannot cover `sum(opp.size_usdc for opp in actionable[:max_orders_per_run])`, return a `status=blocked, reason=funds_insufficient, action=deposit_required` envelope before any `placeOrder` mutation fires. Seed preflight and trim run whenever `pending_ui_submission` is non-empty, regardless of `live_mode` or `--yes-live`, so the UI queue is always bankroll-trimmed and depth-filtered.
 7. **Delta-neutral pre-trade additions (#536):** when `execution_mode = "delta_neutral"`, the cycle additionally must:
