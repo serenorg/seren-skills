@@ -169,24 +169,18 @@ def capture_artifacts(session: BrowserSession, *, jwt: str) -> PrivyAuthArtifact
     )
 
 
-_PLAYWRIGHT_PUBLISHER_SLUG = "playwright"
-
-
 class RealBrowserSession:
-    """Concrete BrowserSession that drives the Seren-managed Playwright MCP.
+    """Concrete BrowserSession that drives Seren Desktop Playwright MCP.
 
-    Issue #470: this class used to bundle its own Python `playwright`
-    runtime (`from playwright.sync_api import sync_playwright`), which
-    broke every fresh install with `ModuleNotFoundError` and forked
-    browser automation away from Seren's canonical Playwright publisher.
+    Playwright is a connected MCP service in Seren Desktop, not a Seren
+    publisher. This class therefore dispatches only to MCP-style gateway
+    callables (for example `mcp_playwright_navigate`) and deliberately
+    refuses to fall back to `gateway.call("playwright", ...)`. The fallback
+    caused issue #576: cold-start auth attempted to query a non-existent
+    Playwright publisher and blocked with `Publisher 'playwright' not found`.
 
-    Each `BrowserSession` method now maps to a single
-    `gateway.call("playwright", "POST", "/<tool>", body=...)` so the
-    Privy OTP dance routes through the same publisher seam as gmail,
-    polymarket-data, prophet-ai, etc.
-
-    Use as a context manager so the publisher-side session is reliably
-    closed on exit:
+    Use as a context manager so the MCP browser session is reliably closed
+    on exit when a close callable is available:
 
         with RealBrowserSession(gateway=gateway, headless=True) as session:
             open_privy_modal(session)
@@ -209,10 +203,24 @@ class RealBrowserSession:
         self._call("/fill", {"selector": selector, "value": value})
 
     def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
-        self._call(
-            "/wait_for_selector",
-            {"selector": selector, "timeout": timeout_ms},
+        wait_fn = self._resolve_mcp_callable("wait_for_selector")
+        if wait_fn is not None:
+            wait_fn(selector=selector, timeout_ms=timeout_ms)
+            return
+
+        # Seren Desktop's public Playwright MCP tool surface does not expose
+        # a dedicated wait_for_selector tool. Poll via evaluate when possible.
+        deadline = time.monotonic() + (timeout_ms / 1000)
+        script = (
+            "(() => !!document.querySelector("
+            + _js_string_literal(selector)
+            + "))()"
         )
+        while time.monotonic() < deadline:
+            if bool(_coerce_evaluate_result(self._call("/evaluate", {"script": script}))):
+                return
+            time.sleep(0.25)
+        raise TimeoutError(f"selector did not appear within {timeout_ms}ms: {selector}")
 
     def get_local_storage(self, key: str) -> str | None:
         # `wait_for_jwt` runs `_unwrap_jwt` on the return value, so the
@@ -310,12 +318,34 @@ class RealBrowserSession:
     # -- Internal -----------------------------------------------------------
 
     def _call(self, path: str, body: dict[str, Any]) -> Any:
-        return self._gateway.call(
-            _PLAYWRIGHT_PUBLISHER_SLUG,
-            "POST",
-            path,
-            body=body,
+        tool = path.strip("/").replace("-", "_")
+        fn = self._resolve_mcp_callable(tool)
+        if fn is None:
+            raise RuntimeError(
+                "Playwright MCP connected service is required for Prophet UI "
+                "automation; do not query a Playwright publisher. Expected a "
+                f"gateway method for Playwright MCP tool {tool!r}."
+            )
+        return fn(**_mcp_tool_args(tool, body))
+
+    def _resolve_mcp_callable(self, tool: str) -> Any | None:
+        """Return an MCP callable for a Playwright tool, if the gateway has one.
+
+        Tests and Desktop adapters may expose either compact helper names
+        (`mcp_playwright_navigate`) or the fully-qualified Seren tool name
+        (`mcp__playwright__playwright_navigate`). Support both, but never
+        fall back to publisher routing.
+        """
+        candidates = (
+            f"mcp__playwright__playwright_{tool}",
+            f"mcp_playwright_{tool}",
+            f"playwright_{tool}",
         )
+        for name in candidates:
+            fn = getattr(self._gateway, name, None)
+            if callable(fn):
+                return fn
+        return None
 
 
 def _js_string_literal(value: str) -> str:
@@ -337,3 +367,13 @@ def _coerce_evaluate_result(result: Any) -> Any:
                 return result[key]
         return result
     return result
+
+
+def _mcp_tool_args(tool: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Translate the historical BrowserSession body to MCP tool args."""
+    if tool == "wait_for_selector":
+        return {
+            "selector": body.get("selector", ""),
+            "timeout_ms": body.get("timeout") or body.get("timeout_ms", 30_000),
+        }
+    return dict(body)
