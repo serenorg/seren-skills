@@ -124,14 +124,14 @@ You can also pre-supply a JWT via `PROPHET_SESSION_TOKEN` env var. The agent ski
 When the cold-start OTP flow does fire, the Python subprocess spawns the
 bundled `playwright-stealth` MCP server from
 `/Applications/SerenDesktop.app/Contents/Resources/mcp-servers/playwright-stealth/`
-as a stdio child process and drives the Privy modal through it. No
+as a stdio child process and drives the Prophet login modal through it. No
 publisher round-trip is involved — the gateway is local. Override the
 spawn command with `SEREN_PLAYWRIGHT_MCP_COMMAND` (a shell-quoted full
 command string) when running outside Seren Desktop. If neither the
 bundled binary nor the env override is reachable, cold start returns
 `status=blocked, reason=blocked_otp_browser_unavailable:set_PROPHET_SESSION_TOKEN_or_seed_session_cache`
-and the operator must pre-supply a JWT or seed `state/session_cache.json`
-by hand.
+and the operator must pre-supply a JWT or seed the session cache under
+the skill's state directory by hand.
 
 ## Live Mode Safety
 
@@ -386,7 +386,7 @@ The seren-db publisher does not expose an HTTP `run-sql` endpoint; SQL execution
 #    execution_mode=delta_neutral, and live_mode=true. Email + provider
 #    are persisted from flags; existing configs are never overwritten.
 python3 scripts/agent.py --config config.json --command setup --json-output \
-  --prophet-email you@example.com --email-provider gmail
+  --prophet-email <prophet-login-email> --email-provider gmail
 
 # 2. Validate the runner end-to-end before scheduling cron. Confirm the
 #    JSON output reports `"status": "ok"`. If it reports `blocked`
@@ -398,7 +398,7 @@ python3 scripts/agent.py --config config.json --command run --yes-live --json-ou
 #    only after step 2 returned status=ok.
 python3 scripts/setup_cron.py create \
   --config config.json \
-  --prophet-email you@example.com \
+  --prophet-email <prophet-login-email> \
   --email-provider gmail
 python3 scripts/run_local_pull_runner.py --config config.json
 ```

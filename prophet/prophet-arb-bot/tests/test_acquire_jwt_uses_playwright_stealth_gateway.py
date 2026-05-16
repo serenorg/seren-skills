@@ -22,7 +22,7 @@ from discovery import AutoDiscoverConfig
 
 def _config() -> AgentConfig:
     return AgentConfig(
-        inputs={"prophet_email": "jill@example.com", "email_provider": "gmail"},
+        inputs={"prophet_email": "jill@volume.finance", "email_provider": "gmail"},
         project_name="prophet",
         database_name="prophet",
         scoring=ScoringConfig(),

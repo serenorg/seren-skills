@@ -1,6 +1,6 @@
 {
   "inputs": {
-    "prophet_email": "you@example.com",
+    "prophet_email": "",
     "email_provider": "gmail",
     "manual_pairs": []
   },

@@ -27,7 +27,7 @@ from config_bootstrap import (
 
 _EXAMPLE_CONTENT = {
     "inputs": {
-        "prophet_email": "you@example.com",
+        "prophet_email": "",
         "email_provider": "gmail",
         "manual_pairs": [],
     },
