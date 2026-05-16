@@ -124,6 +124,10 @@ _RESERVED_EXAMPLE_DOMAINS = {
     "example.net",
     "example.org",
 }
+OTP_BROWSER_UNAVAILABLE_REASON = (
+    "blocked_otp_browser_unavailable:"
+    "seren_desktop_playwright_mcp_unavailable"
+)
 
 
 class PolymarketCredentialsMissing(RuntimeError):
@@ -351,8 +355,7 @@ def _acquire_jwt(
         return (
             None,
             None,
-            "blocked_otp_browser_unavailable:"
-            "set_PROPHET_SESSION_TOKEN_or_seed_session_cache",
+            OTP_BROWSER_UNAVAILABLE_REASON,
         )
 
     facade = AuthFacade(cache=cache)
@@ -374,8 +377,7 @@ def _acquire_jwt(
         return (
             None,
             None,
-            "blocked_otp_browser_unavailable:"
-            "set_PROPHET_SESSION_TOKEN_or_seed_session_cache",
+            OTP_BROWSER_UNAVAILABLE_REASON,
         )
     except (
         OtpEmailTimeout,
@@ -1782,16 +1784,7 @@ def main(argv: list[str] | None = None) -> int:
             prophet_confirm_declined=args.prophet_confirm_declined,
         )
     elif args.command == "compute-seed-intent":
-        jwt = os.environ.get("PROPHET_SESSION_TOKEN", "")
-        if not jwt:
-            result = CycleResult(
-                status="blocked",
-                reason="missing_session_token",
-                payload={
-                    "action": "export_PROPHET_SESSION_TOKEN",
-                },
-            )
-        elif not args.odds_session_id or not args.polymarket_condition_id:
+        if not args.odds_session_id or not args.polymarket_condition_id:
             result = CycleResult(
                 status="blocked",
                 reason="missing_required_args",
@@ -1802,16 +1795,33 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
         else:
-            result = cmd_compute_seed_intent(
-                config=config,
-                polymarket_condition_id=args.polymarket_condition_id,
-                odds_session_id=args.odds_session_id,
-                polymarket_yes_price=args.polymarket_yes_price,
-                transport=transport,
-                jwt=jwt,
-                poll_interval_s=args.poll_interval_s,
-                poll_timeout_s=args.poll_timeout_s,
-            )
+            jwt = os.environ.get("PROPHET_SESSION_TOKEN", "").strip()
+            jwt_source = "env" if jwt else ""
+            if not jwt:
+                jwt, _, jwt_source = _acquire_jwt(
+                    config=config,
+                    gateway=gateway,
+                    transport=transport,
+                )
+            if not jwt:
+                result = CycleResult(
+                    status="blocked",
+                    reason=jwt_source,
+                    payload={
+                        "action": "retry_after_seren_desktop_playwright_auth_available"
+                    },
+                )
+            else:
+                result = cmd_compute_seed_intent(
+                    config=config,
+                    polymarket_condition_id=args.polymarket_condition_id,
+                    odds_session_id=args.odds_session_id,
+                    polymarket_yes_price=args.polymarket_yes_price,
+                    transport=transport,
+                    jwt=jwt,
+                    poll_interval_s=args.poll_interval_s,
+                    poll_timeout_s=args.poll_timeout_s,
+                )
     else:
         parser.error(f"unknown command: {args.command}")
         return 2

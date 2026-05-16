@@ -81,4 +81,7 @@ def test_acquire_jwt_fails_closed_when_no_playwright_mcp_command_resolves(
     assert jwt is None
     assert viewer_id is None
     assert reason.startswith("blocked_otp_browser_unavailable"), reason
-    assert "PROPHET_SESSION_TOKEN" in reason, reason
+    assert "PROPHET_SESSION_TOKEN" not in reason, reason
+    assert "seed_session_cache" not in reason, reason
+    assert "manual" not in reason.lower(), reason
+    assert "seren_desktop_playwright" in reason, reason

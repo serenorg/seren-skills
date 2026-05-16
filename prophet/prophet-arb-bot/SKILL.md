@@ -119,7 +119,7 @@ Expected cadence:
 - **Cache stale but refresh succeeds**: 0 OTP emails per tick.
 - **Cache stale and refresh fails**: 1 OTP per refresh attempt.
 
-You can also pre-supply a JWT via `PROPHET_SESSION_TOKEN` env var. The agent skips the OTP flow entirely in that case.
+`PROPHET_SESSION_TOKEN` remains a developer/test escape hatch, but agents must not ask users to extract or paste JWTs from browser storage. User-facing runs should use the session cache, silent refresh, or the automated browser OTP flow below.
 
 When the cold-start OTP flow does fire, the Python subprocess spawns the
 bundled `playwright-stealth` MCP server from
@@ -129,9 +129,10 @@ publisher round-trip is involved — the gateway is local. Override the
 spawn command with `SEREN_PLAYWRIGHT_MCP_COMMAND` (a shell-quoted full
 command string) when running outside Seren Desktop. If neither the
 bundled binary nor the env override is reachable, cold start returns
-`status=blocked, reason=blocked_otp_browser_unavailable:set_PROPHET_SESSION_TOKEN_or_seed_session_cache`
-and the operator must pre-supply a JWT or seed the session cache under
-the skill's state directory by hand.
+`status=blocked, reason=blocked_otp_browser_unavailable:seren_desktop_playwright_mcp_unavailable`.
+The agent should tell the user to open/update Seren Desktop or configure
+`SEREN_PLAYWRIGHT_MCP_COMMAND`; it must not instruct a non-technical user
+to manually extract a JWT.
 
 ## Live Mode Safety
 
@@ -174,7 +175,7 @@ If the user needs immediate exposure removal (close all / unwind / flatten), the
 Before any live `run --yes-live`:
 
 1. Verify `SEREN_API_KEY` is loaded.
-2. Verify a fresh JWT is available — either via `PROPHET_SESSION_TOKEN` env or the arb-bot's session cache.
+2. Verify a fresh Prophet session is available via the arb-bot's session cache, silent refresh, or automated browser OTP flow.
 3. Verify `inputs.manual_pairs` has at least one entry **OR** `auto_discover.enabled=true` (run `--command setup` first if neither is satisfied).
 4. Verify `https://app.prophetmarket.ai/api/graphql` is reachable directly (the bot bypasses the `prophet-ai` publisher because the proxy can't pass the Prophet session JWT through `Authorization` — see `scripts/prophet/transport.py` and #493).
 5. Verify the live `polymarket-data` publisher is reachable.
@@ -324,8 +325,7 @@ mutation PlaceOrder($input: PlaceOrderInput!) {
 If Prophet drifts the schema later, capture the new shape with:
 
 ```bash
-SEREN_API_KEY=... PROPHET_SESSION_TOKEN='eyJ...' \
-  python3 scripts/agent.py --command probe-schema
+python3 scripts/agent.py --command probe-schema
 ```
 
 ## Continuous Runs (seren-cron)
@@ -447,7 +447,7 @@ For each `pending_ui_submission` entry:
    separate price-fetch step:
 
    ```bash
-   PROPHET_SESSION_TOKEN="$JWT" python3 scripts/agent.py \
+   python3 scripts/agent.py \
      --command compute-seed-intent \
      --odds-session-id "$OCS_ID" \
      --polymarket-condition-id "$POLY_CID" \
@@ -478,10 +478,10 @@ For each `pending_ui_submission` entry:
      polymarket-data publisher is down, or the book had no usable
      bid/ask to derive a midpoint. Retry on the next tick.
    - `status=blocked, reason=prophet_unauthorized` (#553) → the cached
-     Prophet session JWT is stale. Run the **Agent-driven OTP runbook**
-     to refresh it, re-export `PROPHET_SESSION_TOKEN`, and retry the
-     same `compute-seed-intent` call. The market is still in the
-     odds-session window — do not abandon the candidate.
+     Prophet session is stale. Retry the same `compute-seed-intent` call;
+     the command reacquires the session through cache refresh or the
+     automated browser OTP flow. The market is still in the odds-session
+     window — do not abandon the candidate.
    - `status=blocked, reason=odds_session_timeout` (#553) → Prophet's
      6-model AI calc did not complete within `--poll-timeout-s` (default
      180s). Abandon this entry. No exposure was created on either side.
@@ -585,11 +585,11 @@ Seed hedge statuses:
 
 **`reason=prophet_unauthorized` on every tick.**
 
-- The session cache is stale and the silent refresh path failed. On Seren Desktop, `agent.py --command run` will drive the bundled `playwright-stealth` MCP automatically to refresh — no shell flag needed. Outside Seren Desktop, set `SEREN_PLAYWRIGHT_MCP_COMMAND` to a working `playwright-stealth` command before re-running, or pre-supply a fresh JWT via `PROPHET_SESSION_TOKEN`.
+- The session cache is stale and the silent refresh path failed. On Seren Desktop, `agent.py --command run` will drive the bundled `playwright-stealth` MCP automatically to refresh — no shell flag needed. Outside Seren Desktop, set `SEREN_PLAYWRIGHT_MCP_COMMAND` to a working `playwright-stealth` command before re-running.
 
-**`reason=blocked_otp_browser_unavailable:set_PROPHET_SESSION_TOKEN_or_seed_session_cache`.**
+**`reason=blocked_otp_browser_unavailable:seren_desktop_playwright_mcp_unavailable`.**
 
-- The Python subprocess could not resolve a `playwright-stealth` MCP command. Either run on Seren Desktop (which ships the bundled binary), set `SEREN_PLAYWRIGHT_MCP_COMMAND="node /path/to/playwright-stealth/dist/index.js"`, or pre-supply `PROPHET_SESSION_TOKEN` to skip the cold-start flow entirely.
+- The Python subprocess could not resolve a `playwright-stealth` MCP command. Either run on Seren Desktop (which ships the bundled binary) or set `SEREN_PLAYWRIGHT_MCP_COMMAND="node /path/to/playwright-stealth/dist/index.js"`. Do not ask users to extract JWTs from browser storage.
 
 **`blockers` contains `place_order_failed:ProphetSchemaError`.**
 
