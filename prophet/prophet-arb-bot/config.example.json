@@ -31,5 +31,8 @@
   },
   "live_mode": false,
   "max_orders_per_run": 5,
-  "max_hedge_slippage_bps": 200.0
+  "max_hedge_slippage_bps": 200.0,
+  "execution": {
+    "auto_approve_polymarket_spenders": false
+  }
 }

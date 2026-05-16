@@ -60,9 +60,14 @@ _REMEDIATION_NO_APPROVALS = (
     "Polymarket reports zero spendable collateral but the on-chain "
     "USDC.e balance is non-zero. The CLOB cannot move these funds "
     "because the address has not granted token allowances to the "
-    "Polymarket exchange contracts. Grant the standard Polymarket "
-    "approvals by visiting https://polymarket.com/wallet (one-time "
-    "setup) — no new deposit is needed."
+    "Polymarket exchange contracts. Either: (a) grant the standard "
+    "Polymarket approvals at https://polymarket.com/wallet (one-time "
+    "manual setup), or (b) enable auto-submit by setting "
+    "`execution.auto_approve_polymarket_spenders: true` in config.json "
+    "and passing `--auto-approve` on the CLI — the bot will broadcast "
+    "approve()/setApprovalForAll() to the pinned Polymarket spenders "
+    "(CTF Exchange, NegRisk CTF Exchange, NegRisk Adapter) on the next "
+    "cycle. No new deposit is needed either way."
 )
 
 _REMEDIATION_OK = "Polymarket reports sufficient spendable collateral."

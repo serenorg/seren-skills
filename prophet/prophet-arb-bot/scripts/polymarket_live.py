@@ -48,6 +48,158 @@ POLYGON_CONDITIONAL_TOKENS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 ERC20_ALLOWANCE_ABI_FRAGMENT = "0xdd62ed3e"  # allowance(address,address)
 ERC1155_IS_APPROVED_ABI_FRAGMENT = "0xe985e9c5"  # isApprovedForAll(address,address)
 
+# Issue #592 phase 2 — auto-submit Polymarket spender approvals.
+#
+# Authoritative source for spender addresses is py-clob-client's
+# `get_contract_config(137, neg_risk=…)` (see
+# `py_clob_client/config.py`). At runtime
+# `assert_pinned_spenders_match_py_clob_client()` calls into the lib
+# and refuses to start if any pinned address is missing from that
+# config — catches drift if py-clob-client ever ships new addresses.
+#
+# NegRisk Adapter (`POLYGON_NEG_RISK_ADAPTER`) is in the pinned set
+# because it is the on-chain adapter the neg-risk SELL conversion path
+# requires (Polymarket protocol contract; not exposed by py-clob-client
+# `get_contract_config` because that lib only knows about exchanges).
+_PINNED_POLYMARKET_SPENDERS: frozenset[str] = frozenset(
+    addr.lower()
+    for addr in (
+        POLYGON_CTF_EXCHANGE,
+        POLYGON_NEG_RISK_CTF_EXCHANGE,
+        POLYGON_NEG_RISK_ADAPTER,
+    )
+)
+
+ERC20_APPROVE_SELECTOR = "0x095ea7b3"  # approve(address,uint256)
+ERC1155_SET_APPROVAL_FOR_ALL_SELECTOR = "0xa22cb465"  # setApprovalForAll(address,bool)
+MAX_UINT256_HEX = "f" * 64
+
+
+def _check_pinned_spender_or_raise(spender: str) -> str:
+    """Defense-in-depth: refuse to encode approval calldata for any
+    spender not in the pinned Polymarket spender set.
+
+    Returns the lowercased, 20-byte hex address (no `0x` prefix) ready
+    for ABI encoding.
+    """
+    addr = spender.lower().removeprefix("0x")
+    if len(addr) != 40:
+        raise ValueError(f"spender must be 20 bytes hex; got {spender!r}")
+    if f"0x{addr}" not in _PINNED_POLYMARKET_SPENDERS:
+        raise ValueError(
+            f"refusing to encode approval calldata for unpinned spender {spender!r}; "
+            "the bot only approves the Polymarket CTF Exchange, NegRisk CTF Exchange, "
+            "and NegRisk Adapter on Polygon mainnet"
+        )
+    return addr
+
+
+def build_usdc_approve_calldata(*, spender: str, amount_hex: str = MAX_UINT256_HEX) -> str:
+    """Build calldata for `USDC.e.approve(spender, amount)`.
+
+    Default amount is MAX_UINT256 — standard one-time approval pattern
+    so the bot doesn't burn gas re-approving on every trade. Refuses
+    any spender not in the pinned Polymarket set.
+    """
+    addr_clean = _check_pinned_spender_or_raise(spender)
+    if len(amount_hex) != 64:
+        raise ValueError(f"amount_hex must be 32-byte hex; got {len(amount_hex)} chars")
+    return ERC20_APPROVE_SELECTOR + addr_clean.rjust(64, "0") + amount_hex
+
+
+def build_ct_set_approval_for_all_calldata(*, spender: str, approved: bool) -> str:
+    """Build calldata for `ConditionalTokens.setApprovalForAll(spender, approved)`.
+
+    Required for SELL orders — Polymarket's CTF exchange needs to be
+    able to move the operator's outcome tokens on settlement. Refuses
+    any spender not in the pinned set.
+    """
+    addr_clean = _check_pinned_spender_or_raise(spender)
+    bool_segment = ("0" * 63) + ("1" if approved else "0")
+    return ERC1155_SET_APPROVAL_FOR_ALL_SELECTOR + addr_clean.rjust(64, "0") + bool_segment
+
+
+def assert_pinned_spenders_match_py_clob_client(*, chain_id: int = 137) -> frozenset[str]:
+    """Drift guard: cross-check pinned Polymarket spender addresses
+    against the addresses py-clob-client itself uses for the same
+    chain.
+
+    Raises ``RuntimeError`` if any address py-clob-client returns for
+    the (chain_id, neg_risk) combinations is missing from our pinned
+    set. NegRisk Adapter is intentionally NOT cross-checked here
+    because py-clob-client's `get_contract_config()` only exposes the
+    exchange contracts, not the adapter.
+
+    Returns the verified subset (lowercased) for caller logging.
+    """
+    try:
+        from py_clob_client.config import get_contract_config
+    except ImportError as exc:
+        raise RuntimeError(
+            "py-clob-client is required for the Polymarket spender drift "
+            "guard. Install via `pip install -r requirements.txt`."
+        ) from exc
+
+    verified: set[str] = set()
+    for neg_risk in (False, True):
+        config = get_contract_config(chain_id, neg_risk=neg_risk)
+        exchange = config.exchange.lower()
+        if exchange not in _PINNED_POLYMARKET_SPENDERS:
+            raise RuntimeError(
+                f"py-clob-client `get_contract_config(chain_id={chain_id}, "
+                f"neg_risk={neg_risk})` returned exchange {exchange!r}, which is "
+                "not in the pinned Polymarket spender set. py-clob-client may have "
+                "shipped new addresses — investigate before auto-submitting any "
+                "approve() transactions."
+            )
+        verified.add(exchange)
+    return frozenset(verified)
+
+
+def auto_approve_missing_polymarket_allowances(
+    *,
+    config_enabled: bool,
+    cli_flag: bool,
+    wallet_address: str,
+    private_key: str,
+    seren_publisher: str = "seren-polygon",
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Orchestrate auto-submission of Polymarket spender approvals.
+
+    Mirrors the live_mode + --yes-live defense-in-depth pattern used
+    for trading: both `config_enabled` (from
+    `execution.auto_approve_polymarket_spenders` in config.json) AND
+    `cli_flag` (from `--auto-approve` on the CLI) must be true to
+    actually broadcast. The default is off; operators see no behavior
+    change unless they opt in explicitly.
+
+    Returns:
+      `{"status": "skipped", "reason": "<config_disabled|cli_flag_missing>"}`
+        when either gate is false; no transactions are built or signed.
+      `{"status": "submitted", "transactions": [...]}` when broadcasts
+        completed (live on-chain submission via seren-polygon).
+
+    The on-chain submission path itself is exercised by the functional
+    smoke test against the live runtime — it requires a real key,
+    real RPC, and real Polygon gas, none of which belong in unit tests.
+    """
+    if not config_enabled:
+        return {"status": "skipped", "reason": "config_disabled", "transactions": []}
+    if not cli_flag:
+        return {"status": "skipped", "reason": "cli_flag_missing", "transactions": []}
+
+    # Live broadcast path. Lazy-imported because eth-account is only
+    # required when both gates are on.
+    from polymarket_approvals_broadcast import broadcast_pinned_polymarket_approvals  # type: ignore
+
+    return broadcast_pinned_polymarket_approvals(
+        wallet_address=wallet_address,
+        private_key=private_key,
+        seren_publisher=seren_publisher,
+        timeout_seconds=timeout_seconds,
+    )
+
 
 def maybe_load_dotenv(skill_root: Path) -> None:
     env_path = skill_root / ".env"

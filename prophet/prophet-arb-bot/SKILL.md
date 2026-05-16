@@ -182,6 +182,32 @@ Before any live `run --yes-live`:
 7. **Two-venue funds preflight (#536):** `py-clob-client` must be installed (per #590) and `POLY_PRIVATE_KEY`/`POLY_API_KEY`/`POLY_PASSPHRASE`/`POLY_SECRET` loaded. Reach the Polymarket CLOB and fetch order-book depth for every actionable pair. Opportunities whose visible Polymarket depth can't cover the target notional at `max_hedge_slippage_bps` are rejected with `polymarket_depth_*` blockers before the Prophet limit is posted. Query both Prophet protocol cash AND Polymarket CLOB collateral. The blocked envelope returns `prophet_deficit_usdc` and `polymarket_deficit_usdc` as separate fields so the agent's deposit runbook can route to the right venue. The blocked envelope now also exposes `polymarket_state` (per #592 phase 1): `no_balance` (deposit USDC.e), `no_approvals` (grant allowances to Polymarket spenders), or `ok`.
 8. If any check fails, fail closed with a structured `blocked` envelope and let the cron retry on the next tick.
 
+## Polymarket auto-approve (#592 phase 2)
+
+When the operator funds a fresh wallet, the polymarket-state classifier reports `no_approvals` — the USDC.e balance is on-chain but the Polymarket CTF Exchange, NegRisk CTF Exchange, and NegRisk Adapter haven't been granted token allowances yet. The manual remediation is to click through at https://polymarket.com/wallet; the autonomous path lets the bot broadcast the approvals itself.
+
+**Opt-in is mandatory and two-layered** (mirrors `live_mode` + `--yes-live`):
+
+1. `execution.auto_approve_polymarket_spenders: true` in `config.json` (default `false`).
+2. `--auto-approve` flag on the CLI: `python3 scripts/agent.py --command run --yes-live --auto-approve`.
+
+When both gates are on AND state is `no_approvals`, the runner builds and broadcasts (via `seren-polygon`):
+
+- `USDC.e.approve(<spender>, MAX_UINT256)` for each pinned spender (skipped per-spender if already approved).
+- `ConditionalTokens.setApprovalForAll(<spender>, true)` for each pinned spender (skipped per-spender if already approved).
+
+**Pinned spenders on Polygon mainnet (chain 137):**
+
+| Address | Role |
+|---|---|
+| `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E` | CTF Exchange (standard markets) |
+| `0xC5d563A36AE78145C45a50134d48A1215220f80a` | NegRisk CTF Exchange (neg-risk markets) |
+| `0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296` | NegRisk Adapter (neg-risk conversions) |
+
+Source-of-truth: `py_clob_client.config.get_contract_config(137, neg_risk=…)` for the two exchanges; the NegRisk Adapter is a Polymarket protocol contract. `assert_pinned_spenders_match_py_clob_client()` cross-checks the first two at startup against the live py-clob-client config and refuses to start if py-clob-client has shipped new addresses — catches drift before any approve() transaction is signed.
+
+**Defense-in-depth.** `build_usdc_approve_calldata()` and `build_ct_set_approval_for_all_calldata()` refuse to encode for any spender not in the pinned set, so even if the orchestrator is somehow handed an attacker address it cannot sign approval to it. The broadcast result is attached to the blocked envelope under `polymarket_auto_approve` (per-leg `tx_hash` + `status`), so the operator can audit every signed transaction.
+
 ## Agent-driven deposit runbook
 
 Issue #524: every `placeOrder` LIMIT submission locks USDC collateral
