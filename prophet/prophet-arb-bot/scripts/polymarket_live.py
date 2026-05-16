@@ -158,42 +158,37 @@ def assert_pinned_spenders_match_py_clob_client(*, chain_id: int = 137) -> froze
 
 def auto_approve_missing_polymarket_allowances(
     *,
-    config_enabled: bool,
-    cli_flag: bool,
     wallet_address: str,
     private_key: str,
     seren_publisher: str = "seren-polygon",
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Orchestrate auto-submission of Polymarket spender approvals.
+    """Broadcast Polymarket spender approvals.
 
-    Mirrors the live_mode + --yes-live defense-in-depth pattern used
-    for trading: both `config_enabled` (from
-    `execution.auto_approve_polymarket_spenders` in config.json) AND
-    `cli_flag` (from `--auto-approve` on the CLI) must be true to
-    actually broadcast. The default is off; operators see no behavior
-    change unless they opt in explicitly.
+    Issue #596 collapsed the historical dual opt-in (config flag + CLI
+    flag) into a single gate at the callsite: the broadcast fires
+    whenever `_annotate_polymarket_state` sees `no_approvals` AND a
+    live hedger is wired in. The live hedger only exists when
+    `yes_live=True` AND `execution_mode=delta_neutral`, so reaching
+    this function already implies the operator consented to live
+    trading against the same pinned spenders.
 
-    Returns:
-      `{"status": "skipped", "reason": "<config_disabled|cli_flag_missing>"}`
-        when either gate is false; no transactions are built or signed.
-      `{"status": "submitted", "transactions": [...]}` when broadcasts
-        completed (live on-chain submission via seren-polygon).
+    Defense-in-depth stays in the encoder: `build_*_calldata` and
+    `_check_pinned_spender_or_raise` refuse any spender outside
+    `_PINNED_POLYMARKET_SPENDERS`, so this path cannot sign approval
+    to an attacker address even under compromise. The broadcast itself
+    is idempotent — it queries current on-chain state and skips
+    spenders that are already approved.
 
-    The on-chain submission path itself is exercised by the functional
-    smoke test against the live runtime — it requires a real key,
-    real RPC, and real Polygon gas, none of which belong in unit tests.
+    Returns `{"status": "submitted" | "failed", "transactions": [...]}`
+    from `broadcast_pinned_polymarket_approvals`.
     """
-    if not config_enabled:
-        return {"status": "skipped", "reason": "config_disabled", "transactions": []}
-    if not cli_flag:
-        return {"status": "skipped", "reason": "cli_flag_missing", "transactions": []}
+    # Lazy-imported because eth-account is only required when the
+    # broadcast actually runs. The import resolves through the module
+    # attribute so test monkeypatches at the module level are honored.
+    import polymarket_approvals_broadcast
 
-    # Live broadcast path. Lazy-imported because eth-account is only
-    # required when both gates are on.
-    from polymarket_approvals_broadcast import broadcast_pinned_polymarket_approvals  # type: ignore
-
-    return broadcast_pinned_polymarket_approvals(
+    return polymarket_approvals_broadcast.broadcast_pinned_polymarket_approvals(
         wallet_address=wallet_address,
         private_key=private_key,
         seren_publisher=seren_publisher,

@@ -176,7 +176,6 @@ class AgentConfig:
     max_orders_per_run: int
     execution_mode: str
     max_hedge_slippage_bps: float
-    auto_approve_polymarket_spenders: bool = False
 
     @classmethod
     def load(cls, path: str) -> "AgentConfig":
@@ -228,9 +227,6 @@ class AgentConfig:
             max_orders_per_run=int(raw.get("max_orders_per_run", 5)),
             execution_mode=execution_mode,
             max_hedge_slippage_bps=float(raw.get("max_hedge_slippage_bps", 200.0)),
-            auto_approve_polymarket_spenders=bool(
-                (raw.get("execution") or {}).get("auto_approve_polymarket_spenders", False)
-            ),
         )
 
 
@@ -574,7 +570,6 @@ def _annotate_polymarket_state(
     polymarket_avail_usdc: float,
     live_hedger: Any,
     recorder: Any,
-    auto_approve_enabled: bool = False,
 ) -> None:
     """#592 phase 1 — annotate a blocked-funds envelope with the
     Polymarket collateral state classification.
@@ -613,18 +608,19 @@ def _annotate_polymarket_state(
     deposit_envelope["polymarket_on_chain_usdc_e"] = state.on_chain_usdc_e
     recorder.record_blocker(f"polymarket_state:{state.kind}")
 
-    # #592 phase 2 — if both opt-in gates are on AND we just diagnosed
-    # `no_approvals`, broadcast approve()/setApprovalForAll() to the
-    # pinned Polymarket spenders. The orchestrator is itself gated on
-    # both flags as defense-in-depth.
+    # #596 — when we diagnosed `no_approvals` and the live hedger is
+    # active (the same precondition the trade-signing path accepts),
+    # broadcast approve()/setApprovalForAll() to the pinned Polymarket
+    # spenders. The defense surface is the encoder, not a separate
+    # opt-in flag: `_check_pinned_spender_or_raise` refuses any spender
+    # outside `_PINNED_POLYMARKET_SPENDERS`. Re-invocation is safe —
+    # `broadcast_pinned_polymarket_approvals` is idempotent.
     from polymarket_state import POLYMARKET_STATE_NO_APPROVALS
-    if state.kind == POLYMARKET_STATE_NO_APPROVALS and auto_approve_enabled:
+    if state.kind == POLYMARKET_STATE_NO_APPROVALS:
         from polymarket_live import auto_approve_missing_polymarket_allowances
         import os
         private_key = (os.getenv("POLY_PRIVATE_KEY") or os.getenv("WALLET_PRIVATE_KEY") or "").strip()
         result = auto_approve_missing_polymarket_allowances(
-            config_enabled=True,
-            cli_flag=True,
             wallet_address=trader_address,
             private_key=private_key,
         )
@@ -644,7 +640,6 @@ def _apply_seed_preflight_and_trim(
     gateway: Any,
     recorder: Any,
     existing_pairs_count: int,
-    auto_approve_enabled: bool = False,
 ) -> CycleResult | None:
     """#542 Fix 2 — gate `pending_ui_submission` by what the operator
     can actually fund + hedge.
@@ -732,7 +727,6 @@ def _apply_seed_preflight_and_trim(
                 polymarket_avail_usdc=preflight.polymarket_available_usdc,
                 live_hedger=live_hedger,
                 recorder=recorder,
-                auto_approve_enabled=auto_approve_enabled,
             )
         payload["deposit"] = deposit_envelope
         return CycleResult(
@@ -795,7 +789,6 @@ def cmd_run(
     yes_live: bool,
     transport: Any = None,
     hedger: Any = None,
-    auto_approve: bool = False,
 ) -> CycleResult:
     if transport is None:
         from prophet.transport import ProphetDirectTransport
@@ -908,9 +901,6 @@ def cmd_run(
                     jwt=jwt,
                     gateway=gateway,
                     recorder=recorder,
-                    auto_approve_enabled=(
-                        config.auto_approve_polymarket_spenders and auto_approve
-                    ),
                     # #589: existing pairs count is `pairs` here — the list
                     # was already refreshed above to include auto_paired
                     # rows. Passing it in lets the orchestration helper
@@ -1193,9 +1183,6 @@ def cmd_run(
                     polymarket_avail_usdc=polymarket_avail,
                     live_hedger=live_hedger,
                     recorder=recorder,
-                    auto_approve_enabled=(
-                        config.auto_approve_polymarket_spenders and auto_approve
-                    ),
                 )
             payload["deposit"] = deposit_envelope
             return CycleResult(
@@ -1763,17 +1750,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Confirm live execution. Required in addition to live_mode=true.",
     )
     parser.add_argument(
-        "--auto-approve",
-        action="store_true",
-        help=(
-            "Phase 2 (#592): when the polymarket-state classifier reports "
-            "`no_approvals`, auto-submit USDC.e approve() and CT "
-            "setApprovalForAll() to the pinned Polymarket spenders. "
-            "Required in addition to "
-            "`execution.auto_approve_polymarket_spenders=true` in config.json."
-        ),
-    )
-    parser.add_argument(
         "--json-output",
         action="store_true",
         help="Emit a single JSON envelope (suitable for cron consumption).",
@@ -1904,7 +1880,6 @@ def main(argv: list[str] | None = None) -> int:
             gateway=gateway,
             yes_live=args.yes_live,
             transport=transport,
-            auto_approve=args.auto_approve,
         )
     elif args.command == "status":
         result = cmd_status(config=config, gateway=gateway, transport=transport)

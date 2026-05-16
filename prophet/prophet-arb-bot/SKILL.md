@@ -182,16 +182,13 @@ Before any live `run --yes-live`:
 7. **Two-venue funds preflight (#536):** `py-clob-client` must be installed (per #590) and `POLY_PRIVATE_KEY`/`POLY_API_KEY`/`POLY_PASSPHRASE`/`POLY_SECRET` loaded. Reach the Polymarket CLOB and fetch order-book depth for every actionable pair. Opportunities whose visible Polymarket depth can't cover the target notional at `max_hedge_slippage_bps` are rejected with `polymarket_depth_*` blockers before the Prophet limit is posted. Query both Prophet protocol cash AND Polymarket CLOB collateral. The blocked envelope returns `prophet_deficit_usdc` and `polymarket_deficit_usdc` as separate fields so the agent's deposit runbook can route to the right venue. The blocked envelope now also exposes `polymarket_state` (per #592 phase 1): `no_balance` (deposit USDC.e), `no_approvals` (grant allowances to Polymarket spenders), or `ok`.
 8. If any check fails, fail closed with a structured `blocked` envelope and let the cron retry on the next tick.
 
-## Polymarket auto-approve (#592 phase 2)
+## Polymarket auto-approve (#596)
 
-When the operator funds a fresh wallet, the polymarket-state classifier reports `no_approvals` — the USDC.e balance is on-chain but the Polymarket CTF Exchange, NegRisk CTF Exchange, and NegRisk Adapter haven't been granted token allowances yet. The manual remediation is to click through at https://polymarket.com/wallet; the autonomous path lets the bot broadcast the approvals itself.
+When the operator funds a fresh wallet, the polymarket-state classifier reports `no_approvals` — the USDC.e balance is on-chain but the Polymarket CTF Exchange, NegRisk CTF Exchange, and NegRisk Adapter haven't been granted token allowances yet. The bot resolves this autonomously on the next live cycle — no separate opt-in flag.
 
-**Opt-in is mandatory and two-layered** (mirrors `live_mode` + `--yes-live`):
+**The gate is `live_mode` + `--yes-live` only.** Same gate the trade-signing path uses. Reaching `_annotate_polymarket_state` with a non-None live hedger means the operator already consented to signing transactions against the pinned Polymarket spenders — auto-approve uses the exact same key against the exact same spenders.
 
-1. `execution.auto_approve_polymarket_spenders: true` in `config.json` (default `false`).
-2. `--auto-approve` flag on the CLI: `python3 scripts/agent.py --command run --yes-live --auto-approve`.
-
-When both gates are on AND state is `no_approvals`, the runner builds and broadcasts (via `seren-polygon`):
+When `state == no_approvals` and a live hedger is wired in, the runner builds and broadcasts (via `seren-polygon`):
 
 - `USDC.e.approve(<spender>, MAX_UINT256)` for each pinned spender (skipped per-spender if already approved).
 - `ConditionalTokens.setApprovalForAll(<spender>, true)` for each pinned spender (skipped per-spender if already approved).
@@ -206,7 +203,9 @@ When both gates are on AND state is `no_approvals`, the runner builds and broadc
 
 Source-of-truth: `py_clob_client.config.get_contract_config(137, neg_risk=…)` for the two exchanges; the NegRisk Adapter is a Polymarket protocol contract. `assert_pinned_spenders_match_py_clob_client()` cross-checks the first two at startup against the live py-clob-client config and refuses to start if py-clob-client has shipped new addresses — catches drift before any approve() transaction is signed.
 
-**Defense-in-depth.** `build_usdc_approve_calldata()` and `build_ct_set_approval_for_all_calldata()` refuse to encode for any spender not in the pinned set, so even if the orchestrator is somehow handed an attacker address it cannot sign approval to it. The broadcast result is attached to the blocked envelope under `polymarket_auto_approve` (per-leg `tx_hash` + `status`), so the operator can audit every signed transaction.
+**Defense-in-depth.** `build_usdc_approve_calldata()` and `build_ct_set_approval_for_all_calldata()` refuse to encode for any spender not in the pinned set, so even if the orchestrator is somehow handed an attacker address it cannot sign approval to it. That refusal — not a CLI flag — is the trust boundary. The broadcast result is attached to the blocked envelope under `polymarket_auto_approve` (per-leg `tx_hash` + `status`), so the operator can audit every signed transaction.
+
+**Idempotency.** `broadcast_pinned_polymarket_approvals` queries the current allowance / `isApprovedForAll` per spender and skips broadcasts where the on-chain state already shows approval. After the first successful cycle the auto-approve path is a constant-cost no-op (6 RPC reads, 0 signed transactions).
 
 ## Agent-driven deposit runbook
 
