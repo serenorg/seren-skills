@@ -741,6 +741,22 @@ def _apply_seed_preflight_and_trim(
         recorder.summary["_trimmed_pending"] = action.trimmed_pending_ui_submission
         recorder.summary["seed_dropped_count"] = len(pending)
         recorder.summary["seed_dropped_reasons"] = ["seed_preflight_skipped"] * len(pending)
+        # #598: the skip branch used to bypass `_annotate_polymarket_state`,
+        # which meant the #596 auto-approve broadcast never fired for
+        # operators whose Polymarket wallet was stuck in `no_approvals`.
+        # Mirror the gating used in the should_block branch above so the
+        # diagnostic (and the idempotent auto-approve) run on every cycle
+        # that observes a Polymarket-side deficit.
+        if preflight.polymarket_deficit_usdc > 0.0:
+            diagnostic_envelope: dict[str, Any] = {}
+            _annotate_polymarket_state(
+                deposit_envelope=diagnostic_envelope,
+                polymarket_avail_usdc=preflight.polymarket_available_usdc,
+                live_hedger=live_hedger,
+                recorder=recorder,
+            )
+            if diagnostic_envelope:
+                recorder.summary["polymarket_state_diagnostic"] = diagnostic_envelope
         return None
 
     # Build the depth assessor for the qualifier. Skipped in dry-run when
