@@ -160,12 +160,15 @@ def acquire_token(
             f"jwt_dot_segments={jwt.count('.')}\n"
         )
 
-    # Step 7: capture cookie set.
+    # Step 7: capture refresh material (#583: localStorage primary, cookie fallback).
     artifacts = capture_artifacts(browser_session, jwt=jwt)
     if not artifacts.refresh_token:
-        # Refresh-token cookie missing → steady-state refresher will not work.
+        # Refresh token missing → steady-state refresher will not work.
         # Fail closed rather than ship a session that needs an OTP every cycle.
-        raise PrivyAuthFailed("Privy did not set privy-refresh-token cookie")
+        raise PrivyAuthFailed(
+            "Privy refresh token not found "
+            "(checked localStorage privy:refresh_token + cookie privy-refresh-token)"
+        )
 
     # Step 8: bind participant identity (P0 — plan §11.1 step 10, §3 ADR).
     # Issue #493: direct-to-Prophet via ProphetDirectTransport.
