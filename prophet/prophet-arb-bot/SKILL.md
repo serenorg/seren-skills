@@ -59,14 +59,13 @@ Mode A operator-arb. For each operator-supplied (prophet_market_id, polymarket_c
 
 Every cycle persists the run shell, scored opportunities, and submitted orders to SerenDB (`prophet/prophet`). The `arb_runs`, `arb_opportunities`, and `arb_orders` tables are the canonical run history. The agent also emits a single JSON envelope on stdout for `seren-cron` to capture in its `execution_results` table.
 
-## Execution Modes
+## Execution Mode
 
-Two execution modes are supported, selected by `execution_mode` in `config.json`:
+The arb-bot is **delta-neutral only** (`execution_mode = "delta_neutral"`). After every Prophet fill the bot submits the offsetting Polymarket order via `py-clob-client`. Both Prophet and Polymarket are on Polygon, so no cross-chain bridging is required; each leg locks its own USDC pool. A **pre-trade depth check** rejects opportunities where the Polymarket book can't absorb the planned notional at `max_hedge_slippage_bps` (default 200) — preventing naked Prophet exposure at the source. If the hedge submission fails post-fill, the bot invokes the Prophet `cancelOrder` unwind path and records the order with `hedge_status=naked_exposure` for operator action.
 
-- `single_leg` (explicit legacy Mode A) — the arb-bot trades exclusively on Prophet; the polymarket leg is a fair-value reference, not a hedge. Existing operators with `execution_mode="single_leg"` in their config are unaffected.
-- `delta_neutral` (first-run default) — after every Prophet fill the bot submits the offsetting Polymarket order via `py-clob-client`. Both Prophet and Polymarket are on Polygon, so no cross-chain bridging is required; each leg locks its own USDC pool. A **pre-trade depth check** rejects opportunities where the Polymarket book can't absorb the planned notional at `max_hedge_slippage_bps` (default 200) — preventing naked Prophet exposure at the source. If the hedge submission fails post-fill, the bot invokes the Prophet `cancelOrder` unwind path and records the order with `hedge_status=naked_exposure` for operator action.
+**Issue #591 removed the legacy `single_leg` execution mode.** Naked Prophet exposure is directional speculation on Prophet's price discovery, not arbitrage — it has no place in a delta-neutral arb skill. Configs that still set `execution_mode: "single_leg"` are rejected at `AgentConfig.load` with a clear deprecation error; operators must delete the field (default is `delta_neutral`) or set it explicitly to `delta_neutral` to migrate.
 
-First-run bootstrap writes `"execution_mode": "delta_neutral"`, `"live_mode": true`, and `auto_discover.enabled=true`. `delta_neutral` is also a real claim against `POLY_PRIVATE_KEY` / `POLY_API_KEY` / `POLY_PASSPHRASE` / `POLY_SECRET` — the live hedger fails closed with `reason=polymarket_creds_missing` if those creds are not loaded.
+First-run bootstrap writes `"live_mode": true` and `auto_discover.enabled=true`. The live hedger fails closed with `reason=polymarket_creds_missing` if `POLY_PRIVATE_KEY` / `POLY_API_KEY` / `POLY_PASSPHRASE` / `POLY_SECRET` are not loaded.
 
 ## Auto-Discover Mode (#538)
 
@@ -179,11 +178,8 @@ Before any live `run --yes-live`:
 3. Verify `inputs.manual_pairs` has at least one entry **OR** `auto_discover.enabled=true` (run `--command setup` first if neither is satisfied).
 4. Verify `https://app.prophetmarket.ai/api/graphql` is reachable directly (the bot bypasses the `prophet-ai` publisher because the proxy can't pass the Prophet session JWT through `Authorization` — see `scripts/prophet/transport.py` and #493).
 5. Verify the live `polymarket-data` publisher is reachable.
-6. **Funds preflight (#524/#545):** after scoring, query `viewer.cashBalance.availableCents` once. In `single_leg` mode, if it cannot cover `sum(opp.size_usdc for opp in actionable[:max_orders_per_run])`, return a `status=blocked, reason=funds_insufficient, action=deposit_required` envelope before any `placeOrder` mutation fires. Seed preflight and trim run whenever `pending_ui_submission` is non-empty, regardless of `live_mode` or `--yes-live`, so the UI queue is always bankroll-trimmed and depth-filtered.
-7. **Delta-neutral pre-trade additions (#536):** when `execution_mode = "delta_neutral"`, the cycle additionally must:
-   - Have `py-clob-client` installed and `POLY_PRIVATE_KEY`/`POLY_API_KEY`/`POLY_PASSPHRASE`/`POLY_SECRET` loaded.
-   - Reach the Polymarket CLOB and fetch order-book depth for every actionable pair. Opportunities whose visible Polymarket depth can't cover the target notional at `max_hedge_slippage_bps` are rejected with `polymarket_depth_*` blockers before the Prophet limit is posted.
-   - Run the **two-venue funds preflight**: query both Prophet protocol cash AND Polymarket CLOB collateral. The blocked envelope returns `prophet_deficit_usdc` and `polymarket_deficit_usdc` as separate fields so the agent's deposit runbook can route to the right venue.
+6. **Seed-bet preflight (#542/#589):** when `pending_ui_submission` is non-empty, query Prophet `viewer.cashBalance` and Polymarket CLOB collateral. If neither side can fund a single seed AND no existing pairs are in `arb_pairs`, return a `status=blocked, reason=funds_insufficient_for_seeds` envelope. If existing pairs ARE present (per #589), drop the pending list and continue scoring the existing pairs — the bot must not short-circuit cycles that have real arb work to do just because the new-market queue is unfundable. The recorder logs `seed_preflight_skipped:candidate_count=N` so the operator still sees the gap.
+7. **Two-venue funds preflight (#536):** `py-clob-client` must be installed (per #590) and `POLY_PRIVATE_KEY`/`POLY_API_KEY`/`POLY_PASSPHRASE`/`POLY_SECRET` loaded. Reach the Polymarket CLOB and fetch order-book depth for every actionable pair. Opportunities whose visible Polymarket depth can't cover the target notional at `max_hedge_slippage_bps` are rejected with `polymarket_depth_*` blockers before the Prophet limit is posted. Query both Prophet protocol cash AND Polymarket CLOB collateral. The blocked envelope returns `prophet_deficit_usdc` and `polymarket_deficit_usdc` as separate fields so the agent's deposit runbook can route to the right venue. The blocked envelope now also exposes `polymarket_state` (per #592 phase 1): `no_balance` (deposit USDC.e), `no_approvals` (grant allowances to Polymarket spenders), or `ok`.
 8. If any check fails, fail closed with a structured `blocked` envelope and let the cron retry on the next tick.
 
 ## Agent-driven deposit runbook
@@ -294,7 +290,7 @@ When `execution_mode = "delta_neutral"`, every cycle follows this two-leg sequen
 
 Schema: `arb_orders` carries four delta-neutral columns
 (`polymarket_filled_qty`, `polymarket_fill_price`, `polymarket_order_id`,
-`hedge_status`). They default to neutral values for `single_leg` rows so
+`hedge_status`). These default to neutral values on legacy rows so
 existing operators see no migration churn.
 
 ## `placeOrder` is server-signed (#505 Phase 15)
@@ -534,11 +530,7 @@ For each `pending_ui_submission` entry:
 
 ## Delta-neutral seed creation (#542)
 
-Single-leg mode (`execution_mode = "single_leg"`) commits the Prophet
-seed bet unhedged; held YES/NO inventory resolves with the market.
-
-Delta-neutral mode (`execution_mode = "delta_neutral"`) hedges every
-seed before Prophet Confirm:
+Every seed bet is hedged before Prophet Confirm. The flow:
 
 1. The agent fills Prophet's `/create` UI through the bet form without
    clicking Confirm.

@@ -78,10 +78,11 @@ from persistence import (
     upsert_arb_pair,
 )
 from funds_preflight import (
-    evaluate_funds_preflight,
     evaluate_seed_funds_preflight,
     evaluate_two_venue_funds_preflight,
 )
+from polymarket_state import classify_polymarket_collateral_state
+from seed_preflight_orchestration import resolve_seed_preflight_action
 from arbitrage.hedge import hedge_seed_bet  # type: ignore  # re-export
 from polymarket.prices import fetch_market_prices
 from prophet import (
@@ -104,9 +105,16 @@ SCHEMA_PATH = SCRIPT_DIR.parent / "serendb_schema.sql"
 # Config
 
 
-EXECUTION_MODE_SINGLE_LEG = "single_leg"
+# Issue #591: `single_leg` execution mode was removed. The arb-bot is
+# delta-neutral by design — every Prophet leg must be hedged on
+# Polymarket — and naked Prophet exposure (the old single_leg path) is
+# directional speculation, not arbitrage. Configs that explicitly set
+# `execution_mode: "single_leg"` are now rejected with a clear
+# deprecation error in `AgentConfig.load` so legacy operators are
+# forced to acknowledge the change rather than silently get rewritten.
 EXECUTION_MODE_DELTA_NEUTRAL = "delta_neutral"
-_VALID_EXECUTION_MODES = {EXECUTION_MODE_SINGLE_LEG, EXECUTION_MODE_DELTA_NEUTRAL}
+_VALID_EXECUTION_MODES = {EXECUTION_MODE_DELTA_NEUTRAL}
+_REMOVED_EXECUTION_MODES = {"single_leg"}
 POLYMARKET_REQUIRED_ENV_VARS = (
     "POLY_PRIVATE_KEY",
     "POLY_API_KEY",
@@ -179,8 +187,19 @@ class AgentConfig:
         intel_raw = raw.get("intelligence") or {}
         auto_raw = raw.get("auto_discover") or {}
         execution_mode = str(
-            raw.get("execution_mode") or EXECUTION_MODE_SINGLE_LEG
+            raw.get("execution_mode") or EXECUTION_MODE_DELTA_NEUTRAL
         ).strip().lower()
+        if execution_mode in _REMOVED_EXECUTION_MODES:
+            # #591: refuse the legacy single_leg path. The operator must
+            # explicitly migrate — either delete the field (default is
+            # delta_neutral) or set it to delta_neutral.
+            raise ValueError(
+                f"execution_mode={execution_mode!r} is removed as of "
+                f"prophet-arb-bot/#591. The arb-bot is delta-neutral only — "
+                f"every Prophet leg is hedged on Polymarket. Delete the "
+                f"`execution_mode` field from config.json or set it to "
+                f"{EXECUTION_MODE_DELTA_NEUTRAL!r}."
+            )
         if execution_mode not in _VALID_EXECUTION_MODES:
             raise ValueError(
                 f"execution_mode must be one of {sorted(_VALID_EXECUTION_MODES)}; "
@@ -545,6 +564,51 @@ def _build_hedger(config: AgentConfig) -> Any:
     return _LiveHedger(trader)
 
 
+def _annotate_polymarket_state(
+    *,
+    deposit_envelope: dict,
+    polymarket_avail_usdc: float,
+    live_hedger: Any,
+    recorder: Any,
+) -> None:
+    """#592 phase 1 — annotate a blocked-funds envelope with the
+    Polymarket collateral state classification.
+
+    The CLOB reports `balance: 0` whenever the address either has no
+    USDC.e on-chain OR holds USDC.e without the approvals required to
+    spend it. Without this annotation, the operator gets sent to
+    deposit funds that may already exist on the wallet (which is the
+    Issue #592 footgun).
+
+    No-op when there's no live hedger (dry-run cycles can't read
+    on-chain state) or when the trader has no resolved address.
+    Failures in the on-chain probe are silently treated as
+    `on_chain_usdc_e=None`, which collapses to the conservative
+    `no_balance` classification — never mis-diagnoses as
+    `no_approvals` without evidence.
+    """
+    if live_hedger is None:
+        return
+    trader = getattr(live_hedger, "_trader", live_hedger)
+    trader_address = getattr(trader, "address", "") or ""
+    if not trader_address:
+        return
+    on_chain_balance: float | None
+    try:
+        from polymarket_live import fetch_on_chain_usdc_e_balance
+        on_chain_balance = fetch_on_chain_usdc_e_balance(trader_address)
+    except Exception:
+        on_chain_balance = None
+    state = classify_polymarket_collateral_state(
+        clob_balance_usdc=polymarket_avail_usdc,
+        on_chain_usdc_e=on_chain_balance,
+    )
+    deposit_envelope["polymarket_state"] = state.kind
+    deposit_envelope["polymarket_state_remediation"] = state.remediation
+    deposit_envelope["polymarket_on_chain_usdc_e"] = state.on_chain_usdc_e
+    recorder.record_blocker(f"polymarket_state:{state.kind}")
+
+
 def _apply_seed_preflight_and_trim(
     *,
     pending: list[dict],
@@ -556,15 +620,21 @@ def _apply_seed_preflight_and_trim(
     jwt: str | None,
     gateway: Any,
     recorder: Any,
+    existing_pairs_count: int,
 ) -> CycleResult | None:
     """#542 Fix 2 — gate `pending_ui_submission` by what the operator
     can actually fund + hedge.
 
     Returns a blocked `CycleResult` when the operator can't fund a
-    single seed (deposit_required envelope) and ``None`` otherwise.
-    Side effect: stashes the trimmed list under
-    ``recorder.summary["_trimmed_pending"]`` and records counts +
-    drop reasons under public summary keys.
+    single seed AND has no existing paired arb opportunities to trade
+    (deposit_required envelope), and ``None`` otherwise. Side effect:
+    stashes the trimmed list under ``recorder.summary["_trimmed_pending"]``
+    and records counts + drop reasons under public summary keys.
+
+    Issue #589: when seed funding is exhausted but existing pairs are
+    present, drop the pending list to empty and continue scoring —
+    the existing pairs require zero seed funding and are the actual
+    arb opportunities the bot trades.
     """
     # Prophet balance — same path the trading-side preflight uses.
     balance_client = MinimalProphetClient(transport=transport)
@@ -580,8 +650,12 @@ def _apply_seed_preflight_and_trim(
         # entries. The operator can re-run after the transient lifts.
         prophet_avail = 0.0
 
-    # Polymarket balance — only when delta-neutral and the live
-    # hedger is wired in. In single-leg mode, no Polymarket spend.
+    # Polymarket balance — only when the live hedger is wired in.
+    # In dry-run cycles (`--yes-live` absent) we don't construct the
+    # hedger, so the preflight treats Polymarket as effectively
+    # unlimited and lets the qualifier focus on the Prophet bottleneck.
+    # Issue #591 collapsed the historical single_leg branch — this
+    # path now strictly serves dry-run mode.
     polymarket_avail: float
     if delta_neutral and live_hedger is not None:
         try:
@@ -595,10 +669,10 @@ def _apply_seed_preflight_and_trim(
             )
             polymarket_avail = 0.0
     else:
-        # In single-leg mode the Polymarket side doesn't consume
-        # capital at seed-time, so we mark it as effectively
-        # unlimited (the funds preflight ignores the side that
-        # isn't spending).
+        # No live hedger (dry-run or hedger init blocked) — the seed
+        # preflight cannot estimate Polymarket bandwidth, so mark it
+        # unlimited and let downstream depth/funds checks block at
+        # trade-time if the hedge can't materialize.
         polymarket_avail = float("inf")
 
     preflight = evaluate_seed_funds_preflight(
@@ -615,23 +689,43 @@ def _apply_seed_preflight_and_trim(
             preflight.polymarket_available_usdc
         )
 
-    if not preflight.ok:
-        recorder.record_blocker(
-            f"funds_insufficient_for_seeds:"
-            f"prophet_deficit={preflight.prophet_deficit_usdc}_usdc;"
-            f"polymarket_deficit={preflight.polymarket_deficit_usdc}_usdc"
-        )
-        payload = recorder.finish("blocked", "funds_insufficient_for_seeds")
+    # #589: route the not-ok preflight through the orchestration helper
+    # so existing paired arb opportunities are NOT short-circuited when
+    # only the seed funding (for new pending UI submissions) is exhausted.
+    action = resolve_seed_preflight_action(
+        preflight=preflight,
+        existing_pairs_count=existing_pairs_count,
+    )
+    if action.summary_blocker:
+        recorder.record_blocker(action.summary_blocker)
+    if action.should_block:
+        payload = recorder.finish("blocked", action.block_reason or "funds_insufficient_for_seeds")
         payload["action"] = "deposit_required_for_seeds"
-        payload["deposit"] = preflight.to_deposit_envelope()
+        deposit_envelope = action.deposit_envelope or preflight.to_deposit_envelope()
+        if preflight.polymarket_deficit_usdc > 0.0:
+            _annotate_polymarket_state(
+                deposit_envelope=deposit_envelope,
+                polymarket_avail_usdc=preflight.polymarket_available_usdc,
+                live_hedger=live_hedger,
+                recorder=recorder,
+            )
+        payload["deposit"] = deposit_envelope
         return CycleResult(
             status="blocked",
-            reason="funds_insufficient_for_seeds",
+            reason=action.block_reason or "funds_insufficient_for_seeds",
             payload=payload,
         )
+    if action.trimmed_pending_ui_submission is not None:
+        # #589: zero fundable + existing pairs → drop pending and continue.
+        # Skip the qualifier (nothing to qualify) and return early so the
+        # caller falls through to the scoring loop.
+        recorder.summary["_trimmed_pending"] = action.trimmed_pending_ui_submission
+        recorder.summary["seed_dropped_count"] = len(pending)
+        recorder.summary["seed_dropped_reasons"] = ["seed_preflight_skipped"] * len(pending)
+        return None
 
-    # Build the depth assessor only in delta-neutral mode — single-leg
-    # has no Polymarket hedge, so depth ineligibility doesn't apply.
+    # Build the depth assessor for the qualifier. Skipped in dry-run when
+    # no live hedger is wired in (no hedge eligibility to check).
     depth_assessor = None
     if delta_neutral and live_hedger is not None:
         def _assess(market_id: str, size_usdc: float, slippage_bps: float) -> bool:
@@ -788,6 +882,12 @@ def cmd_run(
                     jwt=jwt,
                     gateway=gateway,
                     recorder=recorder,
+                    # #589: existing pairs count is `pairs` here — the list
+                    # was already refreshed above to include auto_paired
+                    # rows. Passing it in lets the orchestration helper
+                    # decide block-vs-continue without short-circuiting
+                    # cycles that have real arb work to do.
+                    existing_pairs_count=len(pairs),
                 )
                 if seed_block is not None:
                     # Blocked — `pending_ui_submission` is empty until the
@@ -1026,60 +1126,51 @@ def cmd_run(
                 payload=recorder.finish("blocked", "funds_preflight_unavailable"),
             )
 
-        if delta_neutral:
-            # Two-venue preflight (#536). Each opportunity locks the same
-            # USDC notional on both Prophet (LIMIT collateral) and
-            # Polymarket (hedge collateral), so we check both balances
-            # and return split deficits so the deposit runbook can route
-            # the operator to the right venue.
-            polymarket_avail = 0.0
-            if live_hedger is not None:
-                try:
-                    # DirectClobTrader exposes `get_cash_balance` for
-                    # the configured CLOB account. If it raises, fall
-                    # back to 0 (blocks the cycle with a clear deficit).
-                    polymarket_avail = float(
-                        getattr(live_hedger, "_trader", live_hedger).get_cash_balance()
-                    )
-                except Exception as exc:
-                    recorder.record_blocker(
-                        f"polymarket_balance_failed:{type(exc).__name__}:{str(exc)[:120]}"
-                    )
-            preflight2 = evaluate_two_venue_funds_preflight(
-                opportunities=planned_orders,
-                prophet_available_usdc=cash.available_usdc,
-                polymarket_available_usdc=polymarket_avail,
-            )
-            if not preflight2.ok:
+        # Two-venue preflight (#536). Every opportunity locks the same
+        # USDC notional on both Prophet (LIMIT collateral) and Polymarket
+        # (hedge collateral), so we check both balances and return split
+        # deficits so the deposit runbook can route the operator to the
+        # right venue. Issue #591 removed the legacy single-venue path —
+        # delta-neutral is the only supported execution mode.
+        polymarket_avail = 0.0
+        if live_hedger is not None:
+            try:
+                # DirectClobTrader exposes `get_cash_balance` for the
+                # configured CLOB account. If it raises, fall back to 0
+                # (blocks the cycle with a clear deficit).
+                polymarket_avail = float(
+                    getattr(live_hedger, "_trader", live_hedger).get_cash_balance()
+                )
+            except Exception as exc:
                 recorder.record_blocker(
-                    f"funds_insufficient_prophet={preflight2.prophet_deficit_usdc}"
-                    f"_polymarket={preflight2.polymarket_deficit_usdc}_usdc"
+                    f"polymarket_balance_failed:{type(exc).__name__}:{str(exc)[:120]}"
                 )
-                payload = recorder.finish("blocked", "funds_insufficient")
-                payload["action"] = "deposit_required"
-                payload["deposit"] = preflight2.to_deposit_envelope()
-                return CycleResult(
-                    status="blocked",
-                    reason="funds_insufficient",
-                    payload=payload,
-                )
-        else:
-            preflight = evaluate_funds_preflight(
-                opportunities=planned_orders,
-                available_usdc=cash.available_usdc,
+        preflight2 = evaluate_two_venue_funds_preflight(
+            opportunities=planned_orders,
+            prophet_available_usdc=cash.available_usdc,
+            polymarket_available_usdc=polymarket_avail,
+        )
+        if not preflight2.ok:
+            recorder.record_blocker(
+                f"funds_insufficient_prophet={preflight2.prophet_deficit_usdc}"
+                f"_polymarket={preflight2.polymarket_deficit_usdc}_usdc"
             )
-            if not preflight.ok:
-                recorder.record_blocker(
-                    f"funds_insufficient_by_{preflight.deficit_usdc}_usdc"
+            payload = recorder.finish("blocked", "funds_insufficient")
+            payload["action"] = "deposit_required"
+            deposit_envelope = preflight2.to_deposit_envelope()
+            if preflight2.polymarket_deficit_usdc > 0.0:
+                _annotate_polymarket_state(
+                    deposit_envelope=deposit_envelope,
+                    polymarket_avail_usdc=polymarket_avail,
+                    live_hedger=live_hedger,
+                    recorder=recorder,
                 )
-                payload = recorder.finish("blocked", "funds_insufficient")
-                payload["action"] = "deposit_required"
-                payload["deposit"] = preflight.to_deposit_envelope()
-                return CycleResult(
-                    status="blocked",
-                    reason="funds_insufficient",
-                    payload=payload,
-                )
+            payload["deposit"] = deposit_envelope
+            return CycleResult(
+                status="blocked",
+                reason="funds_insufficient",
+                payload=payload,
+            )
 
     submitted = 0
     for opp in planned_orders:

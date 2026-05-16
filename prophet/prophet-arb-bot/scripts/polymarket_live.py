@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import pstdev
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -2175,6 +2175,58 @@ class DirectClobTrader:
             return raw
         except Exception as exc:
             raise RuntimeError(f"Unable to fetch collateral balance: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Issue #592 — on-chain USDC.e read for the polymarket-state classifier.
+
+
+def _usdc_e_balance_of_calldata(address: str) -> str:
+    """Build `balanceOf(address)` calldata for USDC.e (ERC-20).
+
+    Selector for `balanceOf(address)` is 0x70a08231 (first 4 bytes of
+    keccak256 of the canonical signature). The argument is the address
+    left-padded to 32 bytes.
+    """
+    addr_clean = address.lower().removeprefix("0x")
+    if len(addr_clean) != 40:
+        raise ValueError(f"address must be 20 bytes hex; got {address!r}")
+    return "0x70a08231" + addr_clean.rjust(64, "0")
+
+
+def fetch_on_chain_usdc_e_balance(
+    address: str,
+    *,
+    seren_publisher: str = "seren-polygon",
+    seren_path: str = "",
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> Optional[float]:
+    """Read on-chain USDC.e balance for `address` via seren-polygon.
+
+    Returns the balance in USDC units (6 decimals) or ``None`` if the
+    RPC probe fails. Used by `cmd_run`'s funds-preflight branch to
+    distinguish "address truly has no USDC.e" from "address holds
+    USDC.e but Polymarket's CLOB sees zero because no approvals were
+    granted" (Issue #592).
+
+    No exceptions leak — failures return ``None`` and let the caller
+    fall back to the CLOB's verdict (which is the existing behavior).
+    """
+    try:
+        calldata = _usdc_e_balance_of_calldata(address)
+        hex_result = _eth_call_via_seren_polygon(
+            POLYGON_USDC_E,
+            calldata,
+            publisher=seren_publisher,
+            path=seren_path,
+            timeout_seconds=timeout_seconds,
+        )
+        if not hex_result or hex_result == "0x":
+            return 0.0
+        raw_int = int(hex_result, 16)
+        return raw_int / (10 ** USDC_DECIMALS)
+    except Exception:
+        return None
 
 
 DEFAULT_UNWIND_BEFORE_RESOLUTION_SECONDS = 7 * 24 * 3600  # 7 days

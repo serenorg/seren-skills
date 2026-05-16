@@ -55,7 +55,11 @@ _EXAMPLE_CONTENT = {
     },
     "live_mode": False,
     "max_orders_per_run": 5,
-    "execution_mode": "single_leg",
+    # Note: `execution_mode` intentionally omitted. Issue #591 removed
+    # the `single_leg` value and made `delta_neutral` the only valid
+    # option, defaulted when the field is absent. The bootstrap helper
+    # writes `execution_mode: "delta_neutral"` into the resulting
+    # config.json regardless of whether it appears here.
     "max_hedge_slippage_bps": 200.0,
 }
 

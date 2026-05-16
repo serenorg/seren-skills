@@ -6,6 +6,12 @@
 #   directly (the publisher does not expose an ad-hoc run-sql endpoint).
 # - openpyxl: required by discovery.candidate_sheet (#538) for the per-run
 #   `state/arb_candidates.xlsx` refresh. Falls back to CSV if absent.
+# - py-clob-client (#590): required for `DirectClobTrader` in
+#   scripts/polymarket_live.py — local EIP-712 signing of Polymarket CLOB
+#   orders. Without this, delta-neutral mode fails at startup with
+#   `hedger_init_failed`. Pin to the 0.x line that has stable
+#   `BalanceAllowanceParams` semantics; 0.35+ may rev the API surface.
 certifi>=2024.7.4
 psycopg2-binary>=2.9.9
 openpyxl>=3.1.5
+py-clob-client>=0.34.0,<0.35.0
