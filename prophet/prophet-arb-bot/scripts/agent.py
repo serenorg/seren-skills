@@ -113,6 +113,17 @@ POLYMARKET_REQUIRED_ENV_VARS = (
     "POLY_PASSPHRASE",
     "POLY_SECRET",
 )
+_PLACEHOLDER_PROPHET_EMAILS = {
+    "you@example.com",
+    "your-email@example.com",
+    "your.email@example.com",
+    "you@your-domain.com",
+}
+_RESERVED_EXAMPLE_DOMAINS = {
+    "example.com",
+    "example.net",
+    "example.org",
+}
 
 
 class PolymarketCredentialsMissing(RuntimeError):
@@ -123,6 +134,22 @@ class PolymarketCredentialsMissing(RuntimeError):
         super().__init__(
             "missing Polymarket credentials: " + ", ".join(missing_env_vars)
         )
+
+
+def _prophet_email_block_reason(email: str | None) -> str | None:
+    normalized = (email or "").strip().lower()
+    if not normalized:
+        return "blocked_otp_email_missing"
+    if normalized in _PLACEHOLDER_PROPHET_EMAILS:
+        return "blocked_otp_email_placeholder"
+    if "@" not in normalized:
+        return "blocked_otp_email_invalid"
+    local, domain = normalized.rsplit("@", 1)
+    if not local or not domain or "." not in domain:
+        return "blocked_otp_email_invalid"
+    if domain in _RESERVED_EXAMPLE_DOMAINS:
+        return "blocked_otp_email_placeholder"
+    return None
 
 
 @dataclass
@@ -266,8 +293,17 @@ def cmd_setup(*, config: AgentConfig) -> CycleResult:
             "no pairs seeded — populate inputs.manual_pairs in config.json"
         )
 
-    if not config.inputs.get("prophet_email"):
+    email_block_reason = _prophet_email_block_reason(
+        config.inputs.get("prophet_email")
+    )
+    if email_block_reason == "blocked_otp_email_missing":
         payload["warnings"].append("inputs.prophet_email is empty")
+    elif email_block_reason == "blocked_otp_email_placeholder":
+        payload["warnings"].append(
+            "inputs.prophet_email is still an example placeholder"
+        )
+    elif email_block_reason == "blocked_otp_email_invalid":
+        payload["warnings"].append("inputs.prophet_email is not a valid email")
     if config.inputs.get("email_provider") not in ("gmail", "outlook"):
         payload["warnings"].append("inputs.email_provider must be 'gmail' or 'outlook'")
 
@@ -295,7 +331,10 @@ def _acquire_jwt(
 
     email = (config.inputs.get("prophet_email") or "").strip()
     provider = (config.inputs.get("email_provider") or "").strip().lower()
-    if not email or provider not in ("gmail", "outlook"):
+    email_block_reason = _prophet_email_block_reason(email)
+    if email_block_reason is not None:
+        return None, None, email_block_reason
+    if provider not in ("gmail", "outlook"):
         return None, None, "blocked_otp_email_missing"
 
     # Issue #580: cold-start needs Playwright MCP. The publisher-side
