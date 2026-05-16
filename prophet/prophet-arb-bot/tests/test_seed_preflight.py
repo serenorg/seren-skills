@@ -203,8 +203,11 @@ def test_qualifier_returns_empty_when_max_fundable_zero() -> None:
 
 
 def test_qualifier_skips_depth_when_assessor_none() -> None:
-    """Single-leg mode passes `depth_assessor=None` (no hedge eligibility
-    needed). The qualifier should still trim by bankroll."""
+    """Dry-run cycles (no live hedger) pass `depth_assessor=None` —
+    no hedge eligibility check is possible without the trader handle.
+    The qualifier should still trim by bankroll. (Pre-#591 this branch
+    also served `single_leg` mode; with single_leg removed the dry-run
+    path is the sole reason `depth_assessor` is ever None.)"""
     pending = [
         _pending("A", volume_24h=10_000),
         _pending("B", volume_24h=20_000),
