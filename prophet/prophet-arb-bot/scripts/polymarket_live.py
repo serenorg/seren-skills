@@ -2211,16 +2211,40 @@ def fetch_on_chain_usdc_e_balance(
 
     No exceptions leak — failures return ``None`` and let the caller
     fall back to the CLOB's verdict (which is the existing behavior).
+
+    Note: this helper does NOT route through `_eth_call_via_seren_polygon`
+    because `_extract_publisher_data` only unwraps the outer `data`
+    layer and the seren-polygon HTTP response nests the JSON-RPC result
+    one level deeper as `data.body.result`. We call the publisher
+    directly and dig out the result ourselves to avoid touching the
+    shared extraction helper (which is also used by seren-cron paths
+    that don't have this nesting).
     """
     try:
         calldata = _usdc_e_balance_of_calldata(address)
-        hex_result = _eth_call_via_seren_polygon(
-            POLYGON_USDC_E,
-            calldata,
+        payload = call_publisher_json(
             publisher=seren_publisher,
+            method="POST",
             path=seren_path,
+            body={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_call",
+                "params": [{"to": POLYGON_USDC_E, "data": calldata}, "latest"],
+            },
             timeout_seconds=timeout_seconds,
         )
+        # Dig through the wrapper: {"data": {"body": {"result": "0x..."}}}
+        # or the MCP shape that's already unwrapped.
+        cursor: Any = payload
+        for key in ("data", "body"):
+            if isinstance(cursor, dict) and key in cursor:
+                cursor = cursor[key]
+        if not isinstance(cursor, dict):
+            return None
+        if cursor.get("error") not in (None, {}):
+            return None
+        hex_result = cursor.get("result")
         if not hex_result or hex_result == "0x":
             return 0.0
         raw_int = int(hex_result, 16)
