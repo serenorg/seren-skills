@@ -41,6 +41,14 @@ RECEIPT_POLL_MAX_ATTEMPTS = 40  # 40 * 3s = 2 minutes worst case
 
 USDC_ALLOWANCE_THRESHOLD = 10**24  # 1e18 USDC.e; effectively "still unlimited"
 
+# Issue #602 — Polygon raised the network minimum `maxPriorityFeePerGas`
+# to 25 gwei via chain governance. The broadcaster previously hardcoded
+# 2 gwei, so every fresh approve() failed with `gas tip cap below
+# minimum` once #600 forced a real broadcast against v2 spenders. The
+# floor below is the safety net used when the RPC-derived priority fee
+# query fails or returns a value lower than the network gate.
+PRIORITY_FEE_FLOOR_WEI = 30 * 10**9  # 30 gwei — Polygon's 25 gwei min + headroom
+
 
 def _seren_polygon_rpc(
     *,
@@ -111,6 +119,32 @@ def _read_ct_approval(
         return False
 
 
+def _resolve_priority_fee(
+    *,
+    seren_publisher: str,
+    timeout_seconds: float,
+    floor_wei: int = PRIORITY_FEE_FLOOR_WEI,
+) -> int:
+    """Return `max(eth_maxPriorityFeePerGas, floor_wei)`.
+
+    Issue #602 — Polygon's chain-governance minimum priority fee moved
+    above the broadcaster's prior hardcoded 2 gwei. Querying the live
+    RPC self-heals across future governance changes; the floor remains
+    a safety net for transient RPC failures or garbage responses.
+    """
+    result = _seren_polygon_rpc(
+        method="eth_maxPriorityFeePerGas",
+        params=[],
+        seren_publisher=seren_publisher,
+        timeout_seconds=timeout_seconds,
+    )
+    try:
+        rpc_wei = int(result, 16) if result else 0
+    except (TypeError, ValueError):
+        rpc_wei = 0
+    return max(rpc_wei, floor_wei)
+
+
 def _build_and_send_tx(
     *,
     to: str,
@@ -151,7 +185,14 @@ def _build_and_send_tx(
     if not isinstance(block, dict) or "baseFeePerGas" not in block:
         return {"status": "failed", "error": "base_fee_fetch_failed"}
     base_fee = int(block["baseFeePerGas"], 16)
-    max_priority = 2 * 10**9  # 2 gwei — Polygon minimum
+    # Issue #602 — query Polygon's live priority-fee suggestion and use
+    # max(rpc, floor). Hardcoded 2 gwei stopped clearing the chain-
+    # governance minimum (25 gwei) and silently failed every fresh
+    # broadcast as `gas tip cap below minimum`.
+    max_priority = _resolve_priority_fee(
+        seren_publisher=seren_publisher,
+        timeout_seconds=timeout_seconds,
+    )
     max_fee = base_fee * 2 + max_priority
 
     # Estimate gas with a small safety buffer.
