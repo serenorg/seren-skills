@@ -39,6 +39,10 @@ SEL_ONBOARDING_CONTINUE = 'button:has-text("Continue")'
 ONBOARDING_URL_FRAGMENT = "/onboarding"
 
 PRIVY_TOKEN_LOCAL_STORAGE_KEY = "privy:token"
+# Issue #583: Privy migrated the refresh token from an HttpOnly cookie to
+# `window.localStorage["privy:refresh_token"]`. Keep the legacy cookie name
+# as a fallback so operators on older Privy installs don't regress.
+PRIVY_REFRESH_LOCAL_STORAGE_KEY = "privy:refresh_token"
 PRIVY_REFRESH_COOKIE = "privy-refresh-token"
 PRIVY_TOKEN_COOKIE = "privy-token"
 PRIVY_SESSION_COOKIE = "privy-session"
@@ -160,10 +164,22 @@ def fill_onboarding_form(session: BrowserSession, *, username: str) -> None:
 
 
 def capture_artifacts(session: BrowserSession, *, jwt: str) -> PrivyAuthArtifacts:
-    """Snapshot the JWT plus the cookies needed for steady-state refresh."""
+    """Snapshot the JWT plus the refresh material needed for steady-state refresh.
+
+    Issue #583: Privy now writes the refresh token to localStorage
+    (`privy:refresh_token`) rather than an HttpOnly cookie. Read the
+    localStorage value first — JSON-unwrapped via `_unwrap_jwt`, same as
+    `privy:token` — and fall back to the legacy cookie so operators on older
+    Privy installs are not regressed.
+    """
+    refresh_token = (
+        _unwrap_jwt(session.get_local_storage(PRIVY_REFRESH_LOCAL_STORAGE_KEY))
+        or session.get_cookie(PRIVY_REFRESH_COOKIE)
+        or ""
+    )
     return PrivyAuthArtifacts(
         jwt=jwt,
-        refresh_token=session.get_cookie(PRIVY_REFRESH_COOKIE) or "",
+        refresh_token=refresh_token,
         privy_token_cookie=session.get_cookie(PRIVY_TOKEN_COOKIE) or "",
         privy_session_cookie=session.get_cookie(PRIVY_SESSION_COOKIE) or "",
     )
