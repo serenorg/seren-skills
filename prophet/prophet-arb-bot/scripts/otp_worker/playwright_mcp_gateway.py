@@ -31,9 +31,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-DEFAULT_BUNDLED_PATH = (
+DEFAULT_BUNDLED_PATHS = (
+    # Current packaged app bundle.
     "/Applications/SerenDesktop.app/Contents/Resources/"
-    "mcp-servers/playwright-stealth/dist/index.js"
+    "mcp-servers/playwright-stealth/dist/index.js",
+    # Older packaged app bundle layout still present in some Desktop builds.
+    "/Applications/SerenDesktop.app/Contents/Resources/embedded-runtime/"
+    "mcp-servers/playwright-stealth/dist/index.js",
 )
 DEFAULT_TIMEOUT_SECONDS = 30.0
 MCP_PROTOCOL_VERSION = "2024-11-05"
@@ -79,8 +83,19 @@ class PlaywrightStealthGateway:
             parts = shlex.split(override)
             return parts or None
         node_bin = (os.environ.get("SEREN_EMBEDDED_NODE_BIN") or "").strip() or "node"
-        if Path(DEFAULT_BUNDLED_PATH).exists():
-            return [node_bin, DEFAULT_BUNDLED_PATH]
+        home = Path.home()
+        candidates = [
+            *(Path(p) for p in DEFAULT_BUNDLED_PATHS),
+            home
+            / "Projects/Seren_Projects/seren-desktop/"
+            "mcp-servers/playwright-stealth/dist/index.js",
+            home
+            / "Projects/Seren_Projects/seren-desktop/src-tauri/target/debug/"
+            "mcp-servers/playwright-stealth/dist/index.js",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return [node_bin, str(candidate)]
         return None
 
     @classmethod

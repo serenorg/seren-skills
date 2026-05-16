@@ -25,7 +25,8 @@ from typing import Any
 import pytest
 
 from arbitrage.hedge import derive_seed_intent
-from agent import cmd_compute_seed_intent, AgentConfig
+import agent
+from agent import AgentConfig, CycleResult, cmd_compute_seed_intent
 from prophet import ProphetUnauthorized
 from prophet.odds_session import BinaryPricing, OddsSession, OddsSessionTimeout
 
@@ -370,3 +371,86 @@ def test_cmd_compute_seed_intent_blocks_on_odds_session_timeout() -> None:
     assert result.payload["timeout_s"] == pytest.approx(180.0)
     assert result.payload["odds_session_id"] == "ocs_1"
     assert "OddsSessionTimeout" in result.payload["error"]
+
+
+def test_main_compute_seed_intent_acquires_jwt_without_manual_export(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Issue #585: the CLI must not ask the agent/operator to export a JWT.
+
+    The per-market `/create` runbook calls `compute-seed-intent` after
+    Prophet starts odds calculation. If `PROPHET_SESSION_TOKEN` is absent,
+    the CLI should reuse the normal session-cache / OTP acquisition path
+    instead of returning a blocked envelope with
+    `action=export_PROPHET_SESSION_TOKEN`.
+    """
+
+    monkeypatch.delenv("PROPHET_SESSION_TOKEN", raising=False)
+    monkeypatch.setattr(agent, "bootstrap_config_if_missing", lambda **kwargs: None)
+
+    fake_config = _fake_config()
+    fake_config.inputs = {
+        "prophet_email": "jill@volume.finance",
+        "email_provider": "gmail",
+    }
+    monkeypatch.setattr(agent.AgentConfig, "load", staticmethod(lambda path: fake_config))
+
+    fake_gateway = object()
+    fake_transport = object()
+    monkeypatch.setattr(agent, "HttpGateway", lambda: fake_gateway)
+
+    import prophet.transport as transport_module
+
+    monkeypatch.setattr(
+        transport_module, "ProphetDirectTransport", lambda: fake_transport
+    )
+
+    def fake_acquire_jwt(*, config, gateway, transport):
+        assert config is fake_config
+        assert gateway is fake_gateway
+        assert transport is fake_transport
+        return "eyJ.auto.jwt", "vid_123", "cache"
+
+    monkeypatch.setattr(agent, "_acquire_jwt", fake_acquire_jwt)
+
+    captured: dict[str, Any] = {}
+
+    def fake_cmd_compute_seed_intent(**kwargs):
+        captured.update(kwargs)
+        return CycleResult(
+            status="ok",
+            reason="seed_intent_ready",
+            payload={"jwt_seen": kwargs["jwt"]},
+        )
+
+    monkeypatch.setattr(agent, "cmd_compute_seed_intent", fake_cmd_compute_seed_intent)
+
+    emitted: dict[str, Any] = {}
+
+    def fake_emit(result: CycleResult, *, json_output: bool) -> int:
+        emitted["result"] = result
+        emitted["json_output"] = json_output
+        return 0
+
+    monkeypatch.setattr(agent, "_emit", fake_emit)
+
+    rc = agent.main(
+        [
+            "--config",
+            str(tmp_path / "config.json"),
+            "--command",
+            "compute-seed-intent",
+            "--polymarket-condition-id",
+            "0xabc",
+            "--odds-session-id",
+            "ocs_1",
+            "--json-output",
+        ]
+    )
+
+    assert rc == 0
+    assert captured["jwt"] == "eyJ.auto.jwt"
+    assert captured["transport"] is fake_transport
+    assert emitted["result"].status == "ok"
+    assert emitted["result"].payload["jwt_seen"] == "eyJ.auto.jwt"

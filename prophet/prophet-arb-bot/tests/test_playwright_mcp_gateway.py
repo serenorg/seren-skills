@@ -24,6 +24,7 @@ import json
 import sys
 from pathlib import Path
 
+from otp_worker import playwright_mcp_gateway as pmg
 from otp_worker.playwright_mcp_gateway import PlaywrightStealthGateway
 
 STUB_SERVER = Path(__file__).parent / "fixtures" / "stub_playwright_mcp_server.py"
@@ -48,3 +49,30 @@ def test_playwright_stealth_gateway_speaks_mcp_and_invokes_playwright_tool(tmp_p
     assert sent[2]["method"] == "tools/call"
     assert sent[2]["params"]["name"] == "playwright_navigate"
     assert sent[2]["params"]["arguments"] == {"url": "https://app.prophetmarket.ai"}
+
+
+def test_resolver_accepts_embedded_runtime_bundle_path(monkeypatch):
+    """Issue #585: packaged Desktop builds have used both bundle layouts.
+
+    Missing the embedded-runtime path makes auth fall into
+    `blocked_otp_browser_unavailable`, which in turn caused agents to ask
+    users to extract JWTs manually.
+    """
+
+    embedded = (
+        "/Applications/SerenDesktop.app/Contents/Resources/embedded-runtime/"
+        "mcp-servers/playwright-stealth/dist/index.js"
+    )
+
+    monkeypatch.delenv("SEREN_PLAYWRIGHT_MCP_COMMAND", raising=False)
+    monkeypatch.setattr(
+        pmg.Path,
+        "exists",
+        lambda self: str(self) == embedded,
+    )
+    monkeypatch.setenv("SEREN_EMBEDDED_NODE_BIN", "/opt/seren/node")
+
+    assert PlaywrightStealthGateway._resolve_default_command() == [
+        "/opt/seren/node",
+        embedded,
+    ]
