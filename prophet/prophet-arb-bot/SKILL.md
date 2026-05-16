@@ -197,11 +197,13 @@ When `state == no_approvals` and a live hedger is wired in, the runner builds an
 
 | Address | Role |
 |---|---|
-| `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E` | CTF Exchange (standard markets) |
-| `0xC5d563A36AE78145C45a50134d48A1215220f80a` | NegRisk CTF Exchange (neg-risk markets) |
+| `0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E` | CTF Exchange v1 (standard markets) |
+| `0xC5d563A36AE78145C45a50134d48A1215220f80a` | NegRisk CTF Exchange v1 (neg-risk markets) |
 | `0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296` | NegRisk Adapter (neg-risk conversions) |
+| `0xE111180000d2663C0091e4f400237545B87B996B` | CTF Exchange v2 (#600 — live CLOB collateral spender) |
+| `0xe2222d279d744050d28e00520010520000310F59` | NegRisk CTF Exchange v2 (#600 — live CLOB collateral spender) |
 
-Source-of-truth: `py_clob_client.config.get_contract_config(137, neg_risk=…)` for the two exchanges; the NegRisk Adapter is a Polymarket protocol contract. `assert_pinned_spenders_match_py_clob_client()` cross-checks the first two at startup against the live py-clob-client config and refuses to start if py-clob-client has shipped new addresses — catches drift before any approve() transaction is signed.
+Source-of-truth for v1: `py_clob_client.config.get_contract_config(137, neg_risk=…)`. The NegRisk Adapter is a Polymarket protocol contract not exposed by py-clob-client. The v2 entries (issue #600) come from Polymarket's live CLOB `get_balance_allowance` response for `AssetType.COLLATERAL` — py-clob-client v0.34 still ships v1, but Polymarket migrated production allowance tracking to v2, so v2 must be pinned alongside v1 or auto-approve never reaches the addresses the CLOB actually checks. `assert_pinned_spenders_match_py_clob_client()` cross-checks the v1 entries at startup and refuses to start if py-clob-client ever drifts.
 
 **Defense-in-depth.** `build_usdc_approve_calldata()` and `build_ct_set_approval_for_all_calldata()` refuse to encode for any spender not in the pinned set, so even if the orchestrator is somehow handed an attacker address it cannot sign approval to it. That refusal — not a CLI flag — is the trust boundary. The broadcast result is attached to the blocked envelope under `polymarket_auto_approve` (per-leg `tx_hash` + `status`), so the operator can audit every signed transaction.
 

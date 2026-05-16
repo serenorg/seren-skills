@@ -44,6 +44,15 @@ POLYGON_USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 POLYGON_CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
 POLYGON_NEG_RISK_CTF_EXCHANGE = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
 POLYGON_NEG_RISK_ADAPTER = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+# Issue #600 — Polymarket migrated the CTF Exchange to v2 vanity addresses.
+# py-clob-client v0.34's `get_contract_config(137, neg_risk=…)` still returns
+# the v1 addresses above, but the CLOB's `get_balance_allowance` response for
+# `AssetType.COLLATERAL` tracks only the v2 spenders. Approving v1 alone
+# leaves the wallet stuck at CLOB balance `"0"` indefinitely — so v2 must be
+# pinned alongside v1. Both v2 addresses are verified Polygon contracts
+# (`eth_getCode` returns ~42 KB of bytecode each on Polygon mainnet).
+POLYGON_CTF_EXCHANGE_V2 = "0xE111180000d2663C0091e4f400237545B87B996B"
+POLYGON_NEG_RISK_CTF_EXCHANGE_V2 = "0xe2222d279d744050d28e00520010520000310F59"
 POLYGON_CONDITIONAL_TOKENS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 ERC20_ALLOWANCE_ABI_FRAGMENT = "0xdd62ed3e"  # allowance(address,address)
 ERC1155_IS_APPROVED_ABI_FRAGMENT = "0xe985e9c5"  # isApprovedForAll(address,address)
@@ -67,6 +76,9 @@ _PINNED_POLYMARKET_SPENDERS: frozenset[str] = frozenset(
         POLYGON_CTF_EXCHANGE,
         POLYGON_NEG_RISK_CTF_EXCHANGE,
         POLYGON_NEG_RISK_ADAPTER,
+        # Issue #600 — v2 addresses the live CLOB tracks today.
+        POLYGON_CTF_EXCHANGE_V2,
+        POLYGON_NEG_RISK_CTF_EXCHANGE_V2,
     )
 )
 
