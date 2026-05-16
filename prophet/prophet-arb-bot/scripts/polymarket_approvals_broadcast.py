@@ -1,14 +1,20 @@
 """Issue #592 phase 2 — on-chain broadcast of Polymarket spender approvals.
 
 Kept separate from `polymarket_live.py` so the eth-account dependency
-is only imported when the operator has explicitly opted in to
-auto-submit (both `execution.auto_approve_polymarket_spenders=true` in
-config AND `--auto-approve` on the CLI).
+is only imported when the broadcast actually runs (i.e. when the live
+trader is wired in and the polymarket-state classifier reported
+`no_approvals` for the configured wallet).
 
 The pinned-list guard lives in `polymarket_live.build_*_calldata` and
-in `_check_pinned_spender_or_raise`. By the time this module is
-called, the orchestrator in `polymarket_live.auto_approve_missing_polymarket_allowances`
-has already verified both opt-in gates are on.
+in `_check_pinned_spender_or_raise`. Issue #596 collapsed the
+historical dual opt-in (config flag + CLI flag) into the live_mode +
+--yes-live gate the trade-signing path already enforces — defense-in-
+depth stays in the encoder, where it belongs.
+
+The broadcast itself is idempotent: it queries the current allowance
+and `isApprovedForAll` per pinned spender and skips broadcasts where
+the on-chain state already shows approval. Re-running on every cycle
+is a constant-cost no-op once the wallet is approved.
 """
 
 from __future__ import annotations

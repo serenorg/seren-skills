@@ -1,29 +1,23 @@
-"""Issue #592 phase 2 — auto-submit of Polymarket spender approvals.
+"""Issue #596 — auto-approve collapses on the live_mode + --yes-live gate.
 
-The runtime can detect the `no_approvals` state but cannot resolve it
-without operator intervention at polymarket.com/wallet. That defeats
-the cron model: a fresh wallet hits `no_approvals` on the first cycle
-and the bot stops until the operator clicks through manually.
+The defense surface for Polymarket spender auto-approval is the
+encoder, not a separate CLI flag. After #596 there is no
+`--auto-approve` flag and no `auto_approve_polymarket_spenders` config
+field — when the live trader is active and the polymarket-state
+classifier reports `no_approvals`, the bot broadcasts approvals
+unconditionally.
 
-Phase 2 adds:
+These tests cover only the security-critical surface:
 
-  * A pinned set of expected Polymarket spender addresses on Polygon
-    mainnet (chain 137), cross-checked at startup against
-    `py_clob_client.config.get_contract_config()` to catch drift if
-    py-clob-client ships new addresses in a future version.
-  * Calldata builders for `USDC.e.approve(spender, MAX_UINT256)` and
-    `CT.setApprovalForAll(spender, true)` that REFUSE to encode against
-    any spender not in the pinned set — defense-in-depth so the
-    runtime cannot be tricked into signing approval to an attacker
-    address even if upstream state is compromised.
-  * An orchestrator that requires both `auto_approve_polymarket_spenders=true`
-    in config AND `--auto-approve` on the CLI to actually broadcast. The
-    default is off; existing operators see no behavior change.
+  * Pinned-spender drift guard against py-clob-client.
+  * Calldata builders REFUSE any spender not in the pinned set.
+  * ERC-20 / ERC-1155 calldata encoding is correct.
+  * The collapsed orchestrator delegates unconditionally to
+    `broadcast_pinned_polymarket_approvals` — there is no skip path.
 
-These tests cover only the security-critical surface. The on-chain
-broadcast itself (nonce/gas/sign/send) is exercised by the functional
-smoke test against the live runtime — not by unit tests, because
-that requires a real key and a real RPC.
+The on-chain broadcast itself (nonce/gas/sign/send) is exercised by
+the functional smoke test against the live runtime — not by unit
+tests, because that requires a real key and a real RPC.
 """
 
 from __future__ import annotations
@@ -57,7 +51,8 @@ def test_pinned_spenders_match_py_clob_client_chain_137_both_modes() -> None:
 # Pinned-list guard. The single most important test in the file: the
 # calldata builders MUST refuse any spender not in the pinned set. This
 # is the last line of defense against an attacker who somehow gets a
-# malicious spender address into the orchestrator's request.
+# malicious spender address into the orchestrator's request — and the
+# load-bearing reason #596 can safely collapse the dual opt-in.
 
 
 def test_calldata_builders_refuse_unpinned_spender() -> None:
@@ -122,43 +117,39 @@ def test_ct_set_approval_for_all_calldata_is_selector_plus_padded_spender_plus_b
 
 
 # ---------------------------------------------------------------------------
-# Default-off security posture. The orchestrator MUST NOT broadcast
-# approval transactions unless the operator has explicitly enabled it
-# in BOTH config AND on the CLI. This mirrors the live_mode + --yes-live
-# pattern used everywhere else in the bot.
+# Issue #596 — collapsed orchestrator. After the collapse there is no
+# `config_enabled` / `cli_flag` gate. The orchestrator delegates
+# unconditionally to `broadcast_pinned_polymarket_approvals` with the
+# wallet + key. This is the contract that the callsite relies on.
 
 
-def test_auto_submit_skipped_when_config_disabled() -> None:
-    """When `auto_approve_polymarket_spenders=False` in config, the
-    orchestrator returns immediately with `status=skipped` and broadcasts
-    nothing — even if --auto-approve was passed on the CLI."""
+def test_auto_approve_orchestrator_delegates_unconditionally_to_broadcast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calling `auto_approve_missing_polymarket_allowances(wallet_address,
+    private_key)` MUST invoke `broadcast_pinned_polymarket_approvals`
+    with those exact credentials. No second opt-in flag exists — the
+    callsite is the gate (live hedger present == live trading is on)."""
+    import polymarket_approvals_broadcast
     from polymarket_live import auto_approve_missing_polymarket_allowances
 
-    result = auto_approve_missing_polymarket_allowances(
-        config_enabled=False,
-        cli_flag=True,
-        wallet_address="0xAE10914F91E122D73aBFA651c64302EFB8cb9A04",
-        private_key="0x" + "1" * 64,  # never used; orchestrator must abort first
+    captured: dict[str, object] = {}
+
+    def fake_broadcast(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"status": "submitted", "transactions": []}
+
+    monkeypatch.setattr(
+        polymarket_approvals_broadcast,
+        "broadcast_pinned_polymarket_approvals",
+        fake_broadcast,
     )
 
-    assert result["status"] == "skipped"
-    assert result["reason"] == "config_disabled"
-    assert result.get("transactions") in (None, [])
-
-
-def test_auto_submit_skipped_when_cli_flag_missing() -> None:
-    """Symmetric defense: even if config enables auto-approve, the CLI
-    flag is the second mandatory opt-in (same shape as live_mode +
-    --yes-live for trading)."""
-    from polymarket_live import auto_approve_missing_polymarket_allowances
-
     result = auto_approve_missing_polymarket_allowances(
-        config_enabled=True,
-        cli_flag=False,
         wallet_address="0xAE10914F91E122D73aBFA651c64302EFB8cb9A04",
         private_key="0x" + "1" * 64,
     )
 
-    assert result["status"] == "skipped"
-    assert result["reason"] == "cli_flag_missing"
-    assert result.get("transactions") in (None, [])
+    assert result["status"] == "submitted"
+    assert captured["wallet_address"] == "0xAE10914F91E122D73aBFA651c64302EFB8cb9A04"
+    assert captured["private_key"] == "0x" + "1" * 64
