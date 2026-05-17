@@ -25,6 +25,7 @@ from typing import Any
 
 from otp_worker.establish_session import (
     SessionEstablishmentFailed,
+    _privy_session_observable,
     establish_browser_session_for_create,
 )
 from otp_worker import (
@@ -235,3 +236,90 @@ def test_establish_raises_session_establishment_failed_on_otp_timeout() -> None:
         assert exc.reason.startswith("prophet_session_unavailable:OtpEmailTimeout")
     else:
         raise AssertionError("expected SessionEstablishmentFailed")
+
+
+# --- Issue #658: positive-signal poll for `privy:user` ----------------------
+#
+# The previous heuristic returned False whenever `privy:user` was missing on
+# the first read AND the SIGN IN button appeared within 1500ms — both of
+# which are normal during Privy SDK boot, so a fresh JWT was treated as
+# unusable and the cycle bailed to OTP cold-start. The fix polls
+# `privy:user` over a longer budget; SIGN IN-absent remains a fallback.
+
+
+class _PollingSession:
+    """Session stub that lets `privy:user` "land" after N polls.
+
+    `user_reads` enumerates the values `get_local_storage('privy:user')`
+    returns on successive calls. `sign_in_visible` toggles whether
+    `wait_for(SEL_CONNECT_BUTTON, ...)` finds the button (visible == no
+    TimeoutError == unauthenticated).
+    """
+
+    def __init__(
+        self,
+        *,
+        user_reads: list[str | None],
+        sign_in_visible: bool = True,
+    ) -> None:
+        self._user_reads = list(user_reads)
+        self._sign_in_visible = sign_in_visible
+        self.user_read_count = 0
+
+    def get_local_storage(self, key: str) -> str | None:
+        if key != "privy:user":
+            return None
+        self.user_read_count += 1
+        if not self._user_reads:
+            return None
+        return self._user_reads.pop(0)
+
+    def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
+        if self._sign_in_visible:
+            return  # button visible → caller treats as unauthenticated
+        raise TimeoutError("SIGN IN never appeared")
+
+
+def test_privy_observable_polls_until_user_lands() -> None:
+    """Privy SDK populates `privy:user` after a few hundred ms — the
+    observability check must poll for it within budget instead of bailing
+    on the first miss. Repro of issue #658: a fresh JWT was being treated
+    as unusable and forcing the OTP cold-start path."""
+    session = _PollingSession(
+        # Two misses (planted token still booting), then `privy:user` lands.
+        user_reads=[None, None, "u_123"],
+        sign_in_visible=True,  # button stays visible during boot
+    )
+    sleeps: list[float] = []
+    result = _privy_session_observable(
+        session,
+        budget_seconds=8.0,
+        poll_interval_seconds=0.25,
+        sleep=sleeps.append,
+        clock=lambda: 0.0,
+    )
+    assert result is True
+    assert session.user_read_count >= 3, (
+        "observable must poll past first miss"
+    )
+
+
+def test_privy_observable_returns_false_when_user_never_lands() -> None:
+    """If `privy:user` never lands AND SIGN IN button stays visible
+    throughout the budget, observability returns False so the caller can
+    fall through to OTP cold-start. This preserves the negative path for
+    truly revoked sessions."""
+    session = _PollingSession(
+        user_reads=[None] * 20,  # never lands
+        sign_in_visible=True,  # button visible whole time
+    )
+    # Mock clock so the polling loop exits deterministically.
+    ticks = iter([0.0, 0.5, 2.0, 5.0, 9.0])
+    result = _privy_session_observable(
+        session,
+        budget_seconds=8.0,
+        poll_interval_seconds=0.25,
+        sleep=lambda _s: None,
+        clock=lambda: next(ticks),
+    )
+    assert result is False

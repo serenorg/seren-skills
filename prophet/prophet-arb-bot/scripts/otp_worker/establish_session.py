@@ -25,6 +25,7 @@ authenticated against Privy.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable
 
 from . import (
@@ -42,6 +43,15 @@ from .privy_restore import restore_privy_session
 from .session_cache import SessionCache
 from .token_acquirer import AcquiredSession, acquire_token
 from .token_refresher import RefreshResult, refresh_once
+
+# Issue #658: Privy SDK boot in a freshly-launched headless Chromium
+# routinely takes 1–4s before it populates `privy:user` from the planted
+# JWT. An 8s budget covers a slow cold launch under MCP/peer contention
+# without making the negative path (truly revoked sessions) noticeably
+# slower than the prior 1.5s probe.
+_PRIVY_OBSERVABLE_BUDGET_SECONDS = 8.0
+_PRIVY_OBSERVABLE_POLL_INTERVAL_SECONDS = 0.25
+_PRIVY_OBSERVABLE_SIGN_IN_PROBE_MS = 1_500
 
 
 class SessionEstablishmentFailed(Exception):
@@ -117,25 +127,48 @@ def establish_browser_session_for_create(
     return cache.read()
 
 
-def _privy_session_observable(session: BrowserSession) -> bool:
+def _privy_session_observable(
+    session: BrowserSession,
+    *,
+    budget_seconds: float = _PRIVY_OBSERVABLE_BUDGET_SECONDS,
+    poll_interval_seconds: float = _PRIVY_OBSERVABLE_POLL_INTERVAL_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> bool:
     """Return True iff Privy reports an active session in this browser.
 
-    Heuristic: after `restore_privy_session` navigated to the Prophet
-    origin, an authenticated SDK boot leaves `privy:user` populated in
-    localStorage. The SIGN IN button being absent is a secondary signal.
-    Either is sufficient — neither is required individually.
+    Issue #658: `restore_privy_session` plants `privy:token` +
+    `privy:refresh_token` at `document_start`. The Privy SDK then boots,
+    validates the token, fetches the user, and finally writes
+    `privy:user` to localStorage. That sequence routinely takes 1–4s in
+    a cold MCP Chromium — far longer than the previous 1.5s SIGN IN
+    probe. Polling `privy:user` over a budget (default 8s) catches the
+    positive signal once the SDK lands it; the SIGN IN-absent probe is
+    retained as a secondary signal at the end of the budget so truly
+    revoked sessions still return False.
     """
-    try:
-        user = session.get_local_storage("privy:user")
-    except Exception:
-        user = None
-    if user:
-        return True
+    deadline = clock() + max(budget_seconds, 0.0)
+    interval = max(poll_interval_seconds, 0.05)
 
+    while True:
+        try:
+            user = session.get_local_storage("privy:user")
+        except Exception:
+            user = None
+        if user:
+            return True
+        if clock() >= deadline:
+            break
+        sleep(interval)
+
+    # Budget exhausted with `privy:user` still empty. Fall back to the
+    # SIGN IN-absent probe: a slow SDK that ultimately failed will still
+    # render the SIGN IN button; a slow SDK that ultimately succeeded
+    # may have removed it without populating `privy:user` yet.
     try:
-        # Cheap probe: if SIGN IN button never appears within a short
-        # budget, Privy considers us authenticated.
-        session.wait_for(SEL_CONNECT_BUTTON, timeout_ms=1500)
+        session.wait_for(
+            SEL_CONNECT_BUTTON, timeout_ms=_PRIVY_OBSERVABLE_SIGN_IN_PROBE_MS
+        )
     except TimeoutError:
         return True
     except Exception:
