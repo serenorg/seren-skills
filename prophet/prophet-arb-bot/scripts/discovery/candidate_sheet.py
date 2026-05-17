@@ -109,6 +109,7 @@ def write_candidate_sheet(
         sh.column_dimensions["F"].width = 50
         sh.column_dimensions["G"].width = 24
         sh.freeze_panes = "A2"
+        sh.auto_filter.ref = sh.dimensions
         wb.save(path)
         return path
     except ImportError:

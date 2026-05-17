@@ -37,6 +37,7 @@ _DEFAULT_LIMIT = 100
 # enough qualifiers to produce ~24 actionable candidates. Mirrors the
 # bounty-runner's Phase-15 bump (`scripts/polymarket/discovery.py`).
 _AUTO_DISCOVER_LIMIT = 500
+DEFAULT_AUTO_DISCOVER_MAX_CANDIDATES = 250
 
 
 @dataclass
@@ -50,6 +51,20 @@ class PolymarketSource:
     # Defaults to 0.0 so existing callers that don't set it keep working.
     volume_24h_usd: float = 0.0
     slug: str | None = None
+
+
+@dataclass
+class ArbCandidateDiscoveryStats:
+    """Audit counters for the capped auto-discover scan."""
+
+    raw_markets_fetched: int
+    markets_passing_gates: int
+    candidates_returned: int
+    max_candidates: int
+
+    @property
+    def truncated_by_max_candidates(self) -> bool:
+        return self.markets_passing_gates > self.candidates_returned
 
 
 def discover_polymarket_sources(
@@ -165,8 +180,8 @@ def _ensure_utc(value: datetime) -> datetime:
 #     UI-submission window (Validate ~10s + odds calc 60-120s + bet form
 #     + Prophet signing prompt = ~90-180s minimum). Same default the
 #     bounty-runner applies (10 min).
-#   - Candidate cap — keep the per-tick batch small so Jill's first run
-#     finishes in minutes, not hours. Default 50.
+#   - Candidate cap — keep the per-tick batch bounded while still
+#     sweeping past the top-50 volume sample. Default 250.
 #
 # Returns the same `PolymarketSource` shape with `volume_24h_usd` /
 # `slug` populated, plus a per-row signal that lets the caller route
@@ -179,7 +194,7 @@ def discover_arb_candidates(
     deadline: datetime,
     min_24h_volume_usd: float = 10_000.0,
     minimum_headroom_seconds: int = 24 * 3600,
-    max_candidates: int = 50,
+    max_candidates: int = DEFAULT_AUTO_DISCOVER_MAX_CANDIDATES,
     now: datetime | None = None,
 ) -> list[PolymarketSource]:
     """Auto-discover qualifying Polymarket candidates for arb.
@@ -187,11 +202,38 @@ def discover_arb_candidates(
     Pure-data: the publisher call is the only side effect. Caller is
     responsible for the Prophet pair lookup and any persistence.
     """
+    candidates, _stats = discover_arb_candidates_with_stats(
+        gateway=gateway,
+        deadline=deadline,
+        min_24h_volume_usd=min_24h_volume_usd,
+        minimum_headroom_seconds=minimum_headroom_seconds,
+        max_candidates=max_candidates,
+        now=now,
+    )
+    return candidates
+
+
+def discover_arb_candidates_with_stats(
+    *,
+    gateway: Any,
+    deadline: datetime,
+    min_24h_volume_usd: float = 10_000.0,
+    minimum_headroom_seconds: int = 24 * 3600,
+    max_candidates: int = DEFAULT_AUTO_DISCOVER_MAX_CANDIDATES,
+    now: datetime | None = None,
+) -> tuple[list[PolymarketSource], ArbCandidateDiscoveryStats]:
+    """Auto-discover candidates and return scan counters.
+
+    The scan continues through the fetched publisher page after the
+    return cap is full so the run summary can distinguish "250 were
+    evaluated" from "only 250 existed in the filtered universe."
+    """
     from datetime import timedelta
 
     deadline_utc = _ensure_utc(deadline)
     now_utc = _ensure_utc(now) if now is not None else datetime.now(tz=timezone.utc)
     earliest_resolution = now_utc + timedelta(seconds=int(minimum_headroom_seconds))
+    max_count = max(0, int(max_candidates))
 
     deadline_iso = deadline_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     now_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -204,6 +246,7 @@ def discover_arb_candidates(
     raw_sources = _extract_sources(response)
 
     keepers: list[PolymarketSource] = []
+    markets_passing_gates = 0
     for raw in raw_sources:
         if not isinstance(raw, dict):
             continue
@@ -231,6 +274,9 @@ def discover_arb_candidates(
             continue
         if not isinstance(question, str) or not question:
             continue
+        markets_passing_gates += 1
+        if len(keepers) >= max_count:
+            continue
         category = _extract_category(raw)
         slug = raw.get("slug")
         slug_str = slug if isinstance(slug, str) and slug else None
@@ -245,9 +291,13 @@ def discover_arb_candidates(
                 slug=slug_str,
             )
         )
-        if len(keepers) >= int(max_candidates):
-            break
-    return keepers
+    stats = ArbCandidateDiscoveryStats(
+        raw_markets_fetched=len(raw_sources),
+        markets_passing_gates=markets_passing_gates,
+        candidates_returned=len(keepers),
+        max_candidates=max_count,
+    )
+    return keepers, stats
 
 
 def _safe_volume(raw: dict[str, Any]) -> float:

@@ -141,6 +141,10 @@ def test_cmd_run_applies_seed_preflight_even_without_yes_live(
         lambda **kwargs: AutoDiscoverResult(
             candidates_found=2,
             already_paired=0,
+            raw_markets_fetched=9,
+            markets_passing_gates=4,
+            candidates_evaluated_for_pairing=2,
+            max_candidates=250,
             auto_paired=[],
             pending_ui_submission=pending,
         ),
@@ -165,6 +169,10 @@ def test_cmd_run_applies_seed_preflight_even_without_yes_live(
     assert result.reason == "no_pairs_seeded_pending_ui_submission"
     assert len(calls) == 1
     assert calls[0]["pending"] == pending
+    assert result.payload["summary"]["auto_discover_raw_markets_fetched"] == 9
+    assert result.payload["summary"]["auto_discover_markets_passing_gates"] == 4
+    assert result.payload["summary"]["auto_discover_candidates_evaluated_for_pairing"] == 2
+    assert result.payload["summary"]["auto_discover_max_candidates"] == 250
     assert result.payload["pending_ui_submission"] == [pending[0]]
 
 

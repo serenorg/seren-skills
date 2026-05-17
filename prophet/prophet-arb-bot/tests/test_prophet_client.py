@@ -5,7 +5,7 @@ Coverage:
     Pins the live Prophet schema shape for the `markets` root query.
     Three drift axes are covered in this one test because they all
     travel together — a regression in any axis silently disables
-    auto-pair and ships the bot back to the 0/50 manual-creation
+    auto-pair and ships the bot back to the 0/250 manual-creation
     failure mode.
 
       Axis 1 (#614): response shape. Prophet exposes

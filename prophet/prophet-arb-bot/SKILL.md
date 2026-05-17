@@ -71,7 +71,7 @@ First-run bootstrap writes `"live_mode": true` and `auto_discover.enabled=true`.
 
 When `auto_discover.enabled = true` in `config.json`, every `--command run` cycle:
 
-1. **Fetches live Polymarket candidates** matching the campaign filter — active markets with 24h volume ≥ `min_24h_volume_usd` (default `$10,000`) that resolve in `[now + min_headroom_hours, resolution_deadline_iso]` (defaults: 24h headroom, 2026-05-24 deadline). Caps at `max_candidates` (default 50). No `manual_pairs` curation required — Jill invokes the skill and the campaign candidate set refreshes automatically.
+1. **Fetches live Polymarket candidates** matching the campaign filter — active markets with 24h volume ≥ `min_24h_volume_usd` (default `$10,000`) that resolve in `[now + min_headroom_hours, resolution_deadline_iso]` (defaults: 24h headroom, 2026-05-24 deadline). Caps at `max_candidates` (default 250) and surfaces raw/eligible/evaluated counters so a capped sample is not mistaken for the full universe. No `manual_pairs` curation required — Jill invokes the skill and the campaign candidate set refreshes automatically.
 
 2. **Looks up matching Prophet markets** via `viewer.markets`. Matched pairs are UPSERTed into `arb_pairs` with `source_skill='auto_discover'` and arbed on the same cycle. Question matching is normalized substring (lowercase, punctuation stripped) — Prophet's `/create` AI preserves question text near-verbatim from the operator's spreadsheet, so the matcher is tight enough to avoid false positives.
 

@@ -32,7 +32,11 @@ from typing import Any
 
 from db import ResolvedTarget
 from persistence import list_arb_pairs, upsert_arb_pair
-from polymarket.discovery import PolymarketSource, discover_arb_candidates
+from polymarket.discovery import (
+    DEFAULT_AUTO_DISCOVER_MAX_CANDIDATES,
+    PolymarketSource,
+    discover_arb_candidates_with_stats,
+)
 
 from .candidate_sheet import write_candidate_sheet
 from .prophet_pair_lookup import find_matching_prophet_markets
@@ -46,13 +50,13 @@ DEFAULT_INITIAL_BET_USDC = 1.0
 @dataclass
 class AutoDiscoverConfig:
     """Runtime knobs for auto-discover. Defaults align with the
-    May 2026 Prophet campaign (24-market shortlist)."""
+    May 2026 Prophet campaign scan window."""
 
     enabled: bool = False
     min_24h_volume_usd: float = 10_000.0
     min_headroom_hours: float = 24.0
     resolution_deadline_iso: str = "2026-05-24T23:59:59Z"
-    max_candidates: int = 50
+    max_candidates: int = DEFAULT_AUTO_DISCOVER_MAX_CANDIDATES
     initial_bet_usdc: float = DEFAULT_INITIAL_BET_USDC
 
     @classmethod
@@ -65,7 +69,9 @@ class AutoDiscoverConfig:
             resolution_deadline_iso=str(
                 raw.get("resolution_deadline_iso") or "2026-05-24T23:59:59Z"
             ),
-            max_candidates=int(raw.get("max_candidates", 50)),
+            max_candidates=int(
+                raw.get("max_candidates", DEFAULT_AUTO_DISCOVER_MAX_CANDIDATES)
+            ),
             initial_bet_usdc=float(raw.get("initial_bet_usdc", DEFAULT_INITIAL_BET_USDC)),
         )
 
@@ -74,6 +80,10 @@ class AutoDiscoverConfig:
 class AutoDiscoverResult:
     candidates_found: int
     already_paired: int
+    raw_markets_fetched: int = 0
+    markets_passing_gates: int = 0
+    candidates_evaluated_for_pairing: int = 0
+    max_candidates: int = DEFAULT_AUTO_DISCOVER_MAX_CANDIDATES
     auto_paired: list[dict] = field(default_factory=list)
     pending_ui_submission: list[dict] = field(default_factory=list)
     sheet_path: str | None = None
@@ -137,7 +147,7 @@ def run_auto_discover(
     effects after this function returns.
     """
     deadline = _parse_iso(config.resolution_deadline_iso)
-    candidates = discover_arb_candidates(
+    candidates, discovery_stats = discover_arb_candidates_with_stats(
         gateway=gateway,
         deadline=deadline,
         min_24h_volume_usd=config.min_24h_volume_usd,
@@ -235,6 +245,10 @@ def run_auto_discover(
     return AutoDiscoverResult(
         candidates_found=len(candidates),
         already_paired=len(candidates) - len(new_candidates),
+        raw_markets_fetched=discovery_stats.raw_markets_fetched,
+        markets_passing_gates=discovery_stats.markets_passing_gates,
+        candidates_evaluated_for_pairing=len(new_candidates),
+        max_candidates=discovery_stats.max_candidates,
         auto_paired=auto_paired,
         pending_ui_submission=pending_ui,
         sheet_path=sheet_path,

@@ -799,6 +799,9 @@ def _apply_seed_preflight_and_trim(
         # Skip the qualifier (nothing to qualify) and return early so the
         # caller falls through to the scoring loop.
         recorder.summary["_trimmed_pending"] = action.trimmed_pending_ui_submission
+        recorder.summary["auto_discover_pending_ui_after_seed_preflight"] = len(
+            action.trimmed_pending_ui_submission
+        )
         recorder.summary["seed_dropped_count"] = len(pending)
         recorder.summary["seed_dropped_reasons"] = ["seed_preflight_skipped"] * len(pending)
         # #598: the skip branch used to bypass `_annotate_polymarket_state`,
@@ -850,6 +853,9 @@ def _apply_seed_preflight_and_trim(
     )
 
     recorder.summary["_trimmed_pending"] = decision.qualified
+    recorder.summary["auto_discover_pending_ui_after_seed_preflight"] = len(
+        decision.qualified
+    )
     recorder.summary["seed_dropped_count"] = len(decision.dropped)
     if decision.dropped:
         recorder.summary["seed_dropped_reasons"] = [
@@ -936,6 +942,21 @@ def cmd_run(
         if auto_result is not None:
             recorder.summary["auto_discover_candidates_found"] = (
                 auto_result.candidates_found
+            )
+            recorder.summary["auto_discover_raw_markets_fetched"] = (
+                auto_result.raw_markets_fetched
+            )
+            recorder.summary["auto_discover_markets_passing_gates"] = (
+                auto_result.markets_passing_gates
+            )
+            recorder.summary["auto_discover_candidates_evaluated_for_pairing"] = (
+                auto_result.candidates_evaluated_for_pairing
+            )
+            recorder.summary["auto_discover_max_candidates"] = (
+                auto_result.max_candidates
+            )
+            recorder.summary["auto_discover_candidate_sample_truncated"] = (
+                auto_result.markets_passing_gates > auto_result.candidates_found
             )
             recorder.summary["auto_discover_auto_paired"] = len(
                 auto_result.auto_paired

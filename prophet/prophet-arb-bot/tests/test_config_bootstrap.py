@@ -50,7 +50,7 @@ _EXAMPLE_CONTENT = {
         "min_24h_volume_usd": 10000.0,
         "min_headroom_hours": 24.0,
         "resolution_deadline_iso": "2026-05-24T23:59:59Z",
-        "max_candidates": 50,
+        "max_candidates": 250,
         "initial_bet_usdc": 1.0,
     },
     "live_mode": False,
@@ -87,6 +87,7 @@ def test_bootstrap_creates_config_from_example_when_missing(skill_root: Path) ->
     data = json.loads(target.read_text())
     # Defaults flipped on for first-time operators:
     assert data["auto_discover"]["enabled"] is True
+    assert data["auto_discover"]["max_candidates"] == 250
     assert data["execution_mode"] == "delta_neutral"
     assert data["live_mode"] is True
 
