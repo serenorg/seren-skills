@@ -55,7 +55,7 @@ PUSD_ALLOWANCE_THRESHOLD = 10**24
 # Selectors used here directly so we can call view functions on
 # SafeProxyFactory and SafeProxy without round-tripping through
 # polymarket_v2.
-_COMPUTE_PROXY_ADDRESS_SELECTOR = "0xc46cfaff"  # computeProxyAddress(address)
+_COMPUTE_PROXY_ADDRESS_SELECTOR = "0xd600539a"  # computeProxyAddress(address) — #607: keccak-verified canonical selector
 _NONCE_SELECTOR = "0xaffed0e0"  # nonce()  (Gnosis Safe)
 _ERC20_BALANCE_OF_SELECTOR = "0x70a08231"  # balanceOf(address)
 _ERC20_ALLOWANCE_SELECTOR = "0xdd62ed3e"  # allowance(address,address)
