@@ -12,7 +12,7 @@ When invoked:
 1. **Probe auth via MCP first.** Call `mcp__seren-mcp__list_projects`. If it returns successfully, the user is authenticated through Seren Desktop and no `.env` setup is required — proceed to step 2. If MCP is unavailable, see **API Key Setup (Fallback)** below before continuing.
 2. Run `python3 scripts/agent.py --command setup --json-output` to apply the schema. Idempotent — safe to re-run. (The runner reads `<skill-root>/.env` automatically on startup, so a desktop-injected key or an operator-written `.env` both work.)
 3. Run `python3 scripts/agent.py --command run --yes-live --json-output` once. The result will be `status=ok` (cycle ran), `status=ok_no_fills` (cycle ran but no Prophet fills), or `status=blocked`.
-4. **If the run envelope carries `pending_ui_submission`** (auto-discover mode found Polymarket candidates that don't have Prophet mirrors yet), drive the **Agent-driven UI submission runbook** below for each entry. The runbook drives `/create` through `startOddsCalculation`, calls `compute-seed-intent` to read Prophet's AI fair value out of the completed odds session and pick the seed/hedge sides, submits the Polymarket hedge first via `record-created-market`, and only clicks Prophet Confirm after the hedge succeeds. After driving the UI for every entry, re-run `agent.py --command run --yes-live` so the bot trades the newly-created pairs.
+4. **If the run envelope carries `pending_ui_submission`**, the bot handles `/create` automatically on the same `--yes-live` cycle. The Python subprocess restores the cached Prophet session into its own Playwright-stealth browser, drives `/create` end-to-end, hedges on Polymarket first, then clicks Prophet Confirm — surfaced as a per-entry `ui_submission_results` block in the same envelope. No `mcp__playwright__*` orchestration is required from you. If you see `ui_submission_results` entries with `status=ok`, simply re-run `python3 scripts/agent.py --command run --yes-live --json-output` so the bot picks up the new pairs and starts arbing them. Pass `--skip-ui-submission` only when explicitly testing the legacy behavior.
 5. If `status=blocked`, surface the `reason` to the user and **do not** schedule cron until acknowledged.
 6. Only after a successful first run, call `python3 scripts/setup_cron.py create --yes-live` and start `python3 scripts/run_local_pull_runner.py` to claim due ticks. `--yes-live` remains required for autonomous schedules as defense-in-depth.
 
@@ -20,9 +20,9 @@ This validation gate prevents the cron and 12h local-pull poller from accruing c
 
 ### Seren Desktop tool routing guardrails
 
-- **Playwright is a Seren Desktop MCP connected service, not a Seren publisher.** Do not call publisher discovery (`seren__suggest_for_task`, `seren__list_agent_publishers`) or `seren__call_publisher` for Playwright.
-- For Prophet UI automation, use the connected Playwright MCP tool namespace directly: `mcp__playwright__playwright_navigate`, `mcp__playwright__playwright_click`, `mcp__playwright__playwright_fill`, `mcp__playwright__playwright_evaluate`, and related `mcp__playwright__...` tools.
-- Only use publishers for actual publisher-backed data/API calls called out below (for example `polymarket-data`, `seren-polygon`, or SerenDB setup paths). Browser UI driving in `/create` and `/wallet` stays on Playwright MCP.
+- **Playwright is a Seren Desktop MCP connected service, not a Seren publisher.** Do not call publisher discovery (`seren__suggest_for_task`, `seren__list_agent_publishers`) or `seren__call_publisher` for Playwright. The connected Playwright MCP exposes the `mcp__playwright__playwright_navigate`, `mcp__playwright__playwright_click`, `mcp__playwright__playwright_fill`, and `mcp__playwright__playwright_evaluate` tool namespace — never route those calls to a Playwright publisher.
+- **Do not drive `mcp__playwright__*` for `/create`.** Since #636 the subprocess owns its own Playwright-stealth browser and restores the cached Prophet session into it; driving the connected `mcp__playwright__*` browser from the LLM lands in an unauthenticated context and stalls on the sign-in modal. The connected Playwright MCP is still appropriate for ad-hoc operator-facing screenshots and `/wallet` inspection — anything `/create`-adjacent must go through `python3 scripts/agent.py --command run --yes-live`.
+- Only use publishers for actual publisher-backed data/API calls called out below (for example `polymarket-data`, `seren-polygon`, or SerenDB setup paths).
 
 ## API Key Setup
 
@@ -98,7 +98,7 @@ When auto-discover is disabled in an existing custom config, the existing `manua
 ## What The Arb-Bot Is Not
 
 - Not a market-maker.
-- Not a Prophet market creator on its own — `pending_ui_submission` rows still require the agent to drive Prophet's `/create` UI via the Playwright runbook. The Python subprocess never signs the `createMarketWithBet` mutation directly (live-validated 2026-05-13: it requires a client-signed `SignedOrderInput` from Prophet's in-browser signing flow).
+- Not a Prophet market creator without the bundled Playwright MCP — `create-market-via-ui` requires the local `playwright-stealth` MCP to be reachable (bundled in Seren Desktop, or via `SEREN_PLAYWRIGHT_MCP_COMMAND` outside Desktop). The Python subprocess never signs the `createMarketWithBet` mutation directly; Prophet's embedded wallet runs in the Python-owned browser and auto-signs once the cached session is restored.
 - Not a position liquidator. Both modes are cancel-only on the maker side; held YES/NO inventory must be unwound by the operator through the Prophet UI.
 
 ## Required Inputs
@@ -447,113 +447,86 @@ If `max_fundable == 0` the cycle returns
 `status=blocked, reason=funds_insufficient_for_seeds` with a
 `deposit_required_for_seeds` envelope carrying split deficits per venue.
 
-## Agent-driven UI submission runbook
+## Automated UI submission (subprocess-driven)
 
-For each `pending_ui_submission` entry:
+Issue #636: market creation is now fully autonomous. The Python
+subprocess owns its own Playwright-stealth browser, restores the cached
+Prophet session into it (the JWT + refresh token are JSON-stringified
+into the Prophet origin's localStorage — both keys are present since
+#583), and drives `/create` end-to-end without any `mcp__playwright__*`
+orchestration from the calling LLM.
 
-1. Use Playwright MCP — specifically
-   `mcp__playwright__playwright_navigate`,
-   `mcp__playwright__playwright_fill`,
-   `mcp__playwright__playwright_click`, and, when needed,
-   `mcp__playwright__playwright_evaluate` — to navigate to
-   `https://app.prophetmarket.ai/create`, fill the question, click
-   `Validate Question`, then click `Create Market`. Capture the
-   `OddsCalculationSession.id` returned by `startOddsCalculation` from
-   the network response or page state. Do not search for or call a
-   Playwright publisher; this is a Seren Desktop MCP flow.
+For each `pending_ui_submission` entry, the `--command run --yes-live`
+cycle runs:
 
-2. **Compute the seed-side decision from Prophet's AI fair value (#548 / #551).**
-   The 6-model calc runs for 60–180s. Poll the session and derive the
-   intent in one call. `--polymarket-yes-price` is optional — if omitted
-   (or `0.0`) the runner fetches the Polymarket book and derives the
-   YES price from the midpoint (#551), so the agent does not need a
-   separate price-fetch step:
+```bash
+python3 scripts/agent.py \
+  --command create-market-via-ui \
+  --polymarket-condition-id "$POLY_CID" \
+  --question "$QUESTION" \
+  --initial-bet-usdc "$BET_USDC" \
+  --json-output
+```
 
-   ```bash
-   python3 scripts/agent.py \
-     --command compute-seed-intent \
-     --odds-session-id "$OCS_ID" \
-     --polymarket-condition-id "$POLY_CID" \
-     --json-output
-   ```
+internally (no subprocess hop) for every entry, then attaches a
+`ui_submission_results: [{polymarket_condition_id, status, reason,
+prophet_market_id}]` block to the run envelope. The orchestrating LLM
+does NOT call this command directly; it only re-runs `--command run
+--yes-live` to pick up the newly-created pairs for arbing.
 
-   Pass `--polymarket-yes-price <value>` only when you want to pin a
-   specific value (e.g. a freshly-observed mark at `/create` time). The
-   envelope reports `polymarket_yes_price_source` ∈
-   {`caller_supplied`, `book_midpoint`, `book_best_bid_only`,
-   `book_best_ask_only`} so the agent can log which value was used.
+Per-entry sequence inside the subprocess:
 
-   - `status=ok, reason=seed_intent_ready` → use `seed_side`,
-     `hedge_price`, and `tick_size` from the payload for the next steps.
-     Render `edge_summary` (e.g. `Prophet 58.0% vs Polymarket 42.0%
-     → 1600 bps edge (BUY YES on Prophet)`) in the per-market log.
-   - `status=blocked, reason=odds_session_not_completed` → Prophet
-     rejected or failed the calc. Abandon this entry. No exposure was
-     created on either side.
-   - `status=blocked, reason=prophet_market_not_viable` → Prophet
-     completed but marked `isViable=false`. Abandon this entry.
-   - `status=blocked, reason=no_edge` → Prophet's fair value matches the
-     Polymarket price within the configured floor. Abandon — the seed
-     bet would have negative expected value. `edge_summary` carries the
-     side-by-side (e.g. `Prophet 50.0% vs Polymarket 50.0% → 0 bps
-     no_edge`) so Jill sees the why in the run summary.
-   - `status=blocked, reason=polymarket_book_unavailable` → the live
-     polymarket-data publisher is down, or the book had no usable
-     bid/ask to derive a midpoint. Retry on the next tick.
-   - `status=blocked, reason=prophet_unauthorized` (#553) → the cached
-     Prophet session is stale. Retry the same `compute-seed-intent` call;
-     the command reacquires the session through cache refresh or the
-     automated browser OTP flow. The market is still in the odds-session
-     window — do not abandon the candidate.
-   - `status=blocked, reason=odds_session_timeout` (#553) → Prophet's
-     6-model AI calc did not complete within `--poll-timeout-s` (default
-     180s). Abandon this entry. No exposure was created on either side.
+1. Restore the cached Prophet session into a fresh Python-owned
+   browser (navigate to `https://app.prophetmarket.ai` first so
+   localStorage writes land in the correct origin partition).
+2. Navigate `/create`, install a `window.fetch` wrapper that captures
+   `startOddsCalculation`'s `sessionId` client-side, then click
+   `Validate Question` + `Create Market`.
+3. Internally call `cmd_compute_seed_intent` with the captured
+   `sessionId` — Prophet's 6-model AI calc runs 60–180s; on completion
+   the helper returns `seed_side`, `hedge_price`, and `tick_size`.
+4. Fill the bet form's Buy/Sell side and amount; do **not** click
+   Prophet Confirm yet.
+5. Internally call `cmd_record_created_market` with `--prophet-seed-side`
+   + `--polymarket-marketable-price` to submit the Polymarket hedge.
+6. If `hedge_status='hedge_failed_no_commit'`, abort without clicking
+   Confirm. The entry's `ui_submission_results` carries
+   `reason='hedge_failed_no_commit'`.
+7. If `hedge_status='hedged'`, click Prophet Confirm. Prophet's
+   embedded wallet auto-signs `createMarketWithBet` in-browser using the
+   restored session. Poll the URL for the `/markets/<id>` redirect.
+8. On a redirect timeout, call `cmd_record_created_market` again with
+   `--prophet-confirm-declined` to unwind the Polymarket leg. The
+   entry's `ui_submission_results` carries `reason='prophet_confirm_failed'`.
+9. On success, call `cmd_record_created_market` with the captured
+   `--prophet-market-id` to UPSERT the pair. The entry's
+   `ui_submission_results` carries `reason='pair_created'` + the new
+   `prophet_market_id`.
 
-3. Once the bet form renders, fill the seed side returned by
-   `compute-seed-intent` (`buy` or `sell`) and `entry.initial_bet_usdc`,
-   but do **not** click the Prophet Confirm signing prompt yet.
+Per-entry blocking reasons surfaced in `ui_submission_results.reason`:
 
-4. Submit the Polymarket hedge first using the prices the previous step
-   returned:
+- `prophet_session_unavailable` — the cached Prophet session is missing
+  or could not be refreshed. The OTP cold-start path will fire on the
+  next `--yes-live` cycle.
+- `seren_desktop_playwright_mcp_unavailable` — no `playwright-stealth`
+  MCP command resolvable. Run on Seren Desktop or set
+  `SEREN_PLAYWRIGHT_MCP_COMMAND`.
+- `ocs_session_id_not_captured` — the `startOddsCalculation` response
+  didn't carry a `sessionId` within the capture timeout. Retry next tick.
+- `odds_session_not_completed` / `odds_session_timeout` /
+  `prophet_market_not_viable` / `no_edge` — Prophet's AI rejected or
+  did not justify a seed bet. Abandon the entry; no exposure was created.
+- `polymarket_book_unavailable` — Polymarket's CLOB book had no usable
+  bid/ask. Retry next tick.
+- `hedge_failed_no_commit` — Polymarket rejected the hedge before Prophet
+  Confirm. No exposure on either side.
+- `prophet_confirm_failed` — Polymarket hedge filled but the Prophet
+  `createMarketWithBet` signing flow did not redirect to `/markets/<id>`.
+  The Polymarket leg has been unwound; `payload.unwind_status` reports
+  the outcome (`unwound_after_prophet_decline` or a hedger error).
 
-   ```bash
-   python3 scripts/agent.py --command record-created-market \
-     --polymarket-condition-id "$POLY_CID" \
-     --prophet-seed-side "$SEED_SIDE" \
-     --polymarket-marketable-price "$HEDGE_PRICE" \
-     --seed-size-usdc "$INITIAL_BET_USDC" \
-     --json-output
-   ```
-
-5. If the response has `hedge_status='hedge_failed_no_commit'`, stop
-   this entry and do not click Prophet Confirm. No Prophet exposure was
-   created.
-6. If the response has `hedge_status='hedged'` and
-   `next_action='click_prophet_confirm'`, click the Prophet Confirm
-   signing prompt.
-7. If Prophet Confirm succeeds, capture the redirected
-   `prophet_market_id` and persist the pair:
-
-   ```bash
-   python3 scripts/agent.py --command record-created-market \
-     --polymarket-condition-id "$POLY_CID" \
-     --prophet-market-id "$PROPHET_MID" \
-     --json-output
-   ```
-
-8. If Prophet Confirm fails or the operator declines after the
-   Polymarket hedge filled, immediately unwind the Polymarket leg using
-   the opposite-side marketable price from the live book:
-
-   ```bash
-   python3 scripts/agent.py --command record-created-market \
-     --polymarket-condition-id "$POLY_CID" \
-     --prophet-seed-side "$SEED_SIDE" \
-     --polymarket-marketable-price "$UNWIND_PRICE" \
-     --seed-size-usdc "$INITIAL_BET_USDC" \
-     --prophet-confirm-declined \
-     --json-output
-   ```
+Pass `--skip-ui-submission` on `--command run` only when explicitly
+exercising the legacy code path for tests.
 
 ## Delta-neutral seed creation (#542)
 

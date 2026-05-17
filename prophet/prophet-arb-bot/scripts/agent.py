@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -888,6 +889,8 @@ def cmd_run(
     yes_live: bool,
     transport: Any = None,
     hedger: Any = None,
+    skip_ui_submission: bool = False,
+    create_market_via_ui: Any | None = None,
 ) -> CycleResult:
     if transport is None:
         from prophet.transport import ProphetDirectTransport
@@ -1034,17 +1037,55 @@ def cmd_run(
                     "_trimmed_pending", pending_ui_submission
                 )
 
+    # #636: chain into create-market-via-ui for each pending entry. Only
+    # fires under `--yes-live` so dry-run cycles never spawn a browser.
+    ui_submission_results: list[dict[str, Any]] = []
+    ui_submission_invoked = False
+    if (
+        yes_live
+        and config.auto_discover.enabled
+        and pending_ui_submission
+        and not skip_ui_submission
+    ):
+        ui_submission_invoked = True
+        creator = create_market_via_ui or cmd_create_market_via_ui
+        for entry in pending_ui_submission:
+            sub = creator(
+                config=config,
+                gateway=gateway,
+                transport=transport,
+                polymarket_condition_id=entry.get("polymarket_market_id", ""),
+                question=entry.get("question", ""),
+                category_slug=entry.get("category_slug", ""),
+                initial_bet_usdc=float(entry.get("initial_bet_usdc", 1.0)),
+            )
+            ui_submission_results.append(
+                {
+                    "polymarket_condition_id": entry.get("polymarket_market_id", ""),
+                    "status": sub.status,
+                    "reason": sub.reason,
+                    "prophet_market_id": sub.payload.get("prophet_market_id", ""),
+                }
+            )
+        # Newly-created markets become arb_pairs via record-created-market's
+        # UPSERT inside cmd_create_market_via_ui — refresh `pairs` so the
+        # scoring loop trades them this same cycle.
+        pairs = list_arb_pairs(target=target)
+
     for p in pairs:
         recorder.record_pair(p["prophet_market_id"], p["polymarket_condition_id"])
     recorder.summary["pairs_evaluated"] = len(pairs)
 
     if not pairs:
         # Auto-discover ran but Prophet hasn't created any matching
-        # markets yet. Surface pending_ui_submission so the agent drives
-        # `/create` for each row, then re-run the cycle to trade them.
+        # markets yet (or every UI submission was blocked). Surface
+        # pending_ui_submission + ui_submission_results so the operator
+        # sees the per-entry reason.
         payload = recorder.finish("ok", "no_pairs_seeded_pending_ui_submission")
         if pending_ui_submission:
             payload["pending_ui_submission"] = pending_ui_submission
+        if ui_submission_invoked:
+            payload["ui_submission_results"] = ui_submission_results
         return CycleResult(
             status="ok",
             reason="no_pairs_seeded_pending_ui_submission",
@@ -1379,6 +1420,8 @@ def cmd_run(
         # the scoring loop's normal trading work.
         if pending_ui_submission:
             payload["pending_ui_submission"] = pending_ui_submission
+        if ui_submission_invoked:
+            payload["ui_submission_results"] = ui_submission_results
         return payload
 
     if not (config.live_mode and yes_live) and len(actionable) > 0:
@@ -1938,6 +1981,296 @@ def cmd_record_created_market(
 
 
 # ---------------------------------------------------------------------------
+# Create market via UI (#636)
+#
+# Replaces the legacy agent-driven Playwright runbook. The Python
+# subprocess restores the Privy session into a Python-owned browser via
+# `privy_restore`, drives `/create` through the bet form, hedges on
+# Polymarket via `cmd_record_created_market`, clicks Prophet Confirm
+# (Privy's embedded wallet auto-signs `createMarketWithBet` in-browser),
+# captures the new prophet_market_id from the redirected URL, and
+# persists the pair. Unwinds the Polymarket hedge on Confirm failure.
+
+
+def cmd_create_market_via_ui(
+    *,
+    config: AgentConfig,
+    gateway: HttpGateway,
+    transport: Any,
+    polymarket_condition_id: str,
+    question: str,
+    category_slug: str = "",
+    initial_bet_usdc: float = 1.0,
+    # Injectable seams — tests stub these without touching MCP/Playwright.
+    open_session_factory: Any | None = None,
+    restore_session: Any | None = None,
+    create_market_ui: Any | None = None,
+    compute_seed_intent: Any | None = None,
+    record_created_market: Any | None = None,
+    sleep: Any = time.sleep,
+) -> CycleResult:
+    """Drive Prophet's `/create` UI autonomously for one candidate market.
+
+    Returns one of:
+      - status=ok,      reason=pair_created                 (success)
+      - status=blocked, reason=prophet_session_unavailable
+      - status=blocked, reason=seren_desktop_playwright_mcp_unavailable
+      - status=blocked, reason=<upstream compute-seed-intent reason>
+      - status=blocked, reason=hedge_failed_no_commit
+      - status=blocked, reason=prophet_confirm_failed
+      - status=blocked, reason=ocs_session_id_not_captured
+    """
+    payload: dict[str, Any] = {
+        "polymarket_condition_id": polymarket_condition_id,
+        "question": question,
+    }
+    if not polymarket_condition_id or not question:
+        return CycleResult(
+            status="blocked",
+            reason="missing_required_args",
+            payload=payload,
+        )
+
+    cache = SessionCache()
+    entry = cache.read()
+    if not entry.is_fresh():
+        # Try silent refresh + cold-start by reusing _acquire_jwt; on success
+        # we re-read the cache to pick up the refresh_token too.
+        jwt, _, jwt_source = _acquire_jwt(
+            config=config, gateway=gateway, transport=transport
+        )
+        if not jwt:
+            payload["auth_source"] = jwt_source
+            return CycleResult(
+                status="blocked",
+                reason="prophet_session_unavailable",
+                payload=payload,
+            )
+        entry = cache.read()
+    if not entry.jwt or not entry.refresh_token:
+        return CycleResult(
+            status="blocked",
+            reason="prophet_session_unavailable",
+            payload=payload,
+        )
+
+    if compute_seed_intent is None:
+        compute_seed_intent = cmd_compute_seed_intent
+    if record_created_market is None:
+        record_created_market = cmd_record_created_market
+    if create_market_ui is None:
+        from otp_worker import create_market_ui as create_market_ui  # type: ignore
+    if restore_session is None:
+        from otp_worker.privy_restore import restore_privy_session as restore_session
+
+    if open_session_factory is None:
+        if _playwright_mcp_gateway.PlaywrightStealthGateway._resolve_default_command() is None:
+            return CycleResult(
+                status="blocked",
+                reason="seren_desktop_playwright_mcp_unavailable",
+                payload=payload,
+            )
+        open_session_factory = _default_browser_session_factory
+
+    try:
+        with open_session_factory() as session:
+            return _run_create_market_via_ui_inner(
+                config=config,
+                gateway=gateway,
+                transport=transport,
+                cache_entry=entry,
+                polymarket_condition_id=polymarket_condition_id,
+                question=question,
+                initial_bet_usdc=initial_bet_usdc,
+                session=session,
+                restore_session=restore_session,
+                create_market_ui=create_market_ui,
+                compute_seed_intent=compute_seed_intent,
+                record_created_market=record_created_market,
+                payload=payload,
+            )
+    except PlaywrightMcpUnavailable:
+        return CycleResult(
+            status="blocked",
+            reason="seren_desktop_playwright_mcp_unavailable",
+            payload=payload,
+        )
+    except Exception as exc:
+        payload["error"] = f"{type(exc).__name__}:{str(exc)[:200]}"
+        return CycleResult(
+            status="blocked",
+            reason="create_market_via_ui_unexpected",
+            payload=payload,
+        )
+
+
+def _default_browser_session_factory() -> Any:
+    """Spawn a fresh Python-owned Playwright MCP browser session.
+
+    Returned object is a context manager that yields a `RealBrowserSession`
+    and tears down the gateway on exit. Tests inject a stub factory.
+    """
+
+    class _SessionScope:
+        def __enter__(self) -> Any:
+            self._gw = PlaywrightStealthGateway().__enter__()
+            self._session = RealBrowserSession(gateway=self._gw).__enter__()
+            return self._session
+
+        def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            try:
+                self._session.__exit__(exc_type, exc, tb)
+            finally:
+                self._gw.__exit__(exc_type, exc, tb)
+
+    return _SessionScope()
+
+
+def _run_create_market_via_ui_inner(
+    *,
+    config: AgentConfig,
+    gateway: HttpGateway,
+    transport: Any,
+    cache_entry: Any,
+    polymarket_condition_id: str,
+    question: str,
+    initial_bet_usdc: float,
+    session: Any,
+    restore_session: Any,
+    create_market_ui: Any,
+    compute_seed_intent: Any,
+    record_created_market: Any,
+    payload: dict[str, Any],
+) -> CycleResult:
+    # 1. Restore Privy session into the fresh origin-partitioned localStorage.
+    restore_session(
+        session,
+        jwt=cache_entry.jwt,
+        refresh_token=cache_entry.refresh_token,
+    )
+
+    # 2. Drive `/create` through Validate + Create Market. The fetch
+    # capture is installed before the Create Market click that fires
+    # `startOddsCalculation`, so the OCS sessionId is observable from
+    # `window.__seren_capture__`.
+    create_market_ui.open_create_form(session, question=question)
+    ocs_id = create_market_ui.poll_for_ocs_id(session)
+    if not ocs_id:
+        return CycleResult(
+            status="blocked",
+            reason="ocs_session_id_not_captured",
+            payload=payload,
+        )
+    payload["odds_session_id"] = ocs_id
+
+    # 3. Compute the seed-side decision (poll AI fair value + Polymarket book).
+    intent = compute_seed_intent(
+        config=config,
+        polymarket_condition_id=polymarket_condition_id,
+        odds_session_id=ocs_id,
+        polymarket_yes_price=0.0,
+        transport=transport,
+        jwt=cache_entry.jwt,
+        gateway=gateway,
+    )
+    if intent.status != "ok":
+        payload.update(intent.payload)
+        return CycleResult(
+            status="blocked",
+            reason=intent.reason,
+            payload=payload,
+        )
+
+    seed_side = intent.payload.get("seed_side") or ""
+    hedge_price = float(intent.payload.get("hedge_price") or 0.0)
+    payload["seed_side"] = seed_side
+    payload["hedge_price"] = hedge_price
+
+    # 4. Fill the bet form (do NOT click Confirm yet).
+    create_market_ui.fill_bet_form(
+        session, seed_side=seed_side, bet_usdc=float(initial_bet_usdc)
+    )
+
+    # 5. Submit the Polymarket hedge first.
+    hedge_result = record_created_market(
+        config=config,
+        polymarket_condition_id=polymarket_condition_id,
+        prophet_market_id="",
+        prophet_seed_side=seed_side,
+        polymarket_marketable_price=hedge_price,
+        seed_size_usdc=float(initial_bet_usdc),
+        prophet_confirm_declined=False,
+        gateway=gateway,
+    )
+    hedge_status = hedge_result.payload.get("hedge_status") or ""
+    payload["hedge_status"] = hedge_status
+    if hedge_status != "hedged":
+        return CycleResult(
+            status="blocked",
+            reason="hedge_failed_no_commit",
+            payload=payload,
+        )
+
+    # 6. Hedge filled → click Prophet Confirm.
+    create_market_ui.click_prophet_confirm(session)
+    prophet_market_id = create_market_ui.wait_for_market_redirect(session)
+    if not prophet_market_id:
+        # 6a. Confirm timed out / failed → unwind the hedge.
+        unwind_price = _opposite_marketable_price(seed_side, hedge_price)
+        unwind = record_created_market(
+            config=config,
+            polymarket_condition_id=polymarket_condition_id,
+            prophet_market_id="",
+            prophet_seed_side=seed_side,
+            polymarket_marketable_price=unwind_price,
+            seed_size_usdc=float(initial_bet_usdc),
+            prophet_confirm_declined=True,
+            gateway=gateway,
+        )
+        payload["unwind_status"] = unwind.payload.get("hedge_status") or ""
+        return CycleResult(
+            status="blocked",
+            reason="prophet_confirm_failed",
+            payload=payload,
+        )
+
+    # 7. UPSERT the pair.
+    persist = record_created_market(
+        config=config,
+        polymarket_condition_id=polymarket_condition_id,
+        prophet_market_id=prophet_market_id,
+        gateway=gateway,
+    )
+    payload["prophet_market_id"] = prophet_market_id
+    if persist.status != "ok":
+        payload["persist_reason"] = persist.reason
+        return CycleResult(
+            status="blocked",
+            reason="persist_failed",
+            payload=payload,
+        )
+    return CycleResult(
+        status="ok",
+        reason="pair_created",
+        payload=payload,
+    )
+
+
+def _opposite_marketable_price(seed_side: str, hedge_price: float) -> float:
+    """Approximate the opposing-side marketable price for an unwind.
+
+    The hedger snaps to tick and re-fetches the live book, so this only
+    needs to be in the right ballpark to clear the hedger's slippage gate.
+    """
+    if hedge_price <= 0.0:
+        return 0.0
+    flipped = 1.0 - hedge_price
+    if flipped <= 0.0 or flipped >= 1.0:
+        return hedge_price
+    return flipped
+
+
+# ---------------------------------------------------------------------------
 # CLI
 
 
@@ -1975,6 +2308,7 @@ def main(argv: list[str] | None = None) -> int:
             "probe-schema",
             "record-created-market",
             "compute-seed-intent",
+            "create-market-via-ui",
         ],
         default="run",
     )
@@ -2079,6 +2413,33 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         help="(compute-seed-intent) Total seconds to wait for COMPLETED.",
     )
+    parser.add_argument(
+        "--question",
+        default="",
+        help=(
+            "(create-market-via-ui) Question text to type into Prophet's "
+            "/create form. Required."
+        ),
+    )
+    parser.add_argument(
+        "--category-slug",
+        default="",
+        help="(create-market-via-ui) Optional category slug; Prophet's AI infers it.",
+    )
+    parser.add_argument(
+        "--initial-bet-usdc",
+        default=1.0,
+        type=float,
+        help="(create-market-via-ui) Seed bet size in USDC.",
+    )
+    parser.add_argument(
+        "--skip-ui-submission",
+        action="store_true",
+        help=(
+            "(run) Skip the automatic create-market-via-ui chain on "
+            "pending_ui_submission entries (preserves pre-#636 behavior)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.command == "probe-schema":
@@ -2114,6 +2475,7 @@ def main(argv: list[str] | None = None) -> int:
             gateway=gateway,
             yes_live=args.yes_live,
             transport=transport,
+            skip_ui_submission=args.skip_ui_submission,
         )
     elif args.command == "status":
         result = cmd_status(config=config, gateway=gateway, transport=transport)
@@ -2132,6 +2494,26 @@ def main(argv: list[str] | None = None) -> int:
             # _market did not.
             gateway=gateway,
         )
+    elif args.command == "create-market-via-ui":
+        if not args.polymarket_condition_id or not args.question:
+            result = CycleResult(
+                status="blocked",
+                reason="missing_required_args",
+                payload={
+                    "polymarket_condition_id": args.polymarket_condition_id,
+                    "question": args.question,
+                },
+            )
+        else:
+            result = cmd_create_market_via_ui(
+                config=config,
+                gateway=gateway,
+                transport=transport,
+                polymarket_condition_id=args.polymarket_condition_id,
+                question=args.question,
+                category_slug=args.category_slug,
+                initial_bet_usdc=args.initial_bet_usdc,
+            )
     elif args.command == "compute-seed-intent":
         if not args.odds_session_id or not args.polymarket_condition_id:
             result = CycleResult(
