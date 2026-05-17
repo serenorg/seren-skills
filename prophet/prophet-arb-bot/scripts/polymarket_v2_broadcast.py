@@ -210,7 +210,9 @@ def _broadcast_create_proxy(
         return {"status": "failed", "error": f"eth-account import: {exc}"}
 
     digest = compute_create_proxy_digest(factory=factory, chain_id=chain_id)
-    signed = Account.signHash(digest, private_key=eoa_private_key)
+    # #609: Account.signHash was removed in eth-account 0.10+; use unsafe_sign_hash
+    # over the pre-computed EIP-712 digest. Same (v, r, s) shape downstream.
+    signed = Account.unsafe_sign_hash(digest, private_key=eoa_private_key)
     calldata = build_create_proxy_calldata(
         v=signed.v,
         r=signed.r.to_bytes(32, "big"),
@@ -291,7 +293,9 @@ def _broadcast_safe_exec_transaction(
         nonce=nonce,
         chain_id=chain_id,
     )
-    signed = Account.signHash(digest, private_key=eoa_private_key)
+    # #609: Account.signHash was removed in eth-account 0.10+; use unsafe_sign_hash
+    # over the pre-computed SafeTx digest. Same (v, r, s) shape downstream.
+    signed = Account.unsafe_sign_hash(digest, private_key=eoa_private_key)
     # Safe expects signatures as `r || s || v` packed bytes (NOT r || s || (v+4)
     # — that's only for the eth_sign variant; for EOA contract sig the v is
     # the standard 27/28).
