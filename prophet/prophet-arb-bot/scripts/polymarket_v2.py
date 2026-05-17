@@ -283,7 +283,8 @@ def build_exec_transaction_calldata(
     `data` is the raw bytes payload for the inner call (e.g. the
     MultiSend batch from `build_multisend_batch_calldata`).
     `signatures` is the 65-byte (r || s || v) sig from
-    `eth_account.Account.signHash(safe_tx_hash)`.
+    `eth_account.Account.unsafe_sign_hash(safe_tx_hash)` (renamed from the
+    legacy `signHash` in eth-account 0.10+; see #609).
     """
     _check_v2_pinned_target_or_raise(to)
     if operation not in (0, 1):
