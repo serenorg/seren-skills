@@ -25,6 +25,7 @@ from pathlib import Path
 ARB_BOT_ROOT = Path(__file__).resolve().parent.parent
 SKILL_MD = ARB_BOT_ROOT / "SKILL.md"
 AGENT_PY = ARB_BOT_ROOT / "scripts" / "agent.py"
+LOCAL_PULL_RUNNER_PY = ARB_BOT_ROOT / "scripts" / "run_local_pull_runner.py"
 
 
 def test_main_calls_maybe_load_dotenv() -> None:
@@ -134,4 +135,52 @@ def test_skill_md_routes_playwright_to_desktop_mcp_not_publisher() -> None:
     assert re.search(r"not\s+.*Playwright\s+publisher", body, re.IGNORECASE | re.DOTALL), (
         "SKILL.md must explicitly prohibit Playwright publisher routing. "
         "See issue #576."
+    )
+
+
+def test_skill_md_uses_seren_desktop_bundled_python_on_windows() -> None:
+    """Issue #644: Windows Desktop already ships `python3.exe`.
+
+    Agents should use the documented `python3` commands from Desktop instead
+    of sending Windows users to install system Python or translating to
+    `python`.
+    """
+    body = SKILL_MD.read_text(encoding="utf-8")
+
+    assert "Seren Desktop bundles Python on Windows" in body, (
+        "SKILL.md must state that Seren Desktop bundles Python on Windows. "
+        "See issue #644."
+    )
+    assert "bundled `python3.exe`" in body, (
+        "SKILL.md must name the bundled `python3.exe` path behavior. "
+        "See issue #644."
+    )
+    assert "Do not translate `python3` to `python`" in body, (
+        "SKILL.md must prohibit `python3` -> `python` translation inside "
+        "Seren Desktop. See issue #644."
+    )
+    assert "do not ask the user to install system Python" in body, (
+        "SKILL.md must not ask Desktop Windows users to install system Python. "
+        "See issue #644."
+    )
+
+
+def test_local_pull_runner_reuses_active_python_interpreter() -> None:
+    """Issue #644: scheduled child runs must inherit the active interpreter.
+
+    On Windows Seren Desktop, the active interpreter is the bundled CPython
+    runtime. Reusing `sys.executable` keeps cron-triggered `agent.py` runs on
+    that interpreter instead of depending on system PATH discovery.
+    """
+    source = LOCAL_PULL_RUNNER_PY.read_text(encoding="utf-8")
+    build_command_idx = source.find("def build_agent_command(")
+    assert build_command_idx >= 0, (
+        "run_local_pull_runner.py no longer defines build_agent_command(); "
+        "update the Windows bundled Python guard. See issue #644."
+    )
+
+    build_command_body = source[build_command_idx:]
+    assert "sys.executable" in build_command_body, (
+        "run_local_pull_runner.py must invoke agent.py through sys.executable "
+        "so Seren Desktop's bundled Python is reused on Windows. See issue #644."
     )

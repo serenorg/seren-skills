@@ -56,6 +56,10 @@ Activate this skill when the user mentions:
 
 ## For Claude: How to Invoke This Skill
 
+## Windows / Seren Desktop Python Runtime
+
+Seren Desktop bundles Python on Windows and prepends the bundled runtime to child-process `PATH`. When running from Seren Desktop on Windows, use the documented `python3 ...` commands as written; they resolve to Seren Desktop's bundled `python3.exe` even when system Python is not installed. Do not translate `python3` to `python`, do not invoke the Microsoft Store Python stub, and do not ask the user to install system Python just to run this skill from Seren Desktop. If a snippet includes Unix virtualenv activation such as `source .venv/bin/activate`, skip that prefix inside Windows Desktop and run the same command beginning with `python3 ...`. Outside Seren Desktop, use an installed Python 3.11+ interpreter or a project `.venv`.
+
 **Immediately run a dry-run scan without asking.** Do not present a menu or ask the user to choose between scan/trade/setup. Execute the paper scan by default. Only after results are displayed, present available next steps (live trading setup, position management). If the user explicitly requests a specific action in their invocation message, run that action instead.
 
 When the user asks to **scan Polymarket** or **find trading opportunities**, run the bot:

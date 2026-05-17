@@ -8,6 +8,10 @@ description: "Multi-chain Curve gauge yield trading skill with paper-first defau
 
 Skill instructions are preloaded in context when this skill is active. Do not perform filesystem searches or tool-driven exploration to rediscover them; use the guidance below directly.
 
+## Windows / Seren Desktop Python Runtime
+
+Seren Desktop bundles Python on Windows and prepends the bundled runtime to child-process `PATH`. When running from Seren Desktop on Windows, use the documented `python3 ...` commands as written; they resolve to Seren Desktop's bundled `python3.exe` even when system Python is not installed. Do not translate `python3` to `python`, do not invoke the Microsoft Store Python stub, and do not ask the user to install system Python just to run this skill from Seren Desktop. If a snippet includes Unix virtualenv activation such as `source .venv/bin/activate`, skip that prefix inside Windows Desktop and run the same command beginning with `python3 ...`. Outside Seren Desktop, use an installed Python 3.11+ interpreter or a project `.venv`.
+
 ## When to Use
 
 - find the best curve gauge rewards
