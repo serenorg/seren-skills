@@ -657,11 +657,19 @@ def _annotate_polymarket_state(
             deposit_envelope["polymarket_v2_onboarding"] = v2_result
             recorder.record_blocker(f"polymarket_v2_onboarding:{v2_result.get('status')}")
     except Exception as exc:  # noqa: BLE001 — never crash the cycle on onboarding probe
+        # #613: include the actual message, not just the class name.
+        # Without it, the next operator hits the same wall — they see
+        # `exception:TypeError` and no way to decide whether to file a
+        # ticket, retry, or wait. Cap length so a runaway repr can't bloat
+        # the run envelope or the cron's execution_results row.
+        detail = str(exc).strip().replace("\n", " ")[:200] or "no_detail"
         deposit_envelope["polymarket_v2_onboarding"] = {
             "status": "failed",
-            "error": f"orchestrator_exception:{type(exc).__name__}",
+            "error": f"orchestrator_exception:{type(exc).__name__}:{detail}",
         }
-        recorder.record_blocker(f"polymarket_v2_onboarding:exception:{type(exc).__name__}")
+        recorder.record_blocker(
+            f"polymarket_v2_onboarding:exception:{type(exc).__name__}:{detail}"
+        )
 
 
 def _apply_seed_preflight_and_trim(

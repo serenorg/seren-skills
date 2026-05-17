@@ -88,5 +88,5 @@ def test_fetch_proxy_address_builds_calldata_with_correct_selector(
 
     # Sanity: the function returned a valid 20-byte address from the
     # canned response (proves the parser is wired to the same call we
-    # asserted on).
-    assert result == "0xf5824d9b7e7ad2ec36df19915067613111be3e10"
+    # asserted on). #613 normalized to EIP-55 checksum at this seam.
+    assert result == "0xf5824d9B7E7ad2eC36dF19915067613111BE3e10"
