@@ -94,7 +94,7 @@ def _check_v2_pinned_target_or_raise(target: str) -> str:
 ERC20_APPROVE_SELECTOR = "0x095ea7b3"  # approve(address,uint256)
 ERC20_TRANSFER_SELECTOR = "0xa9059cbb"  # transfer(address,uint256)
 ERC1155_SET_APPROVAL_FOR_ALL_SELECTOR = "0xa22cb465"  # setApprovalForAll(address,bool)
-COLLATERAL_ONRAMP_WRAP_SELECTOR = "0xea598cb0"  # wrap(uint256) — single-arg wrap variant
+COLLATERAL_ONRAMP_WRAP_SELECTOR = "0x62355638"  # wrap(address _asset, address _to, uint256 _amount) — #617: 3-arg variant matches the deployed CollateralOnramp at 0x93070a847efEf7F70739046A929D47a521F5B8ee. The legacy 1-arg wrap(uint256) selector 0xea598cb0 is NOT in the dispatcher; calling it falls through to revert.
 SAFE_EXEC_TRANSACTION_SELECTOR = "0x6a761202"  # execTransaction(...)
 MULTISEND_SELECTOR = "0x8d80ff0a"  # multiSend(bytes)
 CREATE_PROXY_SELECTOR = "0xa1884d2c"  # createProxy(address,uint256,address,(uint8,bytes32,bytes32))
@@ -167,14 +167,37 @@ def build_usdc_e_transfer_calldata(*, recipient: str, amount_raw: int) -> str:
     return ERC20_TRANSFER_SELECTOR + addr.rjust(64, "0") + amount_hex
 
 
-def build_collateral_onramp_wrap_calldata(*, amount_raw: int) -> str:
-    """`CollateralOnramp.wrap(amount)` calldata. Pulls `amount` USDC.e
-    from msg.sender (the proxy, after the proxy approved CollateralOnramp
-    in step 3) and mints the equivalent pUSD to msg.sender."""
+def build_collateral_onramp_wrap_calldata(
+    *, asset: str, recipient: str, amount_raw: int
+) -> str:
+    """`CollateralOnramp.wrap(address _asset, address _to, uint256 _amount)`
+    calldata. Pulls `_amount` of `_asset` (USDC.e) from msg.sender (the
+    proxy, after the proxy approved CollateralOnramp in step 3 of
+    onboarding) and mints the equivalent pUSD to `_to`.
+
+    #617: matches the deployed contract's 3-arg signature. The legacy
+    `wrap(uint256)` selector 0xea598cb0 is not present in the
+    CollateralOnramp dispatcher and causes a fallback revert at
+    eth_estimateGas time.
+
+    Pinned-asset guard fires on `_asset`. The recipient is the user's
+    own proxy and is not pin-guarded — it must be a plain 20-byte
+    address (validated for length but not against the V2 allowlist),
+    same posture as `build_usdc_e_transfer_calldata`'s recipient.
+    """
+    addr_asset = _check_v2_pinned_target_or_raise(asset)
+    addr_to = recipient.lower().removeprefix("0x")
+    if len(addr_to) != 40:
+        raise ValueError(f"recipient must be 20 bytes hex; got {recipient!r}")
     if amount_raw < 0 or amount_raw >= 2**256:
         raise ValueError(f"amount_raw out of uint256 range; got {amount_raw}")
     amount_hex = format(amount_raw, "064x")
-    return COLLATERAL_ONRAMP_WRAP_SELECTOR + amount_hex
+    return (
+        COLLATERAL_ONRAMP_WRAP_SELECTOR
+        + addr_asset.rjust(64, "0")
+        + addr_to.rjust(64, "0")
+        + amount_hex
+    )
 
 
 # ---------------------------------------------------------------------------
