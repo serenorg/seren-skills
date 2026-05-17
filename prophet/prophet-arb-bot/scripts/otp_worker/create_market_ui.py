@@ -12,6 +12,25 @@ Selectors live as module-level constants. Re-validate them against
 https://app.prophetmarket.ai/create whenever Prophet's UI rotates.
 
 Selectors live-validated 2026-05-17 (Phase 14 follow-on for #636).
+
+Issue #655: the original capture shim wrapped `window.fetch` only, used
+an exact `data.startOddsCalculation.sessionId` path lookup, matched only
+URLs containing `/graphql`, and was installed via inline `evaluate(...)`
+AFTER `navigate(/create)`. On a contended host, Prophet's bootstrap kept
+firing the OCS request through a transport or path the shim could not
+see, producing a 100% `ocs_session_id_not_captured` miss rate. The fix:
+
+  1. Install the wrapper via `add_init_script` BEFORE navigation so the
+     wrapper is in place for every fetch/XHR Prophet's bootstrap fires.
+  2. Wrap `XMLHttpRequest` in addition to `fetch` — Apollo/Relay clients
+     can switch transports, and Prophet's odds calc may use XHR.
+  3. Widen the URL match to anything containing `graphql` or `odds`.
+  4. Walk response bodies recursively for any `sessionId`-shaped key
+     nested under an `odds`-shaped ancestor — schema drift no longer
+     produces a silent miss.
+  5. Keep a small ring buffer of observed URLs + response shapes so the
+     `ocs_session_id_not_captured` troubleshooting surface can answer
+     "did we observe any odds traffic at all?".
 """
 
 from __future__ import annotations
@@ -36,49 +55,210 @@ SEL_PROPHET_CONFIRM_BUTTON = 'button:has-text("Confirm")'
 DEFAULT_OCS_WAIT_S = 30.0
 DEFAULT_CONFIRM_REDIRECT_TIMEOUT_S = 60.0
 
-_FETCH_CAPTURE_SCRIPT = """
+# The capture wrapper that runs in the browser. It MUST be idempotent
+# (multiple installs land but only the first one wraps), MUST not throw
+# even if the page calls `fetch`/`XHR` with unexpected shapes, and MUST
+# stash diagnostics so the operator can debug a silent miss.
+_CAPTURE_SCRIPT = """
 (() => {
   if (window.__seren_capture_installed__) { return true; }
-  window.__seren_capture__ = { startOddsCalculation: null, error: null };
-  window.__seren_original_fetch__ = window.fetch;
-  const orig = window.fetch.bind(window);
-  window.fetch = async (...args) => {
-    const resp = await orig(...args);
-    try {
-      const url = (args && args[0] && args[0].url) || (typeof args[0] === 'string' ? args[0] : '');
-      if (typeof url === 'string' && url.includes('/graphql')) {
-        const clone = resp.clone();
-        clone.text().then((txt) => {
-          try {
-            const parsed = JSON.parse(txt);
-            const start = parsed && parsed.data && parsed.data.startOddsCalculation;
-            if (start && start.sessionId) {
-              window.__seren_capture__.startOddsCalculation = start.sessionId;
-            }
-          } catch (e) { /* swallow */ }
-        }).catch(() => {});
-      }
-    } catch (e) { window.__seren_capture__.error = String(e); }
-    return resp;
+  window.__seren_capture__ = {
+    startOddsCalculation: null,
+    observed: [],
+    error: null,
   };
+  const URL_RE = /(graphql|odds)/i;
+  const SESSION_KEY_RE = /^(sessionId|session_id|oddsSessionId|odds_session_id)$/;
+  const ODDS_KEY_RE = /odds/i;
+
+  function record(url, ok, shape) {
+    try {
+      const obs = window.__seren_capture__.observed;
+      if (obs.length >= 20) { obs.shift(); }
+      obs.push({ url: String(url || '').slice(0, 200), ok: !!ok, shape: shape || '' });
+    } catch (e) { /* swallow */ }
+  }
+
+  function topLevelShape(obj) {
+    try {
+      if (!obj || typeof obj !== 'object') { return typeof obj; }
+      const keys = Object.keys(obj);
+      const head = keys.slice(0, 8).join(',');
+      return keys.length > 8 ? head + ',…' : head;
+    } catch (e) { return 'unknown'; }
+  }
+
+  function walkForSessionId(node, ancestorHasOdds, depth, budget) {
+    if (budget.n <= 0 || depth > 8 || node == null) { return null; }
+    budget.n -= 1;
+    if (typeof node !== 'object') { return null; }
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) {
+        const found = walkForSessionId(node[i], ancestorHasOdds, depth + 1, budget);
+        if (found) { return found; }
+      }
+      return null;
+    }
+    const keys = Object.keys(node);
+    // First pass: prefer extracting a sessionId at THIS level if any sibling
+    // key is odds-shaped, or if we're already under an odds-shaped ancestor.
+    const localHasOdds = ancestorHasOdds || keys.some((k) => ODDS_KEY_RE.test(k));
+    if (localHasOdds) {
+      for (const k of keys) {
+        if (SESSION_KEY_RE.test(k)) {
+          const v = node[k];
+          if (typeof v === 'string' && v.length > 0) { return v; }
+        }
+      }
+    }
+    // Then recurse — child subtree may itself be the odds container.
+    for (const k of keys) {
+      const child = node[k];
+      const childAncestorHasOdds = localHasOdds || ODDS_KEY_RE.test(k);
+      const found = walkForSessionId(child, childAncestorHasOdds, depth + 1, budget);
+      if (found) { return found; }
+    }
+    return null;
+  }
+
+  function extractAndStash(url, parsed) {
+    try {
+      const sid = walkForSessionId(parsed, false, 0, { n: 1000 });
+      record(url, !!sid, topLevelShape(parsed && parsed.data ? parsed.data : parsed));
+      if (sid && !window.__seren_capture__.startOddsCalculation) {
+        window.__seren_capture__.startOddsCalculation = sid;
+      }
+    } catch (e) {
+      window.__seren_capture__.error = String(e);
+    }
+  }
+
+  // -- fetch wrapper -------------------------------------------------------
+  const origFetch = window.fetch ? window.fetch.bind(window) : null;
+  if (origFetch) {
+    window.fetch = async (...args) => {
+      const resp = await origFetch(...args);
+      try {
+        let url = '';
+        const a0 = args && args[0];
+        if (typeof a0 === 'string') { url = a0; }
+        else if (a0 && typeof a0.url === 'string') { url = a0.url; }
+        if (URL_RE.test(url)) {
+          const clone = resp.clone();
+          clone.text().then((txt) => {
+            try {
+              const parsed = JSON.parse(txt);
+              extractAndStash(url, parsed);
+            } catch (e) { record(url, false, 'unparseable'); }
+          }).catch(() => {});
+        }
+      } catch (e) { window.__seren_capture__.error = String(e); }
+      return resp;
+    };
+  }
+
+  // -- XMLHttpRequest wrapper ---------------------------------------------
+  try {
+    const XHR = window.XMLHttpRequest;
+    if (XHR && XHR.prototype && XHR.prototype.open && XHR.prototype.send) {
+      const origOpen = XHR.prototype.open;
+      const origSend = XHR.prototype.send;
+      XHR.prototype.open = function (method, url) {
+        try { this.__seren_url = String(url || ''); } catch (e) {}
+        return origOpen.apply(this, arguments);
+      };
+      XHR.prototype.send = function () {
+        try {
+          const url = this.__seren_url || '';
+          if (URL_RE.test(url)) {
+            const prior = this.onreadystatechange;
+            this.onreadystatechange = function () {
+              try {
+                if (this.readyState === 4) {
+                  let txt = '';
+                  try { txt = this.responseText || ''; } catch (e) {}
+                  try {
+                    const parsed = JSON.parse(txt);
+                    extractAndStash(url, parsed);
+                  } catch (e) { record(url, false, 'unparseable'); }
+                }
+              } catch (e) { window.__seren_capture__.error = String(e); }
+              if (typeof prior === 'function') {
+                try { return prior.apply(this, arguments); } catch (e) {}
+              }
+            };
+          }
+        } catch (e) { window.__seren_capture__.error = String(e); }
+        return origSend.apply(this, arguments);
+      };
+    }
+  } catch (e) { window.__seren_capture__.error = String(e); }
+
   window.__seren_capture_installed__ = true;
   return true;
 })()
 """
 
+# Back-compat alias — pre-#655 callers and tests imported this name.
+_FETCH_CAPTURE_SCRIPT = _CAPTURE_SCRIPT
+
+
+def install_capture_init_script(session: Any) -> bool:
+    """Register the capture wrapper as a `document_start` init script.
+
+    Issue #655: planting the wrapper via `add_init_script` BEFORE any
+    navigation eliminates the race where Prophet's bootstrap fires the
+    OCS request before an inline `evaluate(...)` install can land. The
+    init script persists for the lifetime of the browser context, so
+    subsequent navigations (e.g. to `/create`) also see the wrapper.
+
+    Tolerates sessions without `add_init_script` (unit-test stubs):
+    returns False so the caller can fall back to `install_fetch_capture`.
+    """
+    add_init = getattr(session, "add_init_script", None)
+    if not callable(add_init):
+        return False
+    add_init(_CAPTURE_SCRIPT)
+    return True
+
 
 def install_fetch_capture(session: Any) -> None:
-    """Wrap `window.fetch` so OCS sessionIds are captured client-side."""
-    _evaluate(session, _FETCH_CAPTURE_SCRIPT)
+    """Belt-and-suspenders inline install via `evaluate(...)`.
+
+    Idempotent against `install_capture_init_script` — the JS guards on
+    `window.__seren_capture_installed__` so the second install is a
+    no-op. Kept so test stubs that only implement `evaluate` continue to
+    drive the capture path, and so the legacy call site in
+    `open_create_form` still works on a contended host where the init
+    script for some reason didn't bind (e.g. cross-origin frame race).
+    """
+    _evaluate(session, _CAPTURE_SCRIPT)
 
 
 def read_captured_ocs_id(session: Any) -> str:
-    """Return the most recent OCS sessionId stashed by `install_fetch_capture`."""
+    """Return the most recent OCS sessionId stashed by the capture wrapper."""
     result = _evaluate(
         session,
         "(() => (window.__seren_capture__ && window.__seren_capture__.startOddsCalculation) || '')()",
     )
     return result if isinstance(result, str) else ""
+
+
+def read_capture_observations(session: Any) -> list[dict[str, Any]]:
+    """Return the diagnostic ring buffer of observed odds/graphql requests.
+
+    Used by the `ocs_session_id_not_captured` troubleshooting surface to
+    answer "did we observe any odds traffic at all, and what shape did
+    Prophet return?". Returns [] if the wrapper isn't installed or the
+    page hasn't issued any matching requests yet.
+    """
+    result = _evaluate(
+        session,
+        "(() => (window.__seren_capture__ && window.__seren_capture__.observed) || [])()",
+    )
+    if isinstance(result, list):
+        return [r for r in result if isinstance(r, dict)]
+    return []
 
 
 def poll_for_ocs_id(
@@ -100,6 +280,12 @@ def poll_for_ocs_id(
 
 
 def open_create_form(session: Any, *, question: str) -> None:
+    # Issue #655: install the capture wrapper at `document_start` BEFORE
+    # navigating to `/create`, so it's in place for every fetch/XHR that
+    # Prophet's bootstrap fires. The inline install below is a fallback
+    # for test stubs (and any pathological page where the init script
+    # didn't bind in time).
+    install_capture_init_script(session)
     session.navigate(PROPHET_CREATE_URL)
     session.wait_for(SEL_QUESTION_INPUT, timeout_ms=30_000)
     install_fetch_capture(session)
