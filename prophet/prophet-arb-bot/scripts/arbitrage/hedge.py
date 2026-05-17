@@ -89,7 +89,7 @@ def assess_polymarket_depth(
     book_payload: dict[str, Any],
     target_size_usdc: float,
     hedge_side: str,
-    max_slippage_bps: float = 200.0,
+    max_slippage_bps: float = 100.0,
 ) -> DepthAssessment:
     """Pure function. Given a polymarket-data book snapshot, decide
     whether the visible depth can absorb a hedge of ``target_size_usdc``

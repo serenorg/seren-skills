@@ -306,12 +306,26 @@ def discover_arb_candidates_with_stats(
             continue
         if not isinstance(question, str) or not question:
             continue
-        markets_passing_gates += 1
-        if len(keepers) >= max_count:
-            continue
         category = _extract_category(raw)
         slug = raw.get("slug")
         slug_str = slug if isinstance(slug, str) and slug else None
+        # #633 — quality filter. Reject markets whose question text
+        # matches known-ambiguous resolution patterns (tweet-count
+        # buckets, subjective political events, date-bounded
+        # geopolitical), accept only patterns that resolve on
+        # objective criteria (sports vs-match, binary financial
+        # threshold, named election). Runs BEFORE incrementing
+        # `markets_passing_gates` so the run summary reflects only
+        # markets the bot would actually want to pair.
+        from discovery.market_quality import is_high_quality_resolution
+
+        if not is_high_quality_resolution(
+            question=question, category=category, slug=slug_str
+        ):
+            continue
+        markets_passing_gates += 1
+        if len(keepers) >= max_count:
+            continue
         keepers.append(
             PolymarketSource(
                 polymarket_market_id=market_id,
