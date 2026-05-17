@@ -45,6 +45,10 @@ from .prophet_pair_lookup import find_matching_prophet_markets
 SOURCE_SKILL = "prophet-arb-bot"
 SKILL_SLUG = "prophet-arb-bot"
 DEFAULT_INITIAL_BET_USDC = 1.0
+# Issue #652: per-entry wall-clock budget for the /create UI driver. 5
+# minutes covers Prophet's 60-180s AI seed calc plus every Playwright
+# round-trip with comfortable headroom on a contended host.
+DEFAULT_CREATE_MARKET_ENTRY_BUDGET_SECONDS = 300.0
 
 
 @dataclass
@@ -58,6 +62,9 @@ class AutoDiscoverConfig:
     resolution_deadline_iso: str = "2026-05-24T23:59:59Z"
     max_candidates: int = DEFAULT_AUTO_DISCOVER_MAX_CANDIDATES
     initial_bet_usdc: float = DEFAULT_INITIAL_BET_USDC
+    create_market_entry_budget_seconds: float = (
+        DEFAULT_CREATE_MARKET_ENTRY_BUDGET_SECONDS
+    )
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "AutoDiscoverConfig":
@@ -73,6 +80,12 @@ class AutoDiscoverConfig:
                 raw.get("max_candidates", DEFAULT_AUTO_DISCOVER_MAX_CANDIDATES)
             ),
             initial_bet_usdc=float(raw.get("initial_bet_usdc", DEFAULT_INITIAL_BET_USDC)),
+            create_market_entry_budget_seconds=float(
+                raw.get(
+                    "create_market_entry_budget_seconds",
+                    DEFAULT_CREATE_MARKET_ENTRY_BUDGET_SECONDS,
+                )
+            ),
         )
 
 

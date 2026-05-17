@@ -1,42 +1,36 @@
-"""Issue #649: elevated first-call timeout for cold Chromium launch.
+"""Issue #652: the gateway's per-`tools/call` ceiling is no longer the
+real failure cap.
 
-After #647 cleared peer-MCP contention, the first `tools/call` after
-`__enter__` still timed out at 30s because the bundled MCP child does a
-lazy `chromium.launch()` on the first tool invocation — and on a host
-with a long-running operator Chrome instance, the system-Chrome cold
-start can stretch past 30s for Gatekeeper + LaunchServices + stealth
-evasion module loads.
+The per-entry budget on the `/create` driver
+(`test_create_market_via_ui_entry_budget.py`) is the real cap. Per-call
+ceilings exist only to detect a dead MCP stdio stream, so the steady-
+state ceiling is raised to 180s and the bespoke first-call branch from
+#649 is removed.
 
-These are the only tests required to pin the fix:
+These are the only tests required to pin the gateway side of #652:
 
-- `test_first_tool_call_uses_elevated_cold_launch_timeout`: the first
-  `tools/call` after `__enter__` must use ``first_call_timeout_seconds``,
-  not the steady-state ``timeout_seconds``. Without this elevation the
-  fix is a no-op.
-- `test_subsequent_tool_calls_use_steady_state_timeout`: after the first
-  successful tool call, subsequent calls revert to the tighter
-  ``timeout_seconds``. Without this, every later call would inherit the
-  elevated timeout and we'd lose responsiveness for steady-state stalls.
-- `test_first_call_timeout_error_carries_phase_marker`: when the first
-  call DOES time out, the TimeoutError message must embed
-  ``phase=cold_launch`` so operators can disambiguate from
-  steady-state stalls in logs.
+- `test_gateway_default_per_call_floor_is_180_seconds`: the constant
+  bump is load-bearing. Without it we'd still fail at 30s on a contended
+  host before the per-entry budget ever has a chance to enforce.
+- `test_first_tools_call_timeout_still_carries_phase_marker`: the
+  `phase=cold_launch` annotation is retained as diagnostic-only
+  instrumentation. Without this regression test the marker can be
+  silently dropped during refactors.
 """
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from otp_worker import playwright_mcp_gateway as pmg
 from otp_worker import playwright_mcp_lifecycle as lifecycle
-from otp_worker.playwright_mcp_gateway import PlaywrightStealthGateway
-
-STUB_SERVER = Path(__file__).parent / "fixtures" / "stub_playwright_mcp_server.py"
+from otp_worker.playwright_mcp_gateway import (
+    DEFAULT_TIMEOUT_SECONDS,
+    PlaywrightStealthGateway,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -50,84 +44,34 @@ def _no_cleanup(monkeypatch):
     )
 
 
-def _record_timeouts(monkeypatch) -> list[float]:
-    """Patch ``_read_exact`` to capture every timeout the gateway passes
-    in, and return the list. The stub server always responds quickly, so
-    the function still completes normally; we just observe the timeouts.
+def test_gateway_default_per_call_floor_is_180_seconds() -> None:
+    """#652: per-call ceiling raised to 180s, no first-call carve-out.
+
+    180s is comfortably above any single contended `tools/call` we've
+    observed on the heavy-Chrome failure profile that produced #651,
+    while still surfacing a truly hung stdio stream within one per-entry
+    budget window (default 300s). If this is ever silently dropped back
+    to 30s, the per-call ceiling becomes the de-facto cap again and the
+    per-entry budget can no longer protect every stage.
     """
-    captured: list[float] = []
-    real_read_exact = pmg._read_exact
-
-    def wrapped(fd: int, size: int, timeout_seconds: float) -> bytes:
-        captured.append(timeout_seconds)
-        return real_read_exact(fd, size, timeout_seconds)
-
-    monkeypatch.setattr(pmg, "_read_exact", wrapped)
-    return captured
-
-
-def test_first_tool_call_uses_elevated_cold_launch_timeout(monkeypatch, tmp_path):
-    """First `tools/call` after `__enter__` must use first_call_timeout_seconds.
-
-    `__enter__` itself runs `initialize` under the steady-state timeout
-    (the handshake is cheap). The cold launch happens inside the FIRST
-    `tools/call`, so that one call MUST get the elevated budget.
-    """
-    log_path = tmp_path / "stub_log.jsonl"
-    timeouts = _record_timeouts(monkeypatch)
-
-    with PlaywrightStealthGateway(
-        command=[sys.executable, str(STUB_SERVER), str(log_path)],
-        timeout_seconds=7.0,
-        first_call_timeout_seconds=99.0,
-    ) as gateway:
-        gateway.playwright_navigate(url="https://app.prophetmarket.ai")
-
-    # __enter__ does `initialize` (one or more _read_exact calls) under
-    # the steady-state timeout, then the first tools/call uses the
-    # elevated timeout for every _read_exact it issues.
-    assert 99.0 in timeouts, (
-        "first tools/call after __enter__ must use first_call_timeout_seconds; "
-        f"observed timeouts={timeouts!r}"
-    )
-    assert all(t in (7.0, 99.0) for t in timeouts), (
-        "timeouts must be drawn from either steady-state or first-call values; "
-        f"observed timeouts={timeouts!r}"
+    assert DEFAULT_TIMEOUT_SECONDS == 180.0
+    # No vestigial first-call constant should still exist after #652.
+    assert not hasattr(pmg, "DEFAULT_FIRST_CALL_TIMEOUT_SECONDS"), (
+        "DEFAULT_FIRST_CALL_TIMEOUT_SECONDS was removed in #652; if you "
+        "see this assertion fail, the first-call carve-out has been "
+        "reintroduced and the gateway is back to per-stage policing."
     )
 
 
-def test_subsequent_tool_calls_use_steady_state_timeout(monkeypatch, tmp_path):
-    """After the first tools/call, later calls drop back to timeout_seconds."""
-    log_path = tmp_path / "stub_log.jsonl"
-    timeouts = _record_timeouts(monkeypatch)
+def test_first_tools_call_timeout_still_carries_phase_marker(monkeypatch, tmp_path):
+    """`phase=cold_launch` stays as diagnostic-only instrumentation.
 
-    with PlaywrightStealthGateway(
-        command=[sys.executable, str(STUB_SERVER), str(log_path)],
-        timeout_seconds=7.0,
-        first_call_timeout_seconds=99.0,
-    ) as gateway:
-        gateway.playwright_navigate(url="https://app.prophetmarket.ai")
-        # Reset the captured list so we only see timeouts from the SECOND call.
-        timeouts.clear()
-        gateway.playwright_navigate(url="https://example.com")
-
-    assert timeouts, "second tools/call must issue at least one read"
-    assert 99.0 not in timeouts, (
-        "second tools/call must NOT reuse the elevated first-call timeout; "
-        f"observed timeouts={timeouts!r}"
-    )
-    assert all(t == 7.0 for t in timeouts), (
-        "after first-call elevation, steady-state calls must use timeout_seconds; "
-        f"observed timeouts={timeouts!r}"
-    )
-
-
-def test_first_call_timeout_error_carries_phase_marker(monkeypatch, tmp_path):
-    """If the first tools/call itself times out, surface phase=cold_launch.
-
-    We use a stub server that responds to `initialize` but hangs on
-    `tools/call`, so the elevated timeout fires while we are inside the
-    cold-launch phase. A short first-call timeout keeps the test fast.
+    The per-entry budget handles the actual failure path; this marker
+    just lets operators tell at-a-glance whether the budget was eaten
+    by the cold Chromium launch (the bundled MCP child does this lazily
+    on the FIRST `tools/call`) or by later steady-state stages. Removing
+    it would not change correctness but would meaningfully degrade
+    diagnostics, so we pin it.
     """
     hanging_stub = tmp_path / "hanging_stub.py"
     hanging_stub.write_text(
@@ -167,19 +111,18 @@ def test_first_call_timeout_error_carries_phase_marker(monkeypatch, tmp_path):
         "            'serverInfo': {'name': 'hanging-stub', 'version': '0'},\n"
         "        }})\n"
         "    elif msg.get('method') == 'tools/call':\n"
-        "        time.sleep(60)  # exceed test first-call timeout\n"
+        "        time.sleep(60)  # exceed test per-call timeout\n"
     )
 
     with PlaywrightStealthGateway(
         command=[sys.executable, str(hanging_stub)],
-        timeout_seconds=0.2,
-        first_call_timeout_seconds=0.5,
+        timeout_seconds=0.3,
     ) as gateway:
         with pytest.raises(TimeoutError) as excinfo:
             gateway.playwright_navigate(url="https://app.prophetmarket.ai")
 
     msg = str(excinfo.value)
     assert "phase=cold_launch" in msg, (
-        "first-call TimeoutError must embed `phase=cold_launch` so operators "
-        f"can disambiguate from steady-state stalls; got: {msg!r}"
+        "first tools/call TimeoutError must embed `phase=cold_launch` so "
+        f"operators can disambiguate from steady-state stalls; got: {msg!r}"
     )
