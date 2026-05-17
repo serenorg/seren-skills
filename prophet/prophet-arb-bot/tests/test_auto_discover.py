@@ -30,6 +30,7 @@ from discovery.auto_discover import (
     _build_pending_entry,
     run_auto_discover,
 )
+from discovery.seed_qualifier import qualify_and_trim_pending
 from discovery.prophet_pair_lookup import (
     _normalize_question,
     find_matching_prophet_markets,
@@ -153,6 +154,63 @@ def test_discover_caps_at_max_candidates() -> None:
         now=NOW_TS,
     )
     assert len(out) == 10
+
+
+def test_default_auto_discover_checks_later_candidates_before_no_pending_work(
+    tmp_path,
+) -> None:
+    """Regression for #627.
+
+    The first 50 candidates can all fail seed hedge preflight. The
+    default auto-discover window must still include later candidates so
+    a hedge-qualified row at position 51 is not missed.
+    """
+    rows = [
+        _row(
+            condition_id=f"cond_{i:03d}",
+            question=f"Will event {i} resolve?",
+            volume_24h=100_000.0 - i,
+            end_offset_hours=72,
+        )
+        for i in range(60)
+    ]
+
+    class _NoProphetMatches:
+        def markets_for_dedup(self, *, jwt, limit):
+            return []
+
+    result = run_auto_discover(
+        gateway=_StubGateway(rows),
+        prophet_client=_NoProphetMatches(),
+        jwt="eyJ.fake.jwt",
+        target=None,
+        config=AutoDiscoverConfig(
+            enabled=True,
+            min_24h_volume_usd=10_000.0,
+            min_headroom_hours=24.0,
+            resolution_deadline_iso=DEADLINE.isoformat(),
+        ),
+        sheet_output_dir=tmp_path,
+        now=NOW_TS,
+    )
+
+    assert result.raw_markets_fetched == 60
+    assert result.markets_passing_gates == 60
+    assert result.candidates_found == 60
+    assert result.candidates_evaluated_for_pairing == 60
+
+    def first_50_fail(market_id: str, size_usdc: float, max_slippage_bps: float) -> bool:
+        return market_id == "cond_050"
+
+    decision = qualify_and_trim_pending(
+        pending=result.pending_ui_submission,
+        max_fundable_count=1,
+        initial_bet_usdc=1.0,
+        depth_assessor=first_50_fail,
+        max_hedge_slippage_bps=200.0,
+    )
+
+    assert [e["polymarket_market_id"] for e in decision.qualified] == ["cond_050"]
 
 
 # ---------------------------------------------------------------------------
