@@ -3,6 +3,7 @@ include the API Key Setup section with existing-auth checks before registration.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,13 @@ SKILLS_WITH_SETUP_SECTION: list[str] = [
     if s not in {
         "curve/curve-gauge-yield-trader",
     }
+]
+
+WINDOWS_BUNDLED_PYTHON_PHRASES: list[str] = [
+    "Seren Desktop bundles Python on Windows",
+    "bundled `python3.exe`",
+    "Do not translate `python3` to `python`",
+    "do not ask the user to install system Python",
 ]
 
 
@@ -98,3 +106,17 @@ def test_api_key_setup_warns_against_duplicate_accounts(skill: str) -> None:
     assert "Do not create a new account if a key already exists" in content, (
         f"{skill}/SKILL.md missing duplicate-account warning"
     )
+
+
+@pytest.mark.parametrize("skill", TAARIQ_SKILLS, ids=TAARIQ_SKILLS)
+def test_taariq_python_skills_document_seren_desktop_windows_python(skill: str) -> None:
+    """Issue #644: Taariq-authored Python skills must use Desktop's bundled
+    Python on Windows instead of requiring system Python."""
+    content = _read_skill(skill)
+    if not re.search(r"\bpython(?:3)?\b|pip|\.venv", content, re.IGNORECASE):
+        pytest.skip(f"{skill}/SKILL.md does not document Python execution")
+
+    for phrase in WINDOWS_BUNDLED_PYTHON_PHRASES:
+        assert phrase in content, (
+            f"{skill}/SKILL.md missing Windows bundled Python directive phrase: {phrase!r}"
+        )
