@@ -559,8 +559,19 @@ Per-entry blocking reasons surfaced in `ui_submission_results.reason`:
 - `warm_context_corrupted` — the shared browser context lost observable
   Prophet auth after an entry. That entry is skipped; the bot tears down
   and restores a fresh context before attempting the next pending entry.
-- `ocs_session_id_not_captured` — the `startOddsCalculation` response
-  didn't carry a `sessionId` within the capture timeout. Retry next tick.
+- `ocs_session_id_not_captured` — the capture shim did not observe a
+  Prophet odds-session response within the poll window. Since #655 the
+  shim is installed via `add_init_script` at `document_start` (so the
+  wrapper is in place before Prophet's bootstrap fires), wraps both
+  `window.fetch` and `XMLHttpRequest`, matches any URL containing
+  `graphql` or `odds`, and walks responses recursively for a
+  `sessionId`/`session_id`/`oddsSessionId` field under any `odds`-shaped
+  ancestor — so this blocker should be rare. When it does fire, dump
+  the diagnostic ring buffer via `create_market_ui.read_capture_observations(session)`
+  to see whether *any* odds traffic was observed; an empty buffer points
+  to a transport Prophet adopted that neither `fetch` nor `XHR` covers,
+  while a non-empty buffer with `ok: false` rows points to schema drift
+  beyond the recursive walker's reach.
 - `odds_session_not_completed` / `odds_session_timeout` /
   `prophet_market_not_viable` / `no_edge` — Prophet's AI rejected or
   did not justify a seed bet. Abandon the entry; no exposure was created.
