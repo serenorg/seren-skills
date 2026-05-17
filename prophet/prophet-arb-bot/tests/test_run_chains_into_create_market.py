@@ -157,3 +157,188 @@ def test_run_chains_into_create_market_per_pending_ui_submission(
     # the early-return path since `list_arb_pairs` returns [] both before
     # and after the UI chain in this stub).
     assert result.status == "ok"
+
+
+class _FreshCacheEntry:
+    jwt = "eyJ.fresh.jwt"
+    refresh_token = "rt_fresh"
+    prophet_viewer_id = "vid_x"
+    state = "fresh"
+
+
+class _FakeWarmGateway:
+    instances: list["_FakeWarmGateway"] = []
+    enter_count = 0
+
+    def __init__(self) -> None:
+        self.resets = 0
+        self.health_checks = 0
+        self.exited = False
+        _FakeWarmGateway.instances.append(self)
+
+    def __enter__(self) -> "_FakeWarmGateway":
+        _FakeWarmGateway.enter_count += 1
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.exited = True
+
+    def reset_for_next_entry(self) -> None:
+        self.resets += 1
+
+    def is_session_healthy(self) -> bool:
+        self.health_checks += 1
+        return True
+
+
+class _FakeBrowserSession:
+    enter_count = 0
+    exit_count = 0
+
+    def __init__(self, *, gateway: Any, headless: bool = True) -> None:
+        self.gateway = gateway
+        self.headless = headless
+
+    def __enter__(self) -> "_FakeBrowserSession":
+        _FakeBrowserSession.enter_count += 1
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        _FakeBrowserSession.exit_count += 1
+
+
+def _patch_common_pending_run(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pending: list[dict[str, Any]],
+) -> None:
+    monkeypatch.setattr(agent, "RunRecorder", _Recorder)
+    monkeypatch.setattr(agent, "_resolve_target", lambda config: object())
+    monkeypatch.setattr(agent, "_acquire_jwt", lambda **kwargs: ("eyJ.jwt", "vid_1", "cache"))
+    monkeypatch.setattr(agent, "list_arb_pairs", lambda target: [])
+    monkeypatch.setattr(
+        agent,
+        "run_auto_discover",
+        lambda **kwargs: AutoDiscoverResult(
+            candidates_found=len(pending),
+            already_paired=0,
+            raw_markets_fetched=len(pending),
+            markets_passing_gates=len(pending),
+            candidates_evaluated_for_pairing=len(pending),
+            max_candidates=250,
+            auto_paired=[],
+            pending_ui_submission=list(pending),
+        ),
+    )
+    monkeypatch.setattr(agent, "_apply_seed_preflight_and_trim", lambda **kwargs: None)
+    monkeypatch.setattr(
+        agent._playwright_mcp_gateway.PlaywrightStealthGateway,
+        "_resolve_default_command",
+        classmethod(lambda cls: ["stub-playwright-stealth"]),
+    )
+    monkeypatch.setattr(agent, "PlaywrightStealthGateway", _FakeWarmGateway)
+    monkeypatch.setattr(agent, "RealBrowserSession", _FakeBrowserSession)
+    monkeypatch.setattr(
+        agent,
+        "establish_browser_session_for_create",
+        lambda **kwargs: _FreshCacheEntry(),
+    )
+
+
+def test_run_reuses_one_warm_playwright_context_for_pending_ui_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #654: an N-entry cycle pays the MCP/Chromium cold start once."""
+
+    _FakeWarmGateway.instances = []
+    _FakeWarmGateway.enter_count = 0
+    _FakeBrowserSession.enter_count = 0
+    _FakeBrowserSession.exit_count = 0
+    pending = [
+        _pending("cond_a", question="Question A?"),
+        _pending("cond_b", question="Question B?"),
+        _pending("cond_c", question="Question C?"),
+    ]
+    _patch_common_pending_run(monkeypatch, pending=pending)
+
+    inner_calls: list[dict[str, Any]] = []
+
+    def fake_inner(**kwargs: Any) -> CycleResult:
+        inner_calls.append(dict(kwargs))
+        cid = kwargs["polymarket_condition_id"]
+        return CycleResult(
+            status="ok",
+            reason="pair_created",
+            payload={"prophet_market_id": f"pm_{cid}"},
+        )
+
+    monkeypatch.setattr(agent, "_run_create_market_via_ui_inner", fake_inner)
+
+    result = agent.cmd_run(
+        config=_config(),
+        gateway=object(),
+        yes_live=True,
+        transport=object(),
+        hedger=object(),
+    )
+
+    assert result.status == "ok"
+    assert _FakeWarmGateway.enter_count == 1
+    assert _FakeBrowserSession.enter_count == 1
+    assert _FakeBrowserSession.exit_count == 1
+    assert len(inner_calls) == 3
+    assert {id(call["session"]) for call in inner_calls} == {id(inner_calls[0]["session"])}
+    assert {call["cache_entry"].jwt for call in inner_calls} == {"eyJ.fresh.jwt"}
+    assert _FakeWarmGateway.instances[0].resets == 2
+
+
+def test_run_reopens_warm_playwright_context_after_corruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #654: a corrupted warm context blocks one entry, then recovers."""
+
+    class FlakyWarmGateway(_FakeWarmGateway):
+        def is_session_healthy(self) -> bool:
+            self.health_checks += 1
+            # The first context corrupts after its first entry. The reopened
+            # context stays healthy for the next pending entry.
+            return _FakeWarmGateway.enter_count > 1
+
+    _FakeWarmGateway.instances = []
+    _FakeWarmGateway.enter_count = 0
+    _FakeBrowserSession.enter_count = 0
+    _FakeBrowserSession.exit_count = 0
+    pending = [
+        _pending("cond_bad", question="Question bad?"),
+        _pending("cond_ok", question="Question ok?"),
+    ]
+    _patch_common_pending_run(monkeypatch, pending=pending)
+    monkeypatch.setattr(agent, "PlaywrightStealthGateway", FlakyWarmGateway)
+
+    def fake_inner(**kwargs: Any) -> CycleResult:
+        cid = kwargs["polymarket_condition_id"]
+        return CycleResult(
+            status="ok",
+            reason="pair_created",
+            payload={"prophet_market_id": f"pm_{cid}"},
+        )
+
+    monkeypatch.setattr(agent, "_run_create_market_via_ui_inner", fake_inner)
+
+    result = agent.cmd_run(
+        config=_config(),
+        gateway=object(),
+        yes_live=True,
+        transport=object(),
+        hedger=object(),
+    )
+
+    ui_results = result.payload.get("ui_submission_results")
+    assert [r["polymarket_condition_id"] for r in ui_results] == ["cond_bad", "cond_ok"]
+    assert ui_results[0]["status"] == "blocked"
+    assert ui_results[0]["reason"] == "warm_context_corrupted"
+    assert ui_results[1]["status"] == "ok"
+    assert ui_results[1]["reason"] == "pair_created"
+    assert _FakeWarmGateway.enter_count == 2
+    assert _FakeBrowserSession.enter_count == 2
+    assert _FakeBrowserSession.exit_count == 2

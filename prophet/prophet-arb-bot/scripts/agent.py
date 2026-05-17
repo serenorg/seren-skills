@@ -1091,44 +1091,139 @@ def cmd_run(
         and not skip_ui_submission
     ):
         ui_submission_invoked = True
-        creator = create_market_via_ui or cmd_create_market_via_ui
         total_entries = len(pending_ui_submission)
-        for idx, entry in enumerate(pending_ui_submission, start=1):
-            progress.emit(
-                "entry_start",
-                idx=idx,
-                total=total_entries,
-                question=entry.get("question", "")[:120],
-                polymarket_condition_id=entry.get("polymarket_market_id", ""),
-            )
-            sub = creator(
-                config=config,
-                gateway=gateway,
-                transport=transport,
-                polymarket_condition_id=entry.get("polymarket_market_id", ""),
-                question=entry.get("question", ""),
-                category_slug=entry.get("category_slug", ""),
-                initial_bet_usdc=float(entry.get("initial_bet_usdc", 1.0)),
-                progress=progress,
-                entry_idx=idx,
-                entry_total=total_entries,
-            )
-            ui_submission_results.append(
-                {
-                    "polymarket_condition_id": entry.get("polymarket_market_id", ""),
-                    "status": sub.status,
-                    "reason": sub.reason,
-                    "prophet_market_id": sub.payload.get("prophet_market_id", ""),
-                }
-            )
-            if sub.status == "ok":
+        if create_market_via_ui is not None:
+            creator = create_market_via_ui
+            for idx, entry in enumerate(pending_ui_submission, start=1):
                 progress.emit(
-                    "pair_created",
+                    "entry_start",
                     idx=idx,
-                    prophet_market_id=sub.payload.get("prophet_market_id", ""),
+                    total=total_entries,
+                    question=entry.get("question", "")[:120],
+                    polymarket_condition_id=entry.get("polymarket_market_id", ""),
                 )
-            else:
-                progress.emit("entry_blocked", idx=idx, reason=sub.reason)
+                sub = creator(
+                    config=config,
+                    gateway=gateway,
+                    transport=transport,
+                    polymarket_condition_id=entry.get("polymarket_market_id", ""),
+                    question=entry.get("question", ""),
+                    category_slug=entry.get("category_slug", ""),
+                    initial_bet_usdc=float(entry.get("initial_bet_usdc", 1.0)),
+                    progress=progress,
+                    entry_idx=idx,
+                    entry_total=total_entries,
+                )
+                ui_submission_results.append(
+                    {
+                        "polymarket_condition_id": entry.get("polymarket_market_id", ""),
+                        "status": sub.status,
+                        "reason": sub.reason,
+                        "prophet_market_id": sub.payload.get("prophet_market_id", ""),
+                    }
+                )
+                if sub.status == "ok":
+                    progress.emit(
+                        "pair_created",
+                        idx=idx,
+                        prophet_market_id=sub.payload.get("prophet_market_id", ""),
+                    )
+                else:
+                    progress.emit("entry_blocked", idx=idx, reason=sub.reason)
+        else:
+            try:
+                from otp_worker import create_market_ui as create_market_ui_module
+
+                with _WarmCreateMarketUiContext(
+                    config=config,
+                    gateway=gateway,
+                    transport=transport,
+                ) as warm:
+                    progress.emit("prophet_session_restored", idx=1)
+                    for idx, entry in enumerate(pending_ui_submission, start=1):
+                        progress.emit(
+                            "entry_start",
+                            idx=idx,
+                            total=total_entries,
+                            question=entry.get("question", "")[:120],
+                            polymarket_condition_id=entry.get("polymarket_market_id", ""),
+                        )
+                        payload = {
+                            "polymarket_condition_id": entry.get("polymarket_market_id", ""),
+                            "question": entry.get("question", ""),
+                        }
+                        try:
+                            sub = _run_create_market_via_ui_inner(
+                                config=config,
+                                gateway=gateway,
+                                transport=transport,
+                                cache_entry=warm.cache_entry,
+                                polymarket_condition_id=entry.get("polymarket_market_id", ""),
+                                question=entry.get("question", ""),
+                                initial_bet_usdc=float(entry.get("initial_bet_usdc", 1.0)),
+                                session=warm.session,
+                                create_market_ui=create_market_ui_module,
+                                compute_seed_intent=cmd_compute_seed_intent,
+                                record_created_market=cmd_record_created_market,
+                                payload=payload,
+                                progress=progress,
+                                entry_idx=idx,
+                                entry_budget_seconds=float(
+                                    config.auto_discover.create_market_entry_budget_seconds
+                                ),
+                            )
+                        except Exception as exc:
+                            payload["error"] = f"{type(exc).__name__}:{str(exc)[:200]}"
+                            sub = CycleResult(
+                                status="blocked",
+                                reason="create_market_via_ui_unexpected",
+                                payload=payload,
+                            )
+                        if not warm.is_session_healthy():
+                            sub = CycleResult(
+                                status="blocked",
+                                reason="warm_context_corrupted",
+                                payload=payload,
+                            )
+                            if idx < total_entries:
+                                warm.reopen()
+                                progress.emit("prophet_session_restored", idx=idx + 1)
+                        elif idx < total_entries:
+                            try:
+                                warm.reset_for_next_entry()
+                            except Exception:
+                                warm.reopen()
+                                progress.emit("prophet_session_restored", idx=idx + 1)
+                        ui_submission_results.append(
+                            {
+                                "polymarket_condition_id": entry.get("polymarket_market_id", ""),
+                                "status": sub.status,
+                                "reason": sub.reason,
+                                "prophet_market_id": sub.payload.get("prophet_market_id", ""),
+                            }
+                        )
+                        if sub.status == "ok":
+                            progress.emit(
+                                "pair_created",
+                                idx=idx,
+                                prophet_market_id=sub.payload.get("prophet_market_id", ""),
+                            )
+                        else:
+                            progress.emit("entry_blocked", idx=idx, reason=sub.reason)
+            except PlaywrightMcpUnavailable:
+                return _finish(CycleResult(
+                    status="blocked",
+                    reason="seren_desktop_playwright_mcp_unavailable",
+                    payload=recorder.finish(
+                        "blocked", "seren_desktop_playwright_mcp_unavailable"
+                    ),
+                ))
+            except SessionEstablishmentFailed as exc:
+                return _finish(CycleResult(
+                    status="blocked",
+                    reason="prophet_session_unavailable",
+                    payload=recorder.finish("blocked", exc.reason),
+                ))
         # Newly-created markets become arb_pairs via record-created-market's
         # UPSERT inside cmd_create_market_via_ui — refresh `pairs` so the
         # scoring loop trades them this same cycle.
@@ -2228,6 +2323,109 @@ def _default_browser_session_factory() -> Any:
                 self._gw.__exit__(exc_type, exc, tb)
 
     return _SessionScope()
+
+
+class _WarmCreateMarketUiContext:
+    """Cycle-scoped Playwright context for #654 pending-ui batches."""
+
+    def __init__(
+        self,
+        *,
+        config: AgentConfig,
+        gateway: HttpGateway,
+        transport: Any,
+    ) -> None:
+        if _playwright_mcp_gateway.PlaywrightStealthGateway._resolve_default_command() is None:
+            raise PlaywrightMcpUnavailable(
+                "No playwright-stealth MCP command resolvable."
+            )
+        self._config = config
+        self._gateway = gateway
+        self._transport = transport
+        self._pw_gateway: Any | None = None
+        self._session_scope: Any | None = None
+        self.session: Any | None = None
+        self.cache_entry: Any | None = None
+
+    def __enter__(self) -> "_WarmCreateMarketUiContext":
+        self._open()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self._close(exc_type, exc, tb)
+
+    def reopen(self) -> None:
+        self._close(None, None, None)
+        self._open()
+
+    def reset_for_next_entry(self) -> None:
+        if self._pw_gateway is None:
+            raise RuntimeError("warm Playwright gateway is not open")
+        self._pw_gateway.reset_for_next_entry()
+
+    def is_session_healthy(self) -> bool:
+        if self._pw_gateway is None:
+            return False
+        try:
+            return bool(self._pw_gateway.is_session_healthy())
+        except Exception:
+            return False
+
+    def _open(self) -> None:
+        pw_gateway = PlaywrightStealthGateway().__enter__()
+        try:
+            session_scope = RealBrowserSession(gateway=pw_gateway).__enter__()
+        except Exception:
+            pw_gateway.__exit__(None, None, None)
+            raise
+        inputs = getattr(self._config, "inputs", {}) or {}
+        email = str(inputs.get("prophet_email") or "")
+        provider = str(inputs.get("email_provider") or "")
+        try:
+            cache_entry = establish_browser_session_for_create(
+                session=session_scope,
+                email=email,
+                provider=provider,
+                seren_user_id="",
+                bounty_id="",
+                config_gateway=self._gateway,
+                transport=self._transport,
+                pw_gateway=pw_gateway,
+            )
+        except Exception:
+            try:
+                session_scope.__exit__(None, None, None)
+            finally:
+                pw_gateway.__exit__(None, None, None)
+            raise
+        if (
+            cache_entry is None
+            or not getattr(cache_entry, "jwt", "")
+            or not getattr(cache_entry, "refresh_token", "")
+        ):
+            try:
+                session_scope.__exit__(None, None, None)
+            finally:
+                pw_gateway.__exit__(None, None, None)
+            raise SessionEstablishmentFailed("prophet_session_unavailable")
+        self._pw_gateway = pw_gateway
+        self._session_scope = session_scope
+        self.session = session_scope
+        self.cache_entry = cache_entry
+
+    def _close(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        session_scope = self._session_scope
+        pw_gateway = self._pw_gateway
+        self._session_scope = None
+        self._pw_gateway = None
+        self.session = None
+        self.cache_entry = None
+        try:
+            if session_scope is not None:
+                session_scope.__exit__(exc_type, exc, tb)
+        finally:
+            if pw_gateway is not None:
+                pw_gateway.__exit__(exc_type, exc, tb)
 
 
 def _run_create_market_via_ui_inner(
