@@ -208,14 +208,21 @@ class Hedger(Protocol):
     def submit_hedge(
         self,
         *,
-        condition_id: str,
+        token_id: str,
         hedge_side: str,
         size_usdc: float,
         marketable_price: float,
     ) -> dict[str, Any]:
         """Submit a marketable limit hedge. Returns
         ``{polymarket_order_id, filled_qty, fill_price}``. Raises on
-        failure — the caller catches and routes to the unwind path."""
+        failure — the caller catches and routes to the unwind path.
+
+        #631: ``token_id`` is the uint256 decimal YES outcome token_id
+        from Polymarket Gamma's ``clobTokenIds[0]``. The CLOB rejects
+        condition_ids passed to ``create_order(token_id=…)``; the
+        parameter is named ``token_id`` to make that contract
+        structural — callers can no longer silently confuse the two.
+        """
         ...
 
     def unwind_prophet(self, *, order_id: str) -> None:
@@ -243,6 +250,7 @@ def hedge_filled_order(
     *,
     prophet_order: Any,
     polymarket_condition_id: str,
+    polymarket_yes_token_id: str,
     hedger: Hedger,
     marketable_price: float,
 ) -> HedgeOutcome:
@@ -254,6 +262,12 @@ def hedge_filled_order(
       - The hedger returns a result with a falsy ``polymarket_order_id``
         → same path; this shouldn't happen with the real CLOB but the
         guard is cheap and keeps the contract tight.
+
+    #631: ``polymarket_condition_id`` is the pair-identity (used by the
+    recorder and persistence); ``polymarket_yes_token_id`` is the
+    uint256-decimal YES outcome token_id from Gamma's clobTokenIds and
+    is what the CLOB actually needs for ``create_order``. The two are
+    distinct identifiers; passing one for the other silently fails.
     """
     hedge_side = _opposite_side(prophet_order.side)
     # Naming wart pinned in agent.py:475 — `place_order(shares=opp.size_usdc)`
@@ -266,7 +280,7 @@ def hedge_filled_order(
 
     try:
         result = hedger.submit_hedge(
-            condition_id=polymarket_condition_id,
+            token_id=polymarket_yes_token_id,
             hedge_side=hedge_side,
             size_usdc=filled_size_usdc,
             marketable_price=marketable_price,
@@ -319,6 +333,7 @@ def hedge_seed_bet(
     *,
     prophet_market_id: str = "",
     polymarket_condition_id: str,
+    polymarket_yes_token_id: str,
     prophet_seed_side: str,
     size_usdc: float,
     marketable_price: float,
@@ -335,12 +350,16 @@ def hedge_seed_bet(
     ``prophet_seed_side`` is the side the operator bet on Prophet
     (``"buy"`` for YES, ``"sell"`` for NO). The hedge takes the
     opposite side on Polymarket.
+
+    #631: ``polymarket_yes_token_id`` is the uint256-decimal YES outcome
+    token_id the CLOB requires for ``create_order``; condition_id is the
+    pair-identity used by the recorder and persistence.
     """
     hedge_side = _opposite_side(prophet_seed_side)
 
     try:
         result = hedger.submit_hedge(
-            condition_id=polymarket_condition_id,
+            token_id=polymarket_yes_token_id,
             hedge_side=hedge_side,
             size_usdc=float(size_usdc),
             marketable_price=float(marketable_price),
@@ -378,6 +397,7 @@ def hedge_seed_bet(
 def unwind_seed_hedge_after_prophet_decline(
     *,
     polymarket_condition_id: str,
+    polymarket_yes_token_id: str,
     prophet_seed_side: str,
     size_usdc: float,
     marketable_price: float,
@@ -389,6 +409,10 @@ def unwind_seed_hedge_after_prophet_decline(
     Polymarket is the recoverable leg. The original seed hedge used the
     opposite of ``prophet_seed_side``; the unwind therefore submits the
     same side as the intended Prophet seed.
+
+    #631: see ``hedge_seed_bet`` for the condition_id vs token_id
+    contract — the unwind needs the same token_id the original hedge
+    submitted with.
     """
     unwind_side = prophet_seed_side.lower()
     if unwind_side not in {"buy", "sell"}:
@@ -396,7 +420,7 @@ def unwind_seed_hedge_after_prophet_decline(
 
     try:
         result = hedger.submit_hedge(
-            condition_id=polymarket_condition_id,
+            token_id=polymarket_yes_token_id,
             hedge_side=unwind_side,
             size_usdc=float(size_usdc),
             marketable_price=float(marketable_price),

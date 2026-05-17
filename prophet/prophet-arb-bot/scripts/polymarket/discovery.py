@@ -22,9 +22,32 @@ JSON shape variations.
 
 from __future__ import annotations
 
+import json as _json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+
+def _extract_yes_token_id(raw: dict[str, Any]) -> str:
+    """Pull the YES outcome token_id from Polymarket Gamma's `clobTokenIds`.
+
+    Mirrors `polymarket_live.extract_token_id` but inlined here to keep
+    the discovery module free of the live-trading import chain. Gamma
+    returns `clobTokenIds` as either a JSON-encoded string (older
+    vintages) or a Python list of two uint256-decimal strings
+    (`[YES, NO]`); we accept both.
+    """
+    raw_value = raw.get("clobTokenIds")
+    if isinstance(raw_value, str):
+        try:
+            raw_value = _json.loads(raw_value)
+        except (TypeError, ValueError):
+            return ""
+    if isinstance(raw_value, list) and raw_value:
+        first = raw_value[0]
+        if isinstance(first, str) and first:
+            return first
+    return ""
 
 PUBLISHER = "polymarket-data"
 # Phase-14 live probe (2026-05-08): the seren `polymarket-data` publisher
@@ -51,6 +74,14 @@ class PolymarketSource:
     # Defaults to 0.0 so existing callers that don't set it keep working.
     volume_24h_usd: float = 0.0
     slug: str | None = None
+    # #631 — YES outcome token_id from Gamma's `clobTokenIds[0]`.
+    # Polymarket CLOB's `/book?token_id=` and `create_order(token_id=)`
+    # require the uint256 decimal token_id, NOT the hex condition_id.
+    # Without this field, every depth probe + hedge submission silently
+    # fails. Default "" so legacy fixtures (which don't carry the field)
+    # continue to load — the qualifier degrades to dropping the candidate
+    # when token_id is missing rather than passing condition_id by mistake.
+    polymarket_yes_token_id: str = ""
 
 
 @dataclass
@@ -116,6 +147,7 @@ def discover_polymarket_sources(
                 resolution_date=resolution_date,
                 category=category,
                 settled=False,
+                polymarket_yes_token_id=_extract_yes_token_id(raw),
             )
         )
     return keepers
@@ -289,6 +321,7 @@ def discover_arb_candidates_with_stats(
                 settled=False,
                 volume_24h_usd=volume_24h,
                 slug=slug_str,
+                polymarket_yes_token_id=_extract_yes_token_id(raw),
             )
         )
     stats = ArbCandidateDiscoveryStats(

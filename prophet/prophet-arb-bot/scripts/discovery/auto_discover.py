@@ -117,9 +117,19 @@ def _build_pending_entry(
 ) -> dict:
     """One ``pending_ui_submission`` entry. Field shape matches the
     bounty-runner's exactly (audited 2026-05-14) so the agent's existing
-    Playwright runbook handles both skills without branching."""
+    Playwright runbook handles both skills without branching.
+
+    #631: also carries ``polymarket_yes_token_id`` so the seed_qualifier's
+    depth_assessor can probe Polymarket book depth via the CLOB's
+    ``/book?token_id=`` endpoint without a separate runtime lookup. The
+    hex condition_id (``polymarket_market_id``) and the uint256-decimal
+    YES token_id are distinct identifiers; the CLOB rejects condition_id
+    where token_id is expected, which made every auto-discover candidate
+    fail as ``hedge_ineligible`` pre-fix.
+    """
     return {
         "polymarket_market_id": cand.polymarket_market_id,
+        "polymarket_yes_token_id": cand.polymarket_yes_token_id,
         "question": cand.question,
         "category": cand.category or "Other",
         "category_slug": _category_to_slug(cand.category),

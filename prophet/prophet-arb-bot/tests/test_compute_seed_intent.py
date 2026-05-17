@@ -157,9 +157,14 @@ def test_cmd_compute_seed_intent_success_emits_intent_envelope() -> None:
         captured["jwt"] = jwt
         return _completed_session(yes_fair_value_bps=5800)
 
-    def fake_fetch_book(condition_id: str) -> dict:
-        captured["condition_id"] = condition_id
+    def fake_fetch_book(token_id: str) -> dict:
+        # #631: fetch_book receives the YES token_id, not the condition_id.
+        captured["token_id"] = token_id
         return _book(best_bid=0.49, best_ask=0.51, tick_size="0.01")
+
+    def fake_resolve_token_id(*, gateway, polymarket_condition_id):
+        captured["resolver_condition_id"] = polymarket_condition_id
+        return "YES-TOKEN-0xabc"
 
     result = cmd_compute_seed_intent(
         config=_fake_config(),
@@ -170,12 +175,16 @@ def test_cmd_compute_seed_intent_success_emits_intent_envelope() -> None:
         jwt="eyJ...",
         poll=fake_poll,
         fetch_book=fake_fetch_book,
+        resolve_yes_token_id=fake_resolve_token_id,
     )
 
     assert result.status == "ok"
     assert result.reason == "seed_intent_ready"
     assert captured["session_id"] == "ocs_1"
-    assert captured["condition_id"] == "0xabc"
+    # #631: condition_id flows into the resolver; resolver returns the
+    # token_id; token_id (not condition_id) is what hits Polymarket CLOB.
+    assert captured["resolver_condition_id"] == "0xabc"
+    assert captured["token_id"] == "YES-TOKEN-0xabc"
     assert result.payload["seed_side"] == "buy"
     assert result.payload["hedge_side"] == "sell"
     assert result.payload["hedge_price"] == pytest.approx(0.49)
@@ -249,7 +258,7 @@ def test_cmd_compute_seed_intent_blocks_when_no_edge() -> None:
     def fake_poll(transport, *, jwt, session_id, **kwargs):
         return _completed_session(yes_fair_value_bps=5000)
 
-    def fake_fetch_book(condition_id: str) -> dict:
+    def fake_fetch_book(token_id: str) -> dict:
         return _book()
 
     result = cmd_compute_seed_intent(
@@ -261,6 +270,9 @@ def test_cmd_compute_seed_intent_blocks_when_no_edge() -> None:
         jwt="eyJ...",
         poll=fake_poll,
         fetch_book=fake_fetch_book,
+        # #631: short-circuit token_id resolution since this test only
+        # cares about the no_edge branch downstream.
+        resolve_yes_token_id=lambda *, gateway, polymarket_condition_id: "YES-TOKEN-0xabc",
     )
 
     assert result.status == "blocked"
@@ -286,7 +298,7 @@ def test_cmd_compute_seed_intent_auto_derives_polymarket_yes_price_from_midpoint
         # must be `buy` and edge_bps == 1800.
         return _completed_session(yes_fair_value_bps=6000)
 
-    def fake_fetch_book(condition_id: str) -> dict:
+    def fake_fetch_book(token_id: str) -> dict:
         return _book(best_bid=0.40, best_ask=0.44, tick_size="0.01")
 
     result = cmd_compute_seed_intent(
@@ -298,6 +310,9 @@ def test_cmd_compute_seed_intent_auto_derives_polymarket_yes_price_from_midpoint
         jwt="eyJ...",
         poll=fake_poll,
         fetch_book=fake_fetch_book,
+        # #631: short-circuit token_id resolution; this test focuses on
+        # midpoint-derivation behavior, not Gamma round-trips.
+        resolve_yes_token_id=lambda *, gateway, polymarket_condition_id: "YES-TOKEN-0xabc",
     )
 
     assert result.status == "ok"

@@ -32,6 +32,14 @@ class PolymarketPrice:
     last_trade_at: str | None = None
     liquidity_usdc: float = 0.0
     is_stale: bool = False
+    # #631 — YES outcome token_id (uint256 decimal) from Gamma's
+    # `clobTokenIds[0]`. Downstream consumers (depth assessor, hedge
+    # submission) MUST use this for any `/book?token_id=` or
+    # `create_order(token_id=)` call. Defaults to "" so legacy fixtures
+    # that don't carry clobTokenIds still construct cleanly; callers
+    # treat empty as "no hedge possible this cycle" rather than
+    # falling back to condition_id (the pre-fix bug).
+    yes_token_id: str = ""
 
 
 def fetch_market_price(
@@ -71,6 +79,7 @@ def fetch_market_price(
         last_trade_at=_safe_str(market.get("lastTradeAt") or market.get("updatedAt")),
         liquidity_usdc=_safe_float(market.get("liquidityNum") or market.get("liquidity")),
         is_stale=bool(market.get("closed")) or bool(market.get("resolved")),
+        yes_token_id=_extract_yes_token_id(market),
     )
 
 
@@ -162,6 +171,32 @@ def _extract_prices(market: dict[str, Any]) -> tuple[float, float]:
         midpoint = (best_bid + best_ask) / 2.0
         return midpoint, max(0.0, 1.0 - midpoint)
     return 0.0, 0.0
+
+
+def _extract_yes_token_id(market: dict[str, Any]) -> str:
+    """Pull the YES outcome token_id from Polymarket Gamma's `clobTokenIds`.
+
+    Gamma returns `clobTokenIds` as either a JSON-encoded string (older
+    vintages) or a list of two uint256-decimal strings (`[YES, NO]`).
+    Polymarket's CLOB `/book?token_id=` and `create_order(token_id=)`
+    require the uint256 decimal form; the hex condition_id is rejected
+    silently. Returns "" when the field is missing or malformed — the
+    caller treats empty as "no hedge possible" rather than falling back
+    to condition_id (the pre-#631 bug).
+    """
+    raw_value = market.get("clobTokenIds")
+    if isinstance(raw_value, str):
+        try:
+            import json
+
+            raw_value = json.loads(raw_value)
+        except (TypeError, ValueError):
+            return ""
+    if isinstance(raw_value, list) and raw_value:
+        first = raw_value[0]
+        if isinstance(first, str) and first:
+            return first
+    return ""
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
