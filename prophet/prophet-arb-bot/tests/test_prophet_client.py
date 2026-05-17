@@ -2,20 +2,27 @@
 
 Coverage:
   - test_markets_for_dedup_uses_relay_connection_and_unwraps_edges:
-    Pins the live Prophet schema shape for the `markets` root query (#614).
-    Prophet's GraphQL exposes `markets(input: MarketsInput): MarketConnection!`
-    where `MarketConnection { edges { node, cursor }, pageInfo, totalCount }`.
-    The legacy query selected `id slug question resolutionDate` directly on
-    `MarketConnection`, which Prophet rejects with a HTTP 422 +
-    `GRAPHQL_VALIDATION_FAILED: Cannot query field "id" on type
-    "MarketConnection"`. The fix sends the connection-shaped selection set
-    and unwraps `edges[].node` so the caller contract
-    (`find_matching_prophet_markets` expects a flat `[{id, question, ...}]`
-    list) is preserved.
+    Pins the live Prophet schema shape for the `markets` root query.
+    Three drift axes are covered in this one test because they all
+    travel together — a regression in any axis silently disables
+    auto-pair and ships the bot back to the 0/50 manual-creation
+    failure mode.
 
-    A single test covers both legs of the contract: the wire shape going
-    out (proves we ask for what Prophet's schema accepts) and the return
-    shape coming back (proves callers don't break).
+      Axis 1 (#614): response shape. Prophet exposes
+        `markets(input: MarketsInput): MarketConnection!` where
+        `MarketConnection { edges{node,cursor}, pageInfo, totalCount }`.
+        Legacy `markets { id slug ... }` was rejected with HTTP 422 +
+        `Cannot query field "id" on type "MarketConnection"`.
+      Axis 2 (#621): input pagination. `MarketsInput` does NOT accept
+        `limit` — it uses Relay-style `first: Int` cursor pagination.
+        Surfaced as `unknown field` at `variable.input.limit`.
+      Axis 3 (#621): input filter. `status` is not a top-level field of
+        `MarketsInput`; it lives at `filter.status: MarketStatus` and
+        the enum is uppercase (`OPEN`, not `"active"`).
+
+    The test pins both the wire-shape (query string and variables
+    structure Prophet's schema accepts) and the return-shape
+    (`find_matching_prophet_markets` reads flat `{id, question}` dicts).
 """
 
 from __future__ import annotations
@@ -63,16 +70,32 @@ def test_markets_for_dedup_uses_relay_connection_and_unwraps_edges(
     client = MinimalProphetClient(transport=stub_transport)
     result = client.markets_for_dedup(jwt="eyJ.fake.jwt", limit=200)
 
-    # --- Wire-shape contract (what Prophet's schema accepts) ----------
-    sent = stub_transport.calls[0]["query"]
-    # The selection set must use the Relay connection pattern; the
-    # legacy `markets { id slug question resolutionDate }` form is what
-    # production rejected with HTTP 422.
-    assert "edges" in sent, "markets query must select edges (Relay connection)"
-    assert "node" in sent, "markets query must select node fields under edges"
+    # --- Wire-shape: response selection set ---------------------------
+    sent_query = stub_transport.calls[0]["query"]
+    # Selection set must use the Relay connection pattern; the legacy
+    # `markets { id slug question resolutionDate }` form was rejected
+    # with HTTP 422 + `Cannot query field "id" on type "MarketConnection"`.
+    assert "edges" in sent_query, "markets query must select edges (Relay connection)"
+    assert "node" in sent_query, "markets query must select node fields under edges"
     # The leaf fields the caller depends on must still be requested.
     for field in ("id", "slug", "question", "resolutionDate"):
-        assert field in sent, f"markets query must select {field!r} on node"
+        assert field in sent_query, f"markets query must select {field!r} on node"
+
+    # --- Wire-shape: MarketsInput variables (#621) --------------------
+    # Pinned schema: MarketsInput = {first, after, last, before, filter,
+    # sort}. No top-level `limit` or `status`. Filter is
+    # `{status: MarketStatus}` and the enum is uppercase. The legacy
+    # `{limit, status: "active"}` shape produced HTTP 422 +
+    # `unknown field` at path `variable.input.limit` after #614
+    # unblocked the response side.
+    sent_input = stub_transport.calls[0]["variables"]["input"]
+    assert sent_input["first"] == 200, "input.first must carry the limit value"
+    assert sent_input["filter"]["status"] == "OPEN", (
+        "input.filter.status must be the uppercase MarketStatus enum"
+    )
+    # Legacy field names must not leak — Prophet rejects them at validation.
+    assert "limit" not in sent_input, "MarketsInput has no `limit` field"
+    assert "status" not in sent_input, "MarketsInput.status moved under filter"
 
     # --- Return-shape contract (what callers expect) ------------------
     # find_matching_prophet_markets reads `market.get("id")` and

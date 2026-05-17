@@ -172,13 +172,22 @@ class MinimalProphetClient:
         Plan §14.3 mandates this before any candidate is submitted; if
         the publisher is unavailable the run blocks rather than fails open.
 
-        Issue #614: Prophet's live schema returns `MarketConnection`
-        (Relay-style: `{edges: [{node, cursor}], pageInfo, totalCount}`),
-        not a bare list. The legacy `markets { id slug question
-        resolutionDate }` form was rejected with HTTP 422 +
-        `GRAPHQL_VALIDATION_FAILED: Cannot query field "id" on type
-        "MarketConnection"`, silently disabling auto-pair. Caller
-        contract (`find_matching_prophet_markets` reads
+        Issue #614 + #621: Prophet's live schema is Relay-shaped on
+        BOTH axes — `markets(input: MarketsInput): MarketConnection!`.
+
+          Response: `MarketConnection { edges{node,cursor}, pageInfo,
+            totalCount }`. The legacy `markets { id slug ... }` was
+            rejected with `Cannot query field "id" on type
+            "MarketConnection"` (#614).
+
+          Input: `MarketsInput { first, after, last, before, filter,
+            sort }`. No top-level `limit` or `status`. Status moved
+            under `filter.status: MarketStatus` and the enum is
+            uppercase (`OPEN`). The legacy `{limit, status: "active"}`
+            shape was rejected with `unknown field` at
+            `variable.input.limit` (#621).
+
+        Caller contract (`find_matching_prophet_markets` reads
         `market.get("id")` / `market.get("question")`) is preserved by
         unwrapping `edges[].node` back into a flat list of market dicts.
         """
@@ -199,7 +208,12 @@ class MinimalProphetClient:
         payload = self._post(
             jwt=jwt,
             query=query,
-            variables={"input": {"limit": limit, "status": "active"}},
+            variables={
+                "input": {
+                    "first": limit,
+                    "filter": {"status": "OPEN"},
+                }
+            },
         )
         connection = ((payload or {}).get("data") or {}).get("markets")
         if not isinstance(connection, dict):
