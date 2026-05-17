@@ -2071,6 +2071,10 @@ def cmd_create_market_via_ui(
     compute_seed_intent: Any | None = None,
     record_created_market: Any | None = None,
     sleep: Any = time.sleep,
+    # Issue #652: per-entry wall-clock budget guard for the /create
+    # driver. Sourced from config.auto_discover by default; tests inject
+    # a small budget plus a fake `now` to trip the guard deterministically.
+    now: Any = time.monotonic,
     # Issue #640: optional progress emitter + per-entry index for the
     # chat-side Monitor. The parent cmd_run passes these in; standalone
     # `agent.py --command create-market-via-ui` invocations leave them
@@ -2184,6 +2188,10 @@ def cmd_create_market_via_ui(
                 payload=payload,
                 progress=progress,
                 entry_idx=entry_idx,
+                entry_budget_seconds=float(
+                    config.auto_discover.create_market_entry_budget_seconds
+                ),
+                now=now,
             )
     except PlaywrightMcpUnavailable:
         return CycleResult(
@@ -2238,10 +2246,64 @@ def _run_create_market_via_ui_inner(
     payload: dict[str, Any],
     progress: ProgressEmitter | None = None,
     entry_idx: int = 0,
+    # Issue #652: per-entry wall-clock budget guard. Replaces per-
+    # `tools/call` timeout policing — the gateway's per-call ceiling is
+    # now 180s and exists only to detect a dead MCP stdio stream. This
+    # 5-minute default covers Prophet's 60-180s AI seed calc plus every
+    # Playwright round-trip with comfortable headroom on a contended host.
+    entry_budget_seconds: float = 300.0,
+    now: Any = time.monotonic,
 ) -> CycleResult:
+    # `last_stage` and `hedge_committed` live in single-element lists so
+    # the inner helpers can mutate them without `nonlocal` ceremony.
+    last_stage: list[str] = ["start"]
+    hedge_committed: list[bool] = [False]
+    start_monotonic = float(now())
+
     def _emit(stage: str, **kw: Any) -> None:
+        last_stage[0] = stage
         if progress is not None:
             progress.emit(stage, idx=entry_idx, **kw)
+
+    def _budget_exceeded() -> CycleResult | None:
+        """Return a blocked result if the entry has overrun its budget.
+
+        When the hedge has already committed, unwind the Polymarket leg
+        via `record_created_market(prophet_confirm_declined=True)` before
+        returning. Naked Polymarket exposure must never be left behind.
+        """
+        elapsed = float(now()) - start_monotonic
+        if elapsed <= entry_budget_seconds:
+            return None
+        payload["entry_budget_seconds"] = entry_budget_seconds
+        payload["entry_elapsed_seconds"] = round(elapsed, 3)
+        payload["entry_last_stage"] = last_stage[0]
+        if hedge_committed[0]:
+            seed_side_val = str(payload.get("seed_side") or "")
+            hedge_price_val = float(payload.get("hedge_price") or 0.0)
+            unwind_price = _opposite_marketable_price(seed_side_val, hedge_price_val)
+            try:
+                unwind = record_created_market(
+                    config=config,
+                    polymarket_condition_id=polymarket_condition_id,
+                    prophet_market_id="",
+                    prophet_seed_side=seed_side_val,
+                    polymarket_marketable_price=unwind_price,
+                    seed_size_usdc=float(initial_bet_usdc),
+                    prophet_confirm_declined=True,
+                    gateway=gateway,
+                )
+                payload["unwind_status"] = unwind.payload.get("hedge_status") or ""
+            except Exception as exc:
+                # Don't crash the cycle on an unwind error — surface it
+                # so the operator can clean up out-of-band.
+                payload["unwind_status"] = f"unwind_error:{type(exc).__name__}"
+        return CycleResult(
+            status="blocked",
+            reason="create_market_via_ui_entry_budget_exceeded",
+            payload=payload,
+        )
+
     # 1. Drive `/create` through Validate + Create Market. The fetch
     # capture is installed before the Create Market click that fires
     # `startOddsCalculation`, so the OCS sessionId is observable from
@@ -2250,7 +2312,13 @@ def _run_create_market_via_ui_inner(
     # planted Privy state via `add_init_script` or drove the OTP modal
     # on this same browser before we got here (issue #638).
     create_market_ui.open_create_form(session, question=question)
+    last_stage[0] = "open_create_form"
+    if (result := _budget_exceeded()) is not None:
+        return result
     ocs_id = create_market_ui.poll_for_ocs_id(session)
+    last_stage[0] = "poll_for_ocs_id"
+    if (result := _budget_exceeded()) is not None:
+        return result
     if not ocs_id:
         return CycleResult(
             status="blocked",
@@ -2296,11 +2364,16 @@ def _run_create_market_via_ui_inner(
     payload["seed_side"] = seed_side
     payload["hedge_price"] = hedge_price
     _emit("ai_calc_done", seed_side=seed_side, hedge_price=hedge_price)
+    if (result := _budget_exceeded()) is not None:
+        return result
 
     # 4. Fill the bet form (do NOT click Confirm yet).
     create_market_ui.fill_bet_form(
         session, seed_side=seed_side, bet_usdc=float(initial_bet_usdc)
     )
+    last_stage[0] = "fill_bet_form"
+    if (result := _budget_exceeded()) is not None:
+        return result
 
     # 5. Submit the Polymarket hedge first.
     _emit("hedge_submitted", price=hedge_price, qty=float(initial_bet_usdc))
@@ -2322,12 +2395,22 @@ def _run_create_market_via_ui_inner(
             reason="hedge_failed_no_commit",
             payload=payload,
         )
+    # Hedge has committed — from here, any abort must unwind the leg.
+    hedge_committed[0] = True
     _emit("hedge_filled", price=hedge_price)
+    if (result := _budget_exceeded()) is not None:
+        return result
 
     # 6. Hedge filled → click Prophet Confirm.
     _emit("prophet_confirm_clicked")
     create_market_ui.click_prophet_confirm(session)
+    last_stage[0] = "click_prophet_confirm"
+    if (result := _budget_exceeded()) is not None:
+        return result
     prophet_market_id = create_market_ui.wait_for_market_redirect(session)
+    last_stage[0] = "wait_for_market_redirect"
+    if (result := _budget_exceeded()) is not None:
+        return result
     if not prophet_market_id:
         # 6a. Confirm timed out / failed → unwind the hedge.
         unwind_price = _opposite_marketable_price(seed_side, hedge_price)

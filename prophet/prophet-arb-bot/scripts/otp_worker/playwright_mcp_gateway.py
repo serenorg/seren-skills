@@ -44,15 +44,17 @@ DEFAULT_BUNDLED_PATHS = (
     "/Applications/SerenDesktop.app/Contents/Resources/embedded-runtime/"
     "mcp-servers/playwright-stealth/dist/index.js",
 )
-DEFAULT_TIMEOUT_SECONDS = 30.0
-# Issue #649: cold Chromium launch inside the bundled MCP child can stretch
-# past 30s on hosts with a long-running operator Chrome instance (Gatekeeper
-# + LaunchServices registration + puppeteer-extra-plugin-stealth evasion
-# module loads). The first `tools/call` after `__enter__` is the one that
-# triggers `chromium.launch()`, so it needs a higher timeout than the
-# steady-state cycle. Subsequent tool calls revert to the tighter
-# DEFAULT_TIMEOUT_SECONDS so legitimate steady-state stalls still fail fast.
-DEFAULT_FIRST_CALL_TIMEOUT_SECONDS = 120.0
+# Issue #652: per-`tools/call` ceiling is no longer the real failure cap;
+# the per-entry budget on the `/create` driver
+# (_run_create_market_via_ui_inner) is. Per-call ceilings exist only to
+# detect a dead MCP stdio stream. 180s is comfortably above any single
+# contended `tools/call` we have observed on the heavy-Chrome failure
+# profile that produced #651, while still surfacing a truly hung stream
+# within one per-entry budget window. Supersedes the #649 first-call
+# carve-out: the new floor covers cold-Chromium-launch latency without a
+# dedicated branch in `_call_tool`. The `phase=cold_launch` marker is
+# retained as diagnostic-only instrumentation.
+DEFAULT_TIMEOUT_SECONDS = 180.0
 MCP_PROTOCOL_VERSION = "2024-11-05"
 
 
@@ -74,7 +76,6 @@ class PlaywrightStealthGateway:
         *,
         command: list[str] | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-        first_call_timeout_seconds: float = DEFAULT_FIRST_CALL_TIMEOUT_SECONDS,
     ) -> None:
         resolved = command if command is not None else self._resolve_default_command()
         if not resolved:
@@ -84,28 +85,18 @@ class PlaywrightStealthGateway:
             )
         self._command = resolved
         self._timeout_seconds = timeout_seconds
-        # Issue #649: elevated budget for the cold Chromium launch that the
-        # bundled MCP child does lazily on the first `tools/call`.
-        self._first_call_timeout_seconds = first_call_timeout_seconds
         self._proc: subprocess.Popen[bytes] | None = None
         self._next_request_id = 1
         # Issue #647: KillReport from the pre-spawn cleanup pass. Surfaced in
         # TimeoutError messages and via `--command reset-playwright-mcp`.
         self._last_kill_report: KillReport = KillReport()
-        # Issue #649: tracks whether the next `tools/call` is the cold-launch
-        # one. Reset on `__enter__`; flipped after the first `tools/call`
-        # returns (or times out). Lives outside `__enter__` so tests that
-        # construct the gateway, then call `__enter__`, see a clean state.
+        # Issue #652: diagnostic-only. The per-entry budget on the /create
+        # driver is the real failure cap; per-call ceilings here exist only
+        # to detect a dead MCP stdio stream. We still track whether the
+        # in-flight call is the first `tools/call` after `__enter__` so a
+        # TimeoutError fired during it can be annotated with
+        # `phase=cold_launch`. Marker has no effect on dispatch.
         self._first_tool_call_pending: bool = True
-        # The timeout currently in effect for `_read_exact_with_stderr`.
-        # Elevated by `_call_tool` for the first `tools/call`, restored
-        # afterwards. Initial value matches `timeout_seconds` so
-        # `initialize` and `notifications/initialized` use steady-state.
-        self._active_timeout_seconds: float = timeout_seconds
-        # Tracks whether the in-flight call is the cold-launch one, so a
-        # TimeoutError fired inside the call can be annotated with
-        # `phase=cold_launch` even though the boolean has already been
-        # cleared by the time `_call_tool`'s finally-block runs.
         self._in_cold_launch_call: bool = False
 
     # -- Lifecycle ----------------------------------------------------------
@@ -147,9 +138,8 @@ class PlaywrightStealthGateway:
         self._last_kill_report = kill_stale_playwright_mcp_processes(
             grace_seconds=1.0,
         )
-        # Issue #649: every new MCP child does a cold Chromium launch on
-        # its first tools/call. Re-arm the elevated-timeout flag for this
-        # new lifetime.
+        # Issue #652: re-arm the cold-launch marker for this new lifetime.
+        # Diagnostic-only — no longer affects timeout dispatch.
         self._first_tool_call_pending = True
 
         self._proc = subprocess.Popen(
@@ -206,15 +196,11 @@ class PlaywrightStealthGateway:
             raise RuntimeError(
                 "PlaywrightStealthGateway used outside its `with` block"
             )
-        # Issue #649: elevate the read timeout for the first tools/call of
-        # this gateway lifetime. The bundled MCP child does a lazy
-        # `chromium.launch()` here; on hosts with a long-running operator
-        # Chrome instance the launch can stretch past the steady-state
-        # timeout. Clear the flag in `finally` so a timeout still drops us
-        # back to steady-state on the next call.
+        # Issue #652: no per-call timeout switcheroo. Track only whether
+        # this is the cold-launch call so a TimeoutError can be annotated
+        # with `phase=cold_launch` (diagnostic-only).
         is_cold_launch = self._first_tool_call_pending
         if is_cold_launch:
-            self._active_timeout_seconds = self._first_call_timeout_seconds
             self._in_cold_launch_call = True
         try:
             result = self._request(
@@ -225,7 +211,6 @@ class PlaywrightStealthGateway:
         finally:
             if is_cold_launch:
                 self._first_tool_call_pending = False
-                self._active_timeout_seconds = self._timeout_seconds
                 self._in_cold_launch_call = False
 
     def _request(self, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
@@ -290,15 +275,16 @@ class PlaywrightStealthGateway:
 
     def _read_exact_with_stderr(self, fd: int, size: int) -> bytes:
         try:
-            return _read_exact(fd, size, self._active_timeout_seconds)
+            return _read_exact(fd, size, self._timeout_seconds)
         except TimeoutError as exc:
             # Issue #638: surface what the MCP child wrote to stderr so
             # future regressions are diagnosable instead of opaque.
             # Issue #647: also surface the pre-spawn cleanup pass so the
             # operator can tell whether contention was already cleared.
-            # Issue #649: when the timeout fires during the first
+            # Issue #652: when the timeout fires during the first
             # `tools/call`, embed `phase=cold_launch` so operators can
-            # disambiguate from steady-state stalls.
+            # disambiguate from steady-state stalls. Diagnostic-only —
+            # the per-entry budget on the /create driver is the real cap.
             stderr_tail = self._drain_stderr_nonblocking()
             report = self._last_kill_report
             diagnostics: list[str] = []
