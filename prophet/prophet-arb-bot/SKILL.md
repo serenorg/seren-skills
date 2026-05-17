@@ -552,7 +552,13 @@ Per-entry blocking reasons surfaced in `ui_submission_results.reason`:
 
 - `prophet_session_unavailable` — the cached Prophet session is missing
   or could not be refreshed. The OTP cold-start path will fire on the
-  next `--yes-live` cycle.
+  next `--yes-live` cycle. Since #658 the session-observability check
+  polls for a positive auth signal over an 8s budget (250ms interval)
+  before falling through to OTP, so a slow browser cold launch no
+  longer false-negatives a fresh cached session. If this reason keeps
+  firing with a fresh state cache, the cached refresh token has been
+  revoked server-side — re-login at `app.prophetmarket.ai` once to
+  regenerate.
 - `seren_desktop_playwright_mcp_unavailable` — no `playwright-stealth`
   MCP command resolvable. Run on Seren Desktop or set
   `SEREN_PLAYWRIGHT_MCP_COMMAND`.
