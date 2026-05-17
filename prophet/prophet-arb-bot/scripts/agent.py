@@ -181,6 +181,15 @@ class AgentConfig:
     def load(cls, path: str) -> "AgentConfig":
         with open(path, "r", encoding="utf-8") as f:
             raw = json.load(f)
+        return cls.from_dict(raw)
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "AgentConfig":
+        """Build an ``AgentConfig`` from a raw dict.
+
+        Separated from ``load`` so the parsing + defaults logic is
+        testable without writing a tempfile. ``load`` delegates here.
+        """
         inputs = raw.get("inputs") or {}
         storage_raw = raw.get("storage") or {}
         scoring_raw = raw.get("scoring") or {}
@@ -226,7 +235,13 @@ class AgentConfig:
             live_mode=bool(raw.get("live_mode", False)),
             max_orders_per_run=int(raw.get("max_orders_per_run", 5)),
             execution_mode=execution_mode,
-            max_hedge_slippage_bps=float(raw.get("max_hedge_slippage_bps", 200.0)),
+            # #633 — default tightened from 200 (2%) to 100 (1%). 2% on
+            # a thin Prophet book eats most of the 3¢ min-spread floor
+            # before the position is even held. Existing operator
+            # configs that explicitly set 200.0 are not silently
+            # mutated; only new operators picking up the default get
+            # the tighter cap.
+            max_hedge_slippage_bps=float(raw.get("max_hedge_slippage_bps", 100.0)),
         )
 
 
