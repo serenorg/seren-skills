@@ -208,6 +208,58 @@ def test_establish_skips_restore_when_cache_is_stale() -> None:
     assert getattr(result, "jwt", "") == "new_j"
 
 
+def test_establish_attaches_observable_check_when_fresh_cache_falls_through() -> None:
+    """Issue #660 acceptance #2: when a fresh cache restores but the
+    Privy signal stays absent AND the OTP fallback also fails, the
+    `SessionEstablishmentFailed.details["observable_check"]` block must
+    carry the post-restore state so the agent's blocked envelope can
+    surface it. Without this an operator sees `prophet_session_unavailable`
+    with no payload context."""
+    cache = _StubCache(
+        [_Entry(jwt="cached_j", refresh_token="cached_r", state="fresh", fresh=True)]
+    )
+
+    class _UnobservableSession:
+        # Restore succeeded but Privy SDK rejected the planted token,
+        # cleared `privy:token`, and Prophet redirected us to /login.
+        def get_local_storage(self, key: str) -> str | None:
+            return None
+
+        def get_url(self) -> str:
+            return "https://app.prophetmarket.ai/?returnTo=/create"
+
+        def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
+            return  # SIGN IN visible → caller treats as unauth
+
+    def acquirer(**_kw: Any) -> None:
+        raise OtpEmailTimeout("no OTP email in 90s")
+
+    try:
+        establish_browser_session_for_create(
+            session=_UnobservableSession(),
+            email="e@example.com",
+            provider="gmail",
+            seren_user_id="",
+            bounty_id="",
+            config_gateway=object(),
+            transport=object(),
+            pw_gateway=None,
+            cache=cache,
+            acquirer=acquirer,
+            refresher=lambda **_: None,
+            restore=lambda *a, **kw: None,
+        )
+    except SessionEstablishmentFailed as exc:
+        check = exc.details.get("observable_check")
+        assert check is not None, "observable_check must be attached on fall-through"
+        assert check["privy_token_present"] is False
+        assert check["privy_user_present"] is False
+        assert "returnTo=" in check["url"]
+        assert check["budget_seconds"] > 0
+    else:
+        raise AssertionError("expected SessionEstablishmentFailed")
+
+
 def test_establish_raises_session_establishment_failed_on_otp_timeout() -> None:
     cache = _StubCache(
         [_Entry(jwt="", refresh_token="", state="needs_otp", fresh=False)]
@@ -318,6 +370,125 @@ def test_privy_observable_returns_false_when_user_never_lands() -> None:
     result = _privy_session_observable(
         session,
         budget_seconds=8.0,
+        poll_interval_seconds=0.25,
+        sleep=lambda _s: None,
+        clock=lambda: next(ticks),
+    )
+    assert result is False
+
+
+# --- Issue #660: trust the planted Privy state when it survives ----------
+#
+# `is_session_healthy` (`scripts/otp_worker/playwright_mcp_gateway.py:226`)
+# treats `privy:token` OR `privy:user` plus a Prophet-origin URL as a
+# live session. The establish-time observability check was stricter than
+# the downstream health check — it polled only `privy:user`, which Privy
+# SDK does not always populate on token-restore boots, causing a fresh
+# cached JWT to be false-negatived. The repro that drove #660 was: a
+# brand-new bootstrap-OTP cache, planted via `add_init_script` into a
+# second warm browser, was still rejected by the gate. Align the gate
+# with the downstream criterion.
+
+
+class _AlignedSession:
+    """Stub that mirrors what a real browser exposes after `restore_privy_session`.
+
+    Tests pin which of `privy:token` / `privy:user` the SDK preserves
+    across boot and what the URL looks like.
+    """
+
+    def __init__(
+        self,
+        *,
+        token: str | None,
+        user: str | None,
+        url: str,
+        sign_in_visible: bool = False,
+    ) -> None:
+        self._state = {"privy:token": token, "privy:user": user}
+        self._url = url
+        self._sign_in_visible = sign_in_visible
+
+    def get_local_storage(self, key: str) -> str | None:
+        return self._state.get(key)
+
+    def get_url(self) -> str:
+        return self._url
+
+    def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
+        if self._sign_in_visible:
+            return
+        raise TimeoutError("SIGN IN never appeared")
+
+
+def test_privy_observable_trusts_planted_token_on_prophet_origin() -> None:
+    """The Privy SDK does not always write `privy:user` on token-restore
+    boots; what it DOES do is leave the planted `privy:token` in place
+    on a valid session and clear it on a rejected one. After
+    `restore_privy_session` planted the token and navigated to Prophet,
+    `privy:token` being present alongside a Prophet-origin URL is a
+    sufficient positive signal — same heuristic `is_session_healthy`
+    uses mid-batch."""
+    session = _AlignedSession(
+        token="planted-jwt",  # planted, preserved across SDK boot
+        user=None,  # SDK never wrote it
+        url="https://app.prophetmarket.ai/",
+    )
+    # The fix should return True early on the first poll seeing the
+    # planted token, so the budget never actually elapses. Pin the clock
+    # to a single value — a still-looping implementation would be caught
+    # by the next test's RED path, not this one.
+    ticks = iter([0.0, 0.5, 1.0, 3.0])
+    result = _privy_session_observable(
+        session,
+        budget_seconds=2.0,
+        poll_interval_seconds=0.25,
+        sleep=lambda _s: None,
+        clock=lambda: next(ticks),
+    )
+    assert result is True
+
+
+def test_privy_observable_trusts_planted_token_when_sign_in_briefly_visible() -> None:
+    """The repro that drove #660: under MCP cold-launch contention, the
+    Privy SDK can leave the SIGN IN button rendered while it is still
+    validating the planted token. The previous heuristic caught that
+    visibility window and returned False, forcing OTP fallback even
+    though the planted `privy:token` was the SDK's accepted session.
+    Fix: the surviving planted token IS the positive signal — same as
+    `is_session_healthy` mid-batch — so don't fall back."""
+    session = _AlignedSession(
+        token="planted-jwt",  # SDK preserved it
+        user=None,
+        url="https://app.prophetmarket.ai/",
+        sign_in_visible=True,  # button still painted while SDK hydrates
+    )
+    ticks = iter([0.0, 0.5, 1.0, 3.0])
+    result = _privy_session_observable(
+        session,
+        budget_seconds=2.0,
+        poll_interval_seconds=0.25,
+        sleep=lambda _s: None,
+        clock=lambda: next(ticks),
+    )
+    assert result is True
+
+
+def test_privy_observable_rejects_when_token_cleared_and_redirected() -> None:
+    """Negative path: the SDK cleared `privy:token` (session rejected)
+    and Prophet redirected to `/?returnTo=`. Even if SIGN IN doesn't
+    appear in 1.5s, the cleared planted state + redirect URL is a clear
+    rejection."""
+    session = _AlignedSession(
+        token=None,  # SDK cleared the planted token
+        user=None,
+        url="https://app.prophetmarket.ai/?returnTo=/create",
+        sign_in_visible=True,
+    )
+    ticks = iter([0.0, 0.5, 1.0, 2.5])
+    result = _privy_session_observable(
+        session,
+        budget_seconds=2.0,
         poll_interval_seconds=0.25,
         sleep=lambda _s: None,
         clock=lambda: next(ticks),

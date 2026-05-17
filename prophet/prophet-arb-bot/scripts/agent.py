@@ -1219,10 +1219,15 @@ def cmd_run(
                     ),
                 ))
             except SessionEstablishmentFailed as exc:
+                _finish_payload = recorder.finish("blocked", exc.reason)
+                # Issue #660: surface the observable-check diagnostic so
+                # operators can tell which signal failed without re-running.
+                if exc.details.get("observable_check") is not None:
+                    _finish_payload["observable_check"] = exc.details["observable_check"]
                 return _finish(CycleResult(
                     status="blocked",
                     reason="prophet_session_unavailable",
-                    payload=recorder.finish("blocked", exc.reason),
+                    payload=_finish_payload,
                 ))
         # Newly-created markets become arb_pairs via record-created-market's
         # UPSERT inside cmd_create_market_via_ui — refresh `pairs` so the
@@ -2246,6 +2251,10 @@ def cmd_create_market_via_ui(
                 )
             except SessionEstablishmentFailed as exc:
                 payload["auth_source"] = exc.reason
+                # Issue #660: same observable_check diagnostic for the
+                # per-entry create-market-via-ui path.
+                if exc.details.get("observable_check") is not None:
+                    payload["observable_check"] = exc.details["observable_check"]
                 return CycleResult(
                     status="blocked",
                     reason="prophet_session_unavailable",

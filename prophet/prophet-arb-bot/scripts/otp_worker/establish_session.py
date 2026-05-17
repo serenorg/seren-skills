@@ -55,11 +55,18 @@ _PRIVY_OBSERVABLE_SIGN_IN_PROBE_MS = 1_500
 
 
 class SessionEstablishmentFailed(Exception):
-    """Caller should surface `prophet_session_unavailable`."""
+    """Caller should surface `prophet_session_unavailable`.
 
-    def __init__(self, reason: str) -> None:
+    Optional `details` carries diagnostic context (e.g. `observable_check`)
+    that the agent-level handler can attach to the blocked envelope so
+    operators can tell which signal failed without re-running with a
+    debugger. See issue #660.
+    """
+
+    def __init__(self, reason: str, *, details: dict[str, Any] | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.details: dict[str, Any] = dict(details) if details else {}
 
 
 def establish_browser_session_for_create(
@@ -91,6 +98,7 @@ def establish_browser_session_for_create(
         refresher(cache=cache)
         entry = cache.read()
 
+    observable_diag: dict[str, Any] | None = None
     if entry.is_fresh() and entry.jwt and entry.refresh_token:
         try:
             restore(session, jwt=entry.jwt, refresh_token=entry.refresh_token)
@@ -99,6 +107,7 @@ def establish_browser_session_for_create(
         else:
             if _privy_session_observable(session):
                 return entry
+            observable_diag = _capture_observable_check(session)
 
     # Silent restore failed / cache stale → drive OTP cold-start on the
     # same session so the authenticated browser is the one we hand back.
@@ -119,8 +128,12 @@ def establish_browser_session_for_create(
         PrivyAuthFailed,
         IdentityMismatch,
     ) as exc:
+        details: dict[str, Any] = {}
+        if observable_diag is not None:
+            details["observable_check"] = observable_diag
         raise SessionEstablishmentFailed(
-            f"prophet_session_unavailable:{type(exc).__name__}"
+            f"prophet_session_unavailable:{type(exc).__name__}",
+            details=details or None,
         ) from exc
 
     # Re-read the cache: the acquirer wrote a fresh entry on success.
@@ -137,34 +150,35 @@ def _privy_session_observable(
 ) -> bool:
     """Return True iff Privy reports an active session in this browser.
 
-    Issue #658: `restore_privy_session` plants `privy:token` +
-    `privy:refresh_token` at `document_start`. The Privy SDK then boots,
-    validates the token, fetches the user, and finally writes
-    `privy:user` to localStorage. That sequence routinely takes 1–4s in
-    a cold MCP Chromium — far longer than the previous 1.5s SIGN IN
-    probe. Polling `privy:user` over a budget (default 8s) catches the
-    positive signal once the SDK lands it; the SIGN IN-absent probe is
-    retained as a secondary signal at the end of the budget so truly
-    revoked sessions still return False.
+    Issue #660: the previous heuristic was stricter than the downstream
+    `is_session_healthy` check that detects mid-batch auth loss. The
+    SDK does not always write `privy:user` on token-restore boots, and
+    its slow boot under MCP cold-launch contention can leave the SIGN
+    IN button briefly visible while the planted token is still being
+    validated. The previous gate caught that visibility window and
+    returned False, forcing a needless OTP fallback even though the
+    planted `privy:token` was a healthy session.
+
+    Align with `is_session_healthy`: the surviving planted state
+    (`privy:token` OR `privy:user`) on the Prophet origin is the
+    positive signal. The SDK actively clears the planted token when it
+    rejects the session, so the absence of both keys — together with a
+    redirect off the Prophet origin or a persistent SIGN IN button — is
+    the negative signal.
     """
     deadline = clock() + max(budget_seconds, 0.0)
     interval = max(poll_interval_seconds, 0.05)
 
     while True:
-        try:
-            user = session.get_local_storage("privy:user")
-        except Exception:
-            user = None
-        if user:
+        if _read_planted_state(session) and _on_prophet_origin(session):
             return True
         if clock() >= deadline:
             break
         sleep(interval)
 
-    # Budget exhausted with `privy:user` still empty. Fall back to the
-    # SIGN IN-absent probe: a slow SDK that ultimately failed will still
-    # render the SIGN IN button; a slow SDK that ultimately succeeded
-    # may have removed it without populating `privy:user` yet.
+    # Budget exhausted without a surviving session signal. Fall back to
+    # the SIGN IN-absent probe to give a SDK that suppressed planted
+    # state but kept us on the Prophet origin one last chance.
     try:
         session.wait_for(
             SEL_CONNECT_BUTTON, timeout_ms=_PRIVY_OBSERVABLE_SIGN_IN_PROBE_MS
@@ -174,6 +188,71 @@ def _privy_session_observable(
     except Exception:
         return False
     return False
+
+
+def _read_planted_state(session: BrowserSession) -> str | None:
+    """Mirror `is_session_healthy`'s positive-signal scan over Privy keys."""
+    for key in ("privy:token", "privy:user"):
+        try:
+            value = session.get_local_storage(key)
+        except Exception:
+            value = None
+        if value:
+            return value
+    return None
+
+
+def _on_prophet_origin(session: BrowserSession) -> bool:
+    """Reject sessions that have already been redirected off Prophet."""
+    get_url = getattr(session, "get_url", None)
+    if get_url is None:
+        # Older browser stubs (and the existing observability tests)
+        # don't expose `get_url`; treat as "no URL evidence to reject".
+        return True
+    try:
+        url = get_url() or ""
+    except Exception:
+        return True
+    if "app.prophetmarket.ai" not in url:
+        return False
+    if "returnTo=" in url or "/login" in url:
+        return False
+    return True
+
+
+def _capture_observable_check(session: BrowserSession) -> dict[str, Any]:
+    """Snapshot the post-restore state for the blocked envelope.
+
+    Issue #660: when the establish path falls through to OTP, surface
+    enough Privy / Prophet context that an operator can tell at a
+    glance why the planted state was deemed unobservable. Stays cheap —
+    one localStorage read per known key, one URL read.
+    """
+    state: dict[str, Any] = {
+        "budget_seconds": _PRIVY_OBSERVABLE_BUDGET_SECONDS,
+        "poll_interval_seconds": _PRIVY_OBSERVABLE_POLL_INTERVAL_SECONDS,
+        "privy_token_present": False,
+        "privy_user_present": False,
+    }
+    try:
+        state["privy_token_present"] = bool(
+            session.get_local_storage("privy:token")
+        )
+    except Exception:
+        pass
+    try:
+        state["privy_user_present"] = bool(
+            session.get_local_storage("privy:user")
+        )
+    except Exception:
+        pass
+    get_url = getattr(session, "get_url", None)
+    if get_url is not None:
+        try:
+            state["url"] = get_url() or ""
+        except Exception:
+            state["url"] = ""
+    return state
 
 
 __all__ = [
