@@ -2423,6 +2423,7 @@ def main(argv: list[str] | None = None) -> int:
             "record-created-market",
             "compute-seed-intent",
             "create-market-via-ui",
+            "reset-playwright-mcp",
         ],
         default="run",
     )
@@ -2562,6 +2563,24 @@ def main(argv: list[str] | None = None) -> int:
         # Pass an explicit empty argv so the probe's argparse does not
         # re-parse the parent agent's --config / --command flags.
         return probe_main([])
+
+    if args.command == "reset-playwright-mcp":
+        # Issue #647: operator hatch to reclaim stale playwright-stealth MCP
+        # processes without running a full cycle. Auto-cleanup also runs on
+        # every `__enter__` of the gateway; this command is for when the
+        # operator wants to clear contention up-front and inspect what was
+        # killed before retrying `--command run --yes-live`.
+        from otp_worker.playwright_mcp_lifecycle import (
+            kill_stale_playwright_mcp_processes,
+        )
+
+        report = kill_stale_playwright_mcp_processes(grace_seconds=1.0)
+        result = CycleResult(
+            status="ok",
+            reason="playwright_mcp_reset",
+            payload=report.to_dict(),
+        )
+        return _emit(result, json_output=args.json_output)
 
     # #542 Fix 1 — zero-friction first-run. If config.json is absent,
     # copy from config.example.json and persist optional flags. Existing

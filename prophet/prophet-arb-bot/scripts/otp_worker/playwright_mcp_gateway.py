@@ -30,6 +30,11 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
+from otp_worker.playwright_mcp_lifecycle import (
+    KillReport,
+    kill_stale_playwright_mcp_processes,
+)
+
 
 DEFAULT_BUNDLED_PATHS = (
     # Current packaged app bundle.
@@ -72,6 +77,9 @@ class PlaywrightStealthGateway:
         self._timeout_seconds = timeout_seconds
         self._proc: subprocess.Popen[bytes] | None = None
         self._next_request_id = 1
+        # Issue #647: KillReport from the pre-spawn cleanup pass. Surfaced in
+        # TimeoutError messages and via `--command reset-playwright-mcp`.
+        self._last_kill_report: KillReport = KillReport()
 
     # -- Lifecycle ----------------------------------------------------------
 
@@ -103,6 +111,16 @@ class PlaywrightStealthGateway:
         return cls._resolve_default_command() is not None
 
     def __enter__(self) -> "PlaywrightStealthGateway":
+        # Issue #647: reclaim peer playwright-stealth MCP children before
+        # spawning our own. ~10 idle peers from concurrent Claude Code /
+        # Codex sessions push the new child's synchronous Playwright registry
+        # walk past our `initialize` timeout. Idle MCP children are
+        # single-tenant and not serving active callers, so reclaiming is
+        # safe — the matcher already rules out the current process tree.
+        self._last_kill_report = kill_stale_playwright_mcp_processes(
+            grace_seconds=1.0,
+        )
+
         self._proc = subprocess.Popen(
             self._command,
             stdin=subprocess.PIPE,
@@ -229,12 +247,20 @@ class PlaywrightStealthGateway:
         except TimeoutError as exc:
             # Issue #638: surface what the MCP child wrote to stderr so
             # future regressions are diagnosable instead of opaque.
+            # Issue #647: also surface the pre-spawn cleanup pass so the
+            # operator can tell whether contention was already cleared.
             stderr_tail = self._drain_stderr_nonblocking()
+            report = self._last_kill_report
+            diagnostics: list[str] = []
             if stderr_tail:
-                raise TimeoutError(
-                    f"{exc} stderr_tail={stderr_tail!r}"
-                ) from exc
-            raise
+                diagnostics.append(f"stderr_tail={stderr_tail!r}")
+            if report.killed or report.skipped_self_tree or report.errors:
+                diagnostics.append(f"stale_killed={report.killed!r}")
+                if report.errors:
+                    diagnostics.append(f"stale_errors={report.errors!r}")
+            else:
+                diagnostics.append("stale_killed=[]")
+            raise TimeoutError(f"{exc} " + " ".join(diagnostics)) from exc
 
     def _drain_stderr_nonblocking(self, *, max_bytes: int = 2048) -> str:
         proc = self._proc
