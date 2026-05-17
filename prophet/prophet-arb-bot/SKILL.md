@@ -487,15 +487,16 @@ If `max_fundable == 0` the cycle returns
 
 ## Automated UI submission (subprocess-driven)
 
-Issue #636: market creation is now fully autonomous. The Python
-subprocess owns its own Playwright-stealth browser, restores the cached
-Prophet session into it (the JWT + refresh token are JSON-stringified
+Issue #636/#654: market creation is fully autonomous. During one
+`--command run --yes-live` cycle, the Python subprocess opens one
+Playwright-stealth MCP gateway and one browser context for the whole
+`pending_ui_submission` batch, restores the cached Prophet session once
+into that warm context (the JWT + refresh token are JSON-stringified
 into the Prophet origin's localStorage — both keys are present since
-#583), and drives `/create` end-to-end without any `mcp__playwright__*`
-orchestration from the calling LLM.
+#583), and drives `/create` end-to-end for each pending entry without
+any `mcp__playwright__*` orchestration from the calling LLM.
 
-For each `pending_ui_submission` entry, the `--command run --yes-live`
-cycle runs:
+The standalone per-entry command remains:
 
 ```bash
 python3 scripts/agent.py \
@@ -506,17 +507,23 @@ python3 scripts/agent.py \
   --json-output
 ```
 
-internally (no subprocess hop) for every entry, then attaches a
-`ui_submission_results: [{polymarket_condition_id, status, reason,
-prophet_market_id}]` block to the run envelope. The orchestrating LLM
-does NOT call this command directly; it only re-runs `--command run
---yes-live` to pick up the newly-created pairs for arbing.
+Inside `--command run --yes-live`, the bot calls the same inner driver
+directly against the warm browser context, resets the page between
+entries, then attaches a `ui_submission_results:
+[{polymarket_condition_id, status, reason, prophet_market_id}]` block
+to the run envelope. If the warm context loses Prophet auth mid-batch, the
+current entry is blocked with `reason='warm_context_corrupted'`, the
+gateway/browser are reopened, and the next entry continues on a freshly
+restored context. The orchestrating LLM does NOT call this command
+directly; it only re-runs `--command run --yes-live` to pick up the
+newly-created pairs for arbing.
 
 Per-entry sequence inside the subprocess:
 
-1. Restore the cached Prophet session into a fresh Python-owned
-   browser (navigate to `https://app.prophetmarket.ai` first so
-   localStorage writes land in the correct origin partition).
+1. Use the cycle-scoped warm Python-owned browser with a restored
+   Prophet session. The first entry pays the MCP/Chromium cold-launch
+   cost; later entries reuse the same context unless health checks force
+   a reopen.
 2. Navigate `/create`, install a `window.fetch` wrapper that captures
    `startOddsCalculation`'s `sessionId` client-side, then click
    `Validate Question` + `Create Market`.
@@ -549,6 +556,9 @@ Per-entry blocking reasons surfaced in `ui_submission_results.reason`:
 - `seren_desktop_playwright_mcp_unavailable` — no `playwright-stealth`
   MCP command resolvable. Run on Seren Desktop or set
   `SEREN_PLAYWRIGHT_MCP_COMMAND`.
+- `warm_context_corrupted` — the shared browser context lost observable
+  Prophet auth after an entry. That entry is skipped; the bot tears down
+  and restores a fresh context before attempting the next pending entry.
 - `ocs_session_id_not_captured` — the `startOddsCalculation` response
   didn't carry a `sessionId` within the capture timeout. Retry next tick.
 - `odds_session_not_completed` / `odds_session_timeout` /

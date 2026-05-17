@@ -40,6 +40,7 @@ _FETCH_CAPTURE_SCRIPT = """
 (() => {
   if (window.__seren_capture_installed__) { return true; }
   window.__seren_capture__ = { startOddsCalculation: null, error: null };
+  window.__seren_original_fetch__ = window.fetch;
   const orig = window.fetch.bind(window);
   window.fetch = async (...args) => {
     const resp = await orig(...args);

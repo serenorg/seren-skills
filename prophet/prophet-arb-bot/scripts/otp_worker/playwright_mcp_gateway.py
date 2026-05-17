@@ -56,6 +56,32 @@ DEFAULT_BUNDLED_PATHS = (
 # retained as diagnostic-only instrumentation.
 DEFAULT_TIMEOUT_SECONDS = 180.0
 MCP_PROTOCOL_VERSION = "2024-11-05"
+PROPHET_STABLE_URL = "https://app.prophetmarket.ai/markets"
+_RESET_ENTRY_CAPTURE_SCRIPT = """
+(() => {
+  try {
+    if (window.__seren_original_fetch__) {
+      window.fetch = window.__seren_original_fetch__;
+    }
+    delete window.__seren_original_fetch__;
+    delete window.__seren_capture__;
+    delete window.__seren_capture_installed__;
+  } catch (e) { /* best effort */ }
+  return true;
+})()
+"""
+_CURRENT_URL_SCRIPT = "(() => window.location.href)()"
+_PRIVY_STATE_SCRIPT = """
+(() => {
+  try {
+    return window.localStorage.getItem("privy:token")
+      || window.localStorage.getItem("privy:user")
+      || "";
+  } catch (e) {
+    return "";
+  }
+})()
+"""
 
 
 class PlaywrightMcpUnavailable(RuntimeError):
@@ -174,6 +200,54 @@ class PlaywrightStealthGateway:
         except Exception:
             # Best-effort cleanup; never mask the original exit exception.
             pass
+
+    def reenter(self) -> "PlaywrightStealthGateway":
+        """Restart the MCP child while preserving this gateway object."""
+        self.__exit__(None, None, None)
+        return self.__enter__()
+
+    def reset_for_next_entry(self, *, stable_url: str = PROPHET_STABLE_URL) -> None:
+        """Return a warm browser context to a clean page between `/create` entries.
+
+        Issue #654: the Playwright MCP child and Chromium context stay open for
+        the whole pending-ui batch. Per-entry state is only the fetch wrapper
+        used to capture `startOddsCalculation.sessionId`, so reset it in-place
+        and navigate away from the form without clearing origin storage.
+        """
+        try:
+            self.playwright_evaluate(script=_RESET_ENTRY_CAPTURE_SCRIPT)
+        except Exception:
+            # The next navigation is enough to discard the current document in
+            # normal cases. If navigation also fails, let that exception surface
+            # so the caller can reopen the warm context.
+            pass
+        self.playwright_navigate(url=stable_url)
+
+    def is_session_healthy(self) -> bool:
+        """Return False when the warm Prophet browser has lost Privy auth."""
+        try:
+            url = _coerce_evaluate_value(
+                self.playwright_evaluate(script=_CURRENT_URL_SCRIPT)
+            )
+        except Exception:
+            return False
+
+        try:
+            privy_state = _coerce_evaluate_value(
+                self.playwright_evaluate(script=_PRIVY_STATE_SCRIPT)
+            )
+        except Exception:
+            privy_state = ""
+
+        url_s = url if isinstance(url, str) else ""
+        has_privy_state = bool(privy_state)
+        if "app.prophetmarket.ai" not in url_s:
+            return False
+        if "returnTo=" in url_s and not has_privy_state:
+            return False
+        if "/login" in url_s and not has_privy_state:
+            return False
+        return has_privy_state
 
     # -- Attribute access ---------------------------------------------------
 
@@ -365,3 +439,12 @@ def _extract_tool_body(result: dict[str, Any]) -> Any:
     if isinstance(body, (dict, list)):
         return body
     return result.get("value")
+
+
+def _coerce_evaluate_value(result: Any) -> Any:
+    """Unwrap common Playwright evaluate response shapes."""
+    if isinstance(result, dict):
+        for key in ("result", "value", "output"):
+            if key in result:
+                return result[key]
+    return result
