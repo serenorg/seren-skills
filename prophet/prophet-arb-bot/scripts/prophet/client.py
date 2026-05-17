@@ -171,15 +171,28 @@ class MinimalProphetClient:
 
         Plan §14.3 mandates this before any candidate is submitted; if
         the publisher is unavailable the run blocks rather than fails open.
-        Returns the raw `markets` array; callers normalize question/slug.
+
+        Issue #614: Prophet's live schema returns `MarketConnection`
+        (Relay-style: `{edges: [{node, cursor}], pageInfo, totalCount}`),
+        not a bare list. The legacy `markets { id slug question
+        resolutionDate }` form was rejected with HTTP 422 +
+        `GRAPHQL_VALIDATION_FAILED: Cannot query field "id" on type
+        "MarketConnection"`, silently disabling auto-pair. Caller
+        contract (`find_matching_prophet_markets` reads
+        `market.get("id")` / `market.get("question")`) is preserved by
+        unwrapping `edges[].node` back into a flat list of market dicts.
         """
         query = """
         query MarketsForDedup($input: MarketsInput) {
           markets(input: $input) {
-            id
-            slug
-            question
-            resolutionDate
+            edges {
+              node {
+                id
+                slug
+                question
+                resolutionDate
+              }
+            }
           }
         }
         """
@@ -188,12 +201,22 @@ class MinimalProphetClient:
             query=query,
             variables={"input": {"limit": limit, "status": "active"}},
         )
-        markets = ((payload or {}).get("data") or {}).get("markets")
-        if not isinstance(markets, list):
+        connection = ((payload or {}).get("data") or {}).get("markets")
+        if not isinstance(connection, dict):
             raise ProphetSchemaError(
-                "markets query did not return a list — schema may have drifted"
+                "markets query did not return a connection object — "
+                "schema may have drifted"
             )
-        return markets
+        edges = connection.get("edges")
+        if not isinstance(edges, list):
+            raise ProphetSchemaError(
+                "markets.edges missing or not a list — schema may have drifted"
+            )
+        return [
+            edge["node"]
+            for edge in edges
+            if isinstance(edge, dict) and isinstance(edge.get("node"), dict)
+        ]
 
     def market(self, *, jwt: str, market_id: str) -> ProphetMarketRef:
         """Re-fetch a single Prophet market after createMarketWithBet.
