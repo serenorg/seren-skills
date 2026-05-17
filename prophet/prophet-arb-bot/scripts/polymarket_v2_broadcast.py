@@ -80,9 +80,20 @@ def fetch_proxy_address_for_eoa(
 ) -> Optional[str]:
     """Read the CREATE2 proxy address the factory would deploy for
     `eoa_address`. Calls `factory.computeProxyAddress(eoa)` view — no
-    gas, no signing. Returns the proxy address as lowercase 0x-prefixed
-    hex or ``None`` on RPC error.
+    gas, no signing. Returns the proxy address in EIP-55 checksum form
+    (0x-prefixed) or ``None`` on RPC error.
+
+    #613: must be checksum-cased. eth-account 0.10+
+    `DynamicFeeTransaction.assert_valid_fields` raises
+    `TypeError: Transaction had invalid fields: {'to': ...}` if a non-
+    checksum string address is passed as `to` to `Account.sign_transaction`,
+    which crashed steps 3 + 4 of the V2 onboarding orchestrator every
+    cycle after the proxy was deployed. Normalizing at this seam means
+    every downstream consumer (SafeTx digest, exec-transaction calldata,
+    transaction `to`) gets the canonical form.
     """
+    from eth_utils import to_checksum_address
+
     calldata = _COMPUTE_PROXY_ADDRESS_SELECTOR + _pad_address(eoa_address)
     result = _seren_polygon_rpc(
         method="eth_call",
@@ -93,7 +104,7 @@ def fetch_proxy_address_for_eoa(
     if not result or result == "0x" or len(result) < 66:
         return None
     # Address is the last 20 bytes of the 32-byte return word.
-    return "0x" + result.removeprefix("0x")[-40:].lower()
+    return to_checksum_address("0x" + result.removeprefix("0x")[-40:])
 
 
 def fetch_eth_get_code(
