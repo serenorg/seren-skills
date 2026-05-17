@@ -580,8 +580,17 @@ def onboard_polymarket_v2(
                     "proxy_address": proxy_address,
                     "transactions": transactions,
                 }
+            # #617: CollateralOnramp.wrap is the 3-arg variant
+            # `wrap(address _asset, address _to, uint256 _amount)`.
+            # _asset is USDC.e (the input collateral being wrapped),
+            # _to is the proxy itself (recipient of the minted pUSD),
+            # _amount is the proxy's USDC.e balance to wrap. Mirrors the
+            # production Polymarket onboarding tx layout decoded from
+            # Polygonscan tx 0x04d51086…0d.
             wrap_calldata_hex = build_collateral_onramp_wrap_calldata(
-                amount_raw=proxy_usdc_e
+                asset=POLYGON_USDC_E,
+                recipient=proxy_address,
+                amount_raw=proxy_usdc_e,
             )
             wrap_calldata_bytes = bytes.fromhex(wrap_calldata_hex.removeprefix("0x"))
             wrap_result = _broadcast_safe_exec_transaction(
