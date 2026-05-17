@@ -99,6 +99,7 @@ from prophet import (
 from prophet.client import MinimalProphetClient
 from prophet.odds_session import OddsSessionTimeout
 from prophet.orders import ProphetOrder, ProphetOrderClient
+from progress import ProgressEmitter
 from seren_cron_client import HttpGateway
 
 DEFAULT_CONFIG_PATH = "config.json"
@@ -895,11 +896,16 @@ def cmd_run(
     hedger: Any = None,
     skip_ui_submission: bool = False,
     create_market_via_ui: Any | None = None,
+    progress: ProgressEmitter | None = None,
 ) -> CycleResult:
     if transport is None:
         from prophet.transport import ProphetDirectTransport
 
         transport = ProphetDirectTransport()
+    # Issue #640: progress stream. Emitter is never None during a real
+    # cycle — tests inject a stub if they want to assert on stages.
+    if progress is None:
+        progress = ProgressEmitter()
     try:
         target = _resolve_target(config)
     except Exception as exc:
@@ -909,11 +915,30 @@ def cmd_run(
             payload={"error": str(exc)[:300]},
         )
 
-    recorder = RunRecorder(run_id=uuid.uuid4().hex, target=target)
+    run_id = uuid.uuid4().hex
+    recorder = RunRecorder(run_id=run_id, target=target)
     recorder.summary["live_mode"] = config.live_mode and yes_live
     recorder.summary["execution_mode"] = config.execution_mode
     delta_neutral = config.execution_mode == EXECUTION_MODE_DELTA_NEUTRAL
     live_hedger: Any = hedger  # tests inject; runtime constructs lazily
+
+    progress.emit(
+        "cycle_start",
+        tick_id=run_id,
+        mode="run",
+        yes_live=bool(yes_live),
+        live_mode=bool(config.live_mode and yes_live),
+        execution_mode=config.execution_mode,
+    )
+
+    def _finish(result: CycleResult) -> CycleResult:
+        """Tag every return path with a `cycle_end` event."""
+        progress.emit(
+            "cycle_end",
+            status=result.status,
+            reason=result.reason,
+        )
+        return result
 
     pairs = list_arb_pairs(target=target)
     recorder.summary["pairs_pre_discover"] = len(pairs)
@@ -928,24 +953,25 @@ def cmd_run(
     auto_result: AutoDiscoverResult | None = None
     pending_ui_submission: list[dict] = []
     if not pairs and not config.auto_discover.enabled:
-        return CycleResult(
+        return _finish(CycleResult(
             status="ok",
             reason="no_pairs_seeded",
             payload=recorder.finish("ok", "no_pairs_seeded"),
-        )
+        ))
 
     jwt, viewer_id, jwt_source = _acquire_jwt(
         config=config, gateway=gateway, transport=transport
     )
     if jwt is None:
-        return CycleResult(
+        return _finish(CycleResult(
             status="blocked",
             reason=jwt_source,
             payload=recorder.finish("blocked", jwt_source),
-        )
+        ))
     recorder.summary["jwt_source"] = jwt_source
     if viewer_id:
         recorder.summary["prophet_viewer_id"] = viewer_id
+    progress.emit("auth_ok", source=jwt_source)
 
     if config.auto_discover.enabled:
         prophet_client_for_discovery = MinimalProphetClient(transport=transport)
@@ -1003,6 +1029,15 @@ def cmd_run(
             pending_ui_submission = auto_result.pending_ui_submission
             # Reload pairs — auto_paired rows are now in arb_pairs.
             pairs = list_arb_pairs(target=target)
+            progress.emit(
+                "auto_discover_done",
+                raw=auto_result.raw_markets_fetched,
+                eligible=auto_result.markets_passing_gates,
+                evaluated=auto_result.candidates_evaluated_for_pairing,
+                paired_existing=auto_result.already_paired,
+                paired_this_run=len(auto_result.auto_paired),
+                pending_creation=len(pending_ui_submission),
+            )
 
             # #542 Fix 2 — seed preflight + trim. Cap the pending list
             # by what the operator can actually fund right now on BOTH
@@ -1013,9 +1048,9 @@ def cmd_run(
                     try:
                         live_hedger = _build_hedger(config)
                     except PolymarketCredentialsMissing as exc:
-                        return _polymarket_creds_missing_result(exc.missing_env_vars)
+                        return _finish(_polymarket_creds_missing_result(exc.missing_env_vars))
                     except Exception as exc:
-                        return _hedger_init_failed_result(exc)
+                        return _finish(_hedger_init_failed_result(exc))
                 seed_block = _apply_seed_preflight_and_trim(
                     pending=pending_ui_submission,
                     initial_bet_usdc=config.auto_discover.initial_bet_usdc,
@@ -1036,9 +1071,13 @@ def cmd_run(
                 if seed_block is not None:
                     # Blocked — `pending_ui_submission` is empty until the
                     # operator funds. Return early with deposit envelope.
-                    return seed_block
+                    progress.emit("seed_preflight_blocked", reason=seed_block.reason)
+                    return _finish(seed_block)
                 pending_ui_submission = recorder.summary.get(
                     "_trimmed_pending", pending_ui_submission
+                )
+                progress.emit(
+                    "seed_preflight_ok", pending_after_trim=len(pending_ui_submission)
                 )
 
     # #636: chain into create-market-via-ui for each pending entry. Only
@@ -1053,7 +1092,15 @@ def cmd_run(
     ):
         ui_submission_invoked = True
         creator = create_market_via_ui or cmd_create_market_via_ui
-        for entry in pending_ui_submission:
+        total_entries = len(pending_ui_submission)
+        for idx, entry in enumerate(pending_ui_submission, start=1):
+            progress.emit(
+                "entry_start",
+                idx=idx,
+                total=total_entries,
+                question=entry.get("question", "")[:120],
+                polymarket_condition_id=entry.get("polymarket_market_id", ""),
+            )
             sub = creator(
                 config=config,
                 gateway=gateway,
@@ -1062,6 +1109,9 @@ def cmd_run(
                 question=entry.get("question", ""),
                 category_slug=entry.get("category_slug", ""),
                 initial_bet_usdc=float(entry.get("initial_bet_usdc", 1.0)),
+                progress=progress,
+                entry_idx=idx,
+                entry_total=total_entries,
             )
             ui_submission_results.append(
                 {
@@ -1071,6 +1121,14 @@ def cmd_run(
                     "prophet_market_id": sub.payload.get("prophet_market_id", ""),
                 }
             )
+            if sub.status == "ok":
+                progress.emit(
+                    "pair_created",
+                    idx=idx,
+                    prophet_market_id=sub.payload.get("prophet_market_id", ""),
+                )
+            else:
+                progress.emit("entry_blocked", idx=idx, reason=sub.reason)
         # Newly-created markets become arb_pairs via record-created-market's
         # UPSERT inside cmd_create_market_via_ui — refresh `pairs` so the
         # scoring loop trades them this same cycle.
@@ -1090,11 +1148,11 @@ def cmd_run(
             payload["pending_ui_submission"] = pending_ui_submission
         if ui_submission_invoked:
             payload["ui_submission_results"] = ui_submission_results
-        return CycleResult(
+        return _finish(CycleResult(
             status="ok",
             reason="no_pairs_seeded_pending_ui_submission",
             payload=payload,
-        )
+        ))
 
     condition_ids = [p["polymarket_condition_id"] for p in pairs]
     polymarket_prices = fetch_market_prices(
@@ -1115,11 +1173,11 @@ def cmd_run(
             f"list_user_orders_failed:{type(exc).__name__}:{str(exc)[:120]}"
         )
     except ProphetUnauthorized:
-        return CycleResult(
+        return _finish(CycleResult(
             status="blocked",
             reason="prophet_unauthorized",
             payload=recorder.finish("blocked", "prophet_unauthorized"),
-        )
+        ))
 
     # Delta-neutral post-fill sweep. Any previously-open order now
     # reported with `filled_shares > 0` triggers an immediate Polymarket
@@ -1134,9 +1192,9 @@ def cmd_run(
                 live_hedger = _build_hedger(config)
                 live_hedger.bind_prophet_cancel(order_client, jwt)
             except PolymarketCredentialsMissing as exc:
-                return _polymarket_creds_missing_result(exc.missing_env_vars)
+                return _finish(_polymarket_creds_missing_result(exc.missing_env_vars))
             except Exception as exc:
-                return _hedger_init_failed_result(exc)
+                return _finish(_hedger_init_failed_result(exc))
         elif hasattr(live_hedger, "bind_prophet_cancel"):
             live_hedger.bind_prophet_cancel(order_client, jwt)
         # Map prophet_market_id → polymarket_condition_id for hedge submission.
@@ -1223,11 +1281,11 @@ def cmd_run(
         try:
             prophet_price = order_client.market_prices(jwt=jwt, market_id=prophet_id)
         except ProphetUnauthorized:
-            return CycleResult(
+            return _finish(CycleResult(
                 status="blocked",
                 reason="prophet_unauthorized",
                 payload=recorder.finish("blocked", "prophet_unauthorized"),
-            )
+            ))
         except (ProphetSchemaError, ProphetGraphQLError) as exc:
             health_by_pair.setdefault(prophet_id, []).append(
                 f"prophet_price_failed:{type(exc).__name__}"
@@ -1328,20 +1386,20 @@ def cmd_run(
         try:
             cash = balance_client.cash_balance(jwt=jwt)
         except ProphetUnauthorized:
-            return CycleResult(
+            return _finish(CycleResult(
                 status="blocked",
                 reason="prophet_unauthorized",
                 payload=recorder.finish("blocked", "prophet_unauthorized"),
-            )
+            ))
         except (ProphetSchemaError, ProphetGraphQLError) as exc:
             recorder.record_blocker(
                 f"cash_balance_failed:{type(exc).__name__}:{str(exc)[:120]}"
             )
-            return CycleResult(
+            return _finish(CycleResult(
                 status="blocked",
                 reason="funds_preflight_unavailable",
                 payload=recorder.finish("blocked", "funds_preflight_unavailable"),
-            )
+            ))
 
         # Two-venue preflight (#536). Every opportunity locks the same
         # USDC notional on both Prophet (LIMIT collateral) and Polymarket
@@ -1383,11 +1441,11 @@ def cmd_run(
                     recorder=recorder,
                 )
             payload["deposit"] = deposit_envelope
-            return CycleResult(
+            return _finish(CycleResult(
                 status="blocked",
                 reason="funds_insufficient",
                 payload=payload,
-            )
+            ))
 
     submitted = 0
     for opp in planned_orders:
@@ -1429,22 +1487,22 @@ def cmd_run(
         return payload
 
     if not (config.live_mode and yes_live) and len(actionable) > 0:
-        return CycleResult(
+        return _finish(CycleResult(
             status="ok",
             reason="cycle_complete_dry_run",
             payload=_attach_pending(recorder.finish("ok", "cycle_complete_dry_run")),
-        )
+        ))
     if submitted == 0 and len(actionable) > 0:
-        return CycleResult(
+        return _finish(CycleResult(
             status="ok_no_fills",
             reason="all_orders_blocked",
             payload=_attach_pending(recorder.finish("ok_no_fills", "all_orders_blocked")),
-        )
-    return CycleResult(
+        ))
+    return _finish(CycleResult(
         status="ok",
         reason="cycle_complete",
         payload=_attach_pending(recorder.finish("ok", "cycle_complete")),
-    )
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -2013,6 +2071,13 @@ def cmd_create_market_via_ui(
     compute_seed_intent: Any | None = None,
     record_created_market: Any | None = None,
     sleep: Any = time.sleep,
+    # Issue #640: optional progress emitter + per-entry index for the
+    # chat-side Monitor. The parent cmd_run passes these in; standalone
+    # `agent.py --command create-market-via-ui` invocations leave them
+    # None and the helpers no-op cleanly.
+    progress: ProgressEmitter | None = None,
+    entry_idx: int = 0,
+    entry_total: int = 0,
 ) -> CycleResult:
     """Drive Prophet's `/create` UI autonomously for one candidate market.
 
@@ -2099,6 +2164,11 @@ def cmd_create_market_via_ui(
                     payload=payload,
                 )
 
+            if progress is not None:
+                progress.emit(
+                    "prophet_session_restored",
+                    idx=entry_idx,
+                )
             return _run_create_market_via_ui_inner(
                 config=config,
                 gateway=gateway,
@@ -2112,6 +2182,8 @@ def cmd_create_market_via_ui(
                 compute_seed_intent=compute_seed_intent,
                 record_created_market=record_created_market,
                 payload=payload,
+                progress=progress,
+                entry_idx=entry_idx,
             )
     except PlaywrightMcpUnavailable:
         return CycleResult(
@@ -2164,7 +2236,12 @@ def _run_create_market_via_ui_inner(
     compute_seed_intent: Any,
     record_created_market: Any,
     payload: dict[str, Any],
+    progress: ProgressEmitter | None = None,
+    entry_idx: int = 0,
 ) -> CycleResult:
+    def _emit(stage: str, **kw: Any) -> None:
+        if progress is not None:
+            progress.emit(stage, idx=entry_idx, **kw)
     # 1. Drive `/create` through Validate + Create Market. The fetch
     # capture is installed before the Create Market click that fires
     # `startOddsCalculation`, so the OCS sessionId is observable from
@@ -2181,17 +2258,31 @@ def _run_create_market_via_ui_inner(
             payload=payload,
         )
     payload["odds_session_id"] = ocs_id
+    _emit("ocs_session_captured")
 
     # 3. Compute the seed-side decision (poll AI fair value + Polymarket book).
-    intent = compute_seed_intent(
-        config=config,
-        polymarket_condition_id=polymarket_condition_id,
-        odds_session_id=ocs_id,
-        polymarket_yes_price=0.0,
-        transport=transport,
-        jwt=cache_entry.jwt,
-        gateway=gateway,
-    )
+    # The AI calc runs 60–180s; heartbeat keeps the chat-side Monitor alive.
+    if progress is not None and entry_idx:
+        with progress.heartbeat(idx=entry_idx, current="ai_calc"):
+            intent = compute_seed_intent(
+                config=config,
+                polymarket_condition_id=polymarket_condition_id,
+                odds_session_id=ocs_id,
+                polymarket_yes_price=0.0,
+                transport=transport,
+                jwt=cache_entry.jwt,
+                gateway=gateway,
+            )
+    else:
+        intent = compute_seed_intent(
+            config=config,
+            polymarket_condition_id=polymarket_condition_id,
+            odds_session_id=ocs_id,
+            polymarket_yes_price=0.0,
+            transport=transport,
+            jwt=cache_entry.jwt,
+            gateway=gateway,
+        )
     if intent.status != "ok":
         payload.update(intent.payload)
         return CycleResult(
@@ -2204,6 +2295,7 @@ def _run_create_market_via_ui_inner(
     hedge_price = float(intent.payload.get("hedge_price") or 0.0)
     payload["seed_side"] = seed_side
     payload["hedge_price"] = hedge_price
+    _emit("ai_calc_done", seed_side=seed_side, hedge_price=hedge_price)
 
     # 4. Fill the bet form (do NOT click Confirm yet).
     create_market_ui.fill_bet_form(
@@ -2211,6 +2303,7 @@ def _run_create_market_via_ui_inner(
     )
 
     # 5. Submit the Polymarket hedge first.
+    _emit("hedge_submitted", price=hedge_price, qty=float(initial_bet_usdc))
     hedge_result = record_created_market(
         config=config,
         polymarket_condition_id=polymarket_condition_id,
@@ -2229,8 +2322,10 @@ def _run_create_market_via_ui_inner(
             reason="hedge_failed_no_commit",
             payload=payload,
         )
+    _emit("hedge_filled", price=hedge_price)
 
     # 6. Hedge filled → click Prophet Confirm.
+    _emit("prophet_confirm_clicked")
     create_market_ui.click_prophet_confirm(session)
     prophet_market_id = create_market_ui.wait_for_market_redirect(session)
     if not prophet_market_id:

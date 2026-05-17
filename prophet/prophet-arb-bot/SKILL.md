@@ -24,6 +24,35 @@ This validation gate prevents the cron and 12h local-pull poller from accruing c
 - **Do not drive `mcp__playwright__*` for `/create`.** Since #636 the subprocess owns its own Playwright-stealth browser and restores the cached Prophet session into it; driving the connected `mcp__playwright__*` browser from the LLM lands in an unauthenticated context and stalls on the sign-in modal. The connected Playwright MCP is still appropriate for ad-hoc operator-facing screenshots and `/wallet` inspection — anything `/create`-adjacent must go through `python3 scripts/agent.py --command run --yes-live`.
 - Only use publishers for actual publisher-backed data/API calls called out below (for example `polymarket-data`, `seren-polygon`, or SerenDB setup paths).
 
+### Live progress stream (#640)
+
+Every `--command run` cycle writes one JSON event per stage transition to `state/run_progress.jsonl` (append-only, flushed per write so a crash mid-cycle preserves every line on disk). The prior cycle is rotated to `state/run_progress.prev.jsonl` for one-tick history. This is a side channel — the `--json-output` envelope on stdout is byte-identical to today's output.
+
+**Before invoking `--command run --yes-live`, arm a `Monitor` on `state/run_progress.jsonl`** so per-entry progress streams into chat as the bot drives Prophet `/create` for each pending market. Without this, an 18-entry queue spends ~30 minutes of silence in the AI seed-calc dead zone.
+
+Stage → human-readable rendering for the chat-side renderer:
+
+| `stage` | sentence template |
+| --- | --- |
+| `cycle_start` | `cycle started (live mode, tick {tick_id})` |
+| `auth_ok` | `auth ok via {source}` |
+| `auto_discover_done` | `auto-discover: {raw} polymarket candidates → {eligible} eligible, {paired_existing} already paired, {pending_creation} need creation` |
+| `seed_preflight_ok` | `funds ok: ready to fund {pending_after_trim} seeds` |
+| `seed_preflight_blocked` | `funds insufficient ({reason}) — see deposit envelope` |
+| `entry_start` | `[{idx}/{total}] {question} — starting /create` |
+| `prophet_session_restored` | `[{idx}] prophet session restored into headless browser` |
+| `ocs_session_captured` | `[{idx}] AI seed calc started (60–180s)` |
+| `heartbeat` | `[{idx}] {current} … {elapsed_s}s` |
+| `ai_calc_done` | `[{idx}] AI seed calc done → {seed_side} side, hedge @ ${hedge_price}` |
+| `hedge_submitted` | `[{idx}] hedge submitted on polymarket: {qty} @ ${price}` |
+| `hedge_filled` | `[{idx}] hedge filled @ ${price}` |
+| `prophet_confirm_clicked` | `[{idx}] prophet confirm clicked` |
+| `pair_created` | `[{idx}] ✓ pair created ({prophet_market_id})` |
+| `entry_blocked` | `[{idx}] ✗ blocked: {reason}` |
+| `cycle_end` | `cycle done — status={status}, reason={reason}` |
+
+Heartbeats fire every 15s during the AI seed calc and any other operation expected to exceed 30s, so the chat-side Monitor never has to guess whether the bot is alive.
+
 ## API Key Setup
 
 **MCP-first (default on Seren Desktop).** Before any subprocess call, probe auth with `mcp__seren-mcp__list_projects`. If it returns a project list, you are authenticated — done. Schema bootstrap and project/database creation can also be performed entirely over MCP (`list_projects` / `create_project`, `list_databases` / `create_database`, `run_sql_transaction`), so on Seren Desktop the agent never needs `SEREN_API_KEY` in the subprocess environment for setup.
@@ -415,6 +444,11 @@ python3 scripts/agent.py --config config.json --command setup --json-output \
 #    JSON output reports `"status": "ok"`. If it reports `blocked`
 #    (e.g. `funds_insufficient_for_seeds`), resolve the blocker using
 #    the deposit envelope and re-run before continuing.
+#
+#    Before launching this command, arm a chat-side Monitor on
+#    `state/run_progress.jsonl` so each stage transition streams into
+#    chat (see "Live progress stream" above). The final JSON envelope
+#    still arrives on stdout when the cycle completes.
 python3 scripts/agent.py --config config.json --command run --yes-live --json-output
 
 # 3. Schedule and start the autonomous hourly runner. Use --yes-live
