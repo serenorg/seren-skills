@@ -78,6 +78,10 @@ class AutoDiscoverResult:
     pending_ui_submission: list[dict] = field(default_factory=list)
     sheet_path: str | None = None
     prophet_lookup_failed: bool = False
+    # #611: when prophet_lookup_failed is True, this carries
+    # "<ExceptionClass>: <message>" so the operator can triage instead
+    # of staring at a bare boolean.
+    prophet_failure_detail: str | None = None
 
 
 def _parse_iso(value: str) -> datetime:
@@ -160,6 +164,7 @@ def run_auto_discover(
 
     prophet_matches: dict[str, str] = {}
     prophet_failed = False
+    prophet_failure_detail: str | None = None
     if new_candidates:
         try:
             prophet_matches = find_matching_prophet_markets(
@@ -169,8 +174,9 @@ def run_auto_discover(
                     c.polymarket_market_id: c.question for c in new_candidates
                 },
             )
-        except Exception:
+        except Exception as exc:
             prophet_failed = True
+            prophet_failure_detail = f"{type(exc).__name__}: {exc}"
             prophet_matches = {}
 
     auto_paired: list[dict] = []
@@ -233,4 +239,5 @@ def run_auto_discover(
         pending_ui_submission=pending_ui,
         sheet_path=sheet_path,
         prophet_lookup_failed=prophet_failed,
+        prophet_failure_detail=prophet_failure_detail,
     )

@@ -361,3 +361,68 @@ def test_run_auto_discover_dedups_existing_pairs_and_splits_matches() -> None:
             "source_skill": "auto_discover",
         }
     ]
+
+
+# ---------------------------------------------------------------------------
+# 5. Diagnostic propagation (#611)
+
+
+def test_run_auto_discover_surfaces_prophet_lookup_exception_detail() -> None:
+    """When `find_matching_prophet_markets` raises, the orchestrator
+    must continue gracefully (existing soft-fail contract) AND surface
+    the exception class + message so the operator can triage. Pre-#611
+    the boolean `prophet_lookup_failed` was the only signal; the
+    underlying exception was silently dropped.
+
+    This is the only test for the diagnostic-capture seam. Behavior on
+    the non-exceptional path is already covered by
+    `test_run_auto_discover_dedups_existing_pairs_and_splits_matches`.
+    """
+
+    class _RaisingProphetClient:
+        def markets_for_dedup(self, *, jwt, limit):
+            raise RuntimeError("simulated viewer.markets timeout")
+
+    rows = [
+        _row(
+            condition_id="cond_pending_after_lookup_failure",
+            question="Will the lookup fail and surface?",
+            volume_24h=80_000.0,
+            end_offset_hours=72,
+        ),
+    ]
+
+    from discovery import auto_discover as ad_module
+
+    monkeypatch_module = pytest.MonkeyPatch()
+    try:
+        monkeypatch_module.setattr(ad_module, "list_arb_pairs", lambda *, target: [])
+        monkeypatch_module.setattr(ad_module, "write_candidate_sheet", lambda **_: None)
+
+        result = ad_module.run_auto_discover(
+            gateway=_StubGateway(rows),
+            prophet_client=_RaisingProphetClient(),
+            jwt="eyJ.fake.jwt",
+            target=None,
+            config=AutoDiscoverConfig(
+                enabled=True,
+                min_24h_volume_usd=10_000.0,
+                min_headroom_hours=24.0,
+                resolution_deadline_iso=DEADLINE.isoformat(),
+                max_candidates=10,
+            ),
+            now=NOW_TS,
+        )
+    finally:
+        monkeypatch_module.undo()
+
+    # Existing soft-fail behavior — cycle continues, candidate falls to
+    # pending_ui_submission. Must not regress.
+    assert result.prophet_lookup_failed is True
+    assert len(result.pending_ui_submission) == 1
+
+    # The bug fix: exception class AND message both reach the result.
+    # Operator now sees what failed, not just "something failed".
+    assert result.prophet_failure_detail is not None
+    assert "RuntimeError" in result.prophet_failure_detail
+    assert "simulated viewer.markets timeout" in result.prophet_failure_detail

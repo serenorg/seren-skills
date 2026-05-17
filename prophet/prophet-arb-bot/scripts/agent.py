@@ -925,6 +925,10 @@ def cmd_run(
             recorder.summary["auto_discover_prophet_lookup_failed"] = (
                 auto_result.prophet_lookup_failed
             )
+            if auto_result.prophet_failure_detail:
+                recorder.summary["auto_discover_prophet_lookup_error"] = (
+                    auto_result.prophet_failure_detail
+                )
             if auto_result.sheet_path:
                 recorder.summary["arb_candidates_sheet"] = auto_result.sheet_path
             pending_ui_submission = auto_result.pending_ui_submission
