@@ -2195,6 +2195,57 @@ def check_neg_risk_approvals(
     return results
 
 
+def _resolve_v2_funder(
+    *,
+    eoa_address: str,
+) -> tuple[str | None, int | None]:
+    """Decide which `(funder, signature_type)` pair to hand to py-clob-client (#624).
+
+    py-clob-client's default (`funder=None, signature_type=None`) makes
+    the CLOB read collateral against the EOA derived from the signing
+    key. That worked for V1 Polymarket wallets where the EOA held USDC.e
+    and had direct approvals to the V1 spenders. It breaks for V2 Safe-
+    proxy wallets, where the EOA signs but funds (pUSD) live on a Safe
+    proxy at a CREATE2-derived address; the CLOB returns 0 collateral
+    for the EOA and the bot reports `seed_preflight_polymarket_avail=0.0`
+    even when the proxy holds 100+ pUSD.
+
+    Resolution order (each step is a strict fallback to the next):
+
+      1. `POLY_FUNDER` env override — when set, use it verbatim with
+         `signature_type=2` (POLY_GNOSIS_SAFE). Operator escape hatch
+         for offline runs or non-default funders.
+      2. CREATE2-derive the proxy via `fetch_proxy_address_for_eoa(eoa)`
+         AND confirm it's deployed via `fetch_eth_get_code(proxy) != "0x"`.
+         If both pass, route to `(proxy, 2)`.
+      3. Otherwise return `(None, None)` so py-clob-client keeps the
+         EOA path. Preserves V1 wallets and fresh V2 wallets that have
+         not yet completed onboarding.
+
+    Conservative by design: an undeployed-proxy or RPC failure path
+    must NOT misroute the funder. The EOA path is correct for V1 and
+    harmlessly returns 0 for un-onboarded V2 (already the steady-state
+    symptom the operator sees pre-onboarding).
+    """
+    explicit = safe_str(os.getenv("POLY_FUNDER"), "").strip()
+    if explicit:
+        return explicit, 2
+    try:
+        from polymarket_v2_broadcast import (
+            fetch_eth_get_code,
+            fetch_proxy_address_for_eoa,
+        )
+    except ImportError:
+        return None, None
+    proxy = fetch_proxy_address_for_eoa(eoa_address=eoa_address)
+    if not proxy:
+        return None, None
+    code = fetch_eth_get_code(proxy)
+    if not code or code == "0x":
+        return None, None
+    return proxy, 2
+
+
 class DirectClobTrader:
     """Direct Polymarket CLOB client for local py-clob-client execution."""
 
@@ -2242,11 +2293,23 @@ class DirectClobTrader:
             api_secret=api_secret,
             api_passphrase=api_passphrase,
         )
+        # #624: derive the EOA address from the private key (cheap, no
+        # RPC), then resolve the V2 funder. py-clob-client's `ClobClient`
+        # has its own EOA derivation but we need the address upfront to
+        # ask "does this EOA have a deployed V2 Safe proxy?" — if yes,
+        # the proxy is where pUSD lives and is what the CLOB must read
+        # collateral against. Falls back to EOA (funder=None,
+        # signature_type=None) for V1 wallets and undeployed V2 wallets.
+        from eth_account import Account
+        eoa_address = Account.from_key(private_key).address
+        funder, signature_type = _resolve_v2_funder(eoa_address=eoa_address)
         self._client = ClobClient(
             host="https://clob.polymarket.com",
             key=private_key,
             chain_id=chain_id,
             creds=creds,
+            funder=funder,
+            signature_type=signature_type,
         )
         self.address = safe_str(self._client.get_address(), "").lower()
         self._neg_risk_checked = False
