@@ -627,6 +627,42 @@ def _annotate_polymarket_state(
         deposit_envelope["polymarket_auto_approve"] = result
         recorder.record_blocker(f"polymarket_auto_approve:{result.get('status')}")
 
+    # #605 — V2 onboarding pipeline. Post-2026-04-28 Polymarket users
+    # need a Safe proxy + pUSD collateral; the V1 EOA-direct approve
+    # path above is a no-op for wallets that have never used the
+    # Polymarket UI to onboard. The orchestrator is idempotent — for
+    # already-onboarded wallets it costs ~6 read-only RPC calls and
+    # returns `skipped_already_onboarded` without signing anything.
+    # Same live gate as #596: a live hedger is already wired in here,
+    # which implies live_mode=true + --yes-live + delta_neutral. Pinned-
+    # target defense-in-depth lives in
+    # `polymarket_v2._check_v2_pinned_target_or_raise`.
+    try:
+        import os as _os
+        from polymarket_v2_broadcast import onboard_polymarket_v2
+        v2_private_key = (
+            _os.getenv("POLY_PRIVATE_KEY") or _os.getenv("WALLET_PRIVATE_KEY") or ""
+        ).strip()
+        if v2_private_key:
+            # Target the same notional the legacy preflight uses for
+            # the hedge leg sizing. The orchestrator only transfers
+            # USDC.e if proxy is short of this amount, and only wraps
+            # what's already on the proxy.
+            target_raw = max(int(polymarket_avail_usdc * 10**6), 0) or 1_000_000
+            v2_result = onboard_polymarket_v2(
+                eoa_address=trader_address,
+                eoa_private_key=v2_private_key,
+                target_usdc_e_raw=target_raw,
+            )
+            deposit_envelope["polymarket_v2_onboarding"] = v2_result
+            recorder.record_blocker(f"polymarket_v2_onboarding:{v2_result.get('status')}")
+    except Exception as exc:  # noqa: BLE001 — never crash the cycle on onboarding probe
+        deposit_envelope["polymarket_v2_onboarding"] = {
+            "status": "failed",
+            "error": f"orchestrator_exception:{type(exc).__name__}",
+        }
+        recorder.record_blocker(f"polymarket_v2_onboarding:exception:{type(exc).__name__}")
+
 
 def _apply_seed_preflight_and_trim(
     *,
