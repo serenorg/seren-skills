@@ -63,6 +63,10 @@ from otp_worker import (
     PrivyAuthFailed,
 )
 from otp_worker.auth_facade import AuthFacade
+from otp_worker.establish_session import (
+    SessionEstablishmentFailed,
+    establish_browser_session_for_create,
+)
 from otp_worker.playwright_client import RealBrowserSession
 from otp_worker import playwright_mcp_gateway as _playwright_mcp_gateway
 from otp_worker.playwright_mcp_gateway import (
@@ -2004,12 +2008,19 @@ def cmd_create_market_via_ui(
     # Injectable seams — tests stub these without touching MCP/Playwright.
     open_session_factory: Any | None = None,
     restore_session: Any | None = None,
+    establish_session: Any | None = None,
     create_market_ui: Any | None = None,
     compute_seed_intent: Any | None = None,
     record_created_market: Any | None = None,
     sleep: Any = time.sleep,
 ) -> CycleResult:
     """Drive Prophet's `/create` UI autonomously for one candidate market.
+
+    Issue #638: this command opens ONE browser. `establish_session` plants
+    Privy state into that browser via `playwright_add_init_script` (or
+    falls through to OTP cold-start on the same browser if the cache is
+    stale or restore verification fails). The legacy "acquire JWT in
+    browser A, then drive `/create` in browser B" pattern is gone.
 
     Returns one of:
       - status=ok,      reason=pair_created                 (success)
@@ -2031,29 +2042,6 @@ def cmd_create_market_via_ui(
             payload=payload,
         )
 
-    cache = SessionCache()
-    entry = cache.read()
-    if not entry.is_fresh():
-        # Try silent refresh + cold-start by reusing _acquire_jwt; on success
-        # we re-read the cache to pick up the refresh_token too.
-        jwt, _, jwt_source = _acquire_jwt(
-            config=config, gateway=gateway, transport=transport
-        )
-        if not jwt:
-            payload["auth_source"] = jwt_source
-            return CycleResult(
-                status="blocked",
-                reason="prophet_session_unavailable",
-                payload=payload,
-            )
-        entry = cache.read()
-    if not entry.jwt or not entry.refresh_token:
-        return CycleResult(
-            status="blocked",
-            reason="prophet_session_unavailable",
-            payload=payload,
-        )
-
     if compute_seed_intent is None:
         compute_seed_intent = cmd_compute_seed_intent
     if record_created_market is None:
@@ -2062,6 +2050,8 @@ def cmd_create_market_via_ui(
         from otp_worker import create_market_ui as create_market_ui  # type: ignore
     if restore_session is None:
         from otp_worker.privy_restore import restore_privy_session as restore_session
+    if establish_session is None:
+        establish_session = establish_browser_session_for_create
 
     if open_session_factory is None:
         if _playwright_mcp_gateway.PlaywrightStealthGateway._resolve_default_command() is None:
@@ -2072,18 +2062,52 @@ def cmd_create_market_via_ui(
             )
         open_session_factory = _default_browser_session_factory
 
+    inputs = getattr(config, "inputs", {}) or {}
+    email = str(inputs.get("prophet_email") or "")
+    provider = str(inputs.get("email_provider") or "")
+
     try:
         with open_session_factory() as session:
+            try:
+                cache_entry = establish_session(
+                    session=session,
+                    email=email,
+                    provider=provider,
+                    seren_user_id="",
+                    bounty_id="",
+                    config_gateway=gateway,
+                    transport=transport,
+                    pw_gateway=None,
+                    restore=restore_session,
+                )
+            except SessionEstablishmentFailed as exc:
+                payload["auth_source"] = exc.reason
+                return CycleResult(
+                    status="blocked",
+                    reason="prophet_session_unavailable",
+                    payload=payload,
+                )
+
+            if (
+                cache_entry is None
+                or not getattr(cache_entry, "jwt", "")
+                or not getattr(cache_entry, "refresh_token", "")
+            ):
+                return CycleResult(
+                    status="blocked",
+                    reason="prophet_session_unavailable",
+                    payload=payload,
+                )
+
             return _run_create_market_via_ui_inner(
                 config=config,
                 gateway=gateway,
                 transport=transport,
-                cache_entry=entry,
+                cache_entry=cache_entry,
                 polymarket_condition_id=polymarket_condition_id,
                 question=question,
                 initial_bet_usdc=initial_bet_usdc,
                 session=session,
-                restore_session=restore_session,
                 create_market_ui=create_market_ui,
                 compute_seed_intent=compute_seed_intent,
                 record_created_market=record_created_market,
@@ -2136,23 +2160,18 @@ def _run_create_market_via_ui_inner(
     question: str,
     initial_bet_usdc: float,
     session: Any,
-    restore_session: Any,
     create_market_ui: Any,
     compute_seed_intent: Any,
     record_created_market: Any,
     payload: dict[str, Any],
 ) -> CycleResult:
-    # 1. Restore Privy session into the fresh origin-partitioned localStorage.
-    restore_session(
-        session,
-        jwt=cache_entry.jwt,
-        refresh_token=cache_entry.refresh_token,
-    )
-
-    # 2. Drive `/create` through Validate + Create Market. The fetch
+    # 1. Drive `/create` through Validate + Create Market. The fetch
     # capture is installed before the Create Market click that fires
     # `startOddsCalculation`, so the OCS sessionId is observable from
-    # `window.__seren_capture__`.
+    # `window.__seren_capture__`. The session arrives already
+    # authenticated — `establish_browser_session_for_create` either
+    # planted Privy state via `add_init_script` or drove the OTP modal
+    # on this same browser before we got here (issue #638).
     create_market_ui.open_create_form(session, question=question)
     ocs_id = create_market_ui.poll_for_ocs_id(session)
     if not ocs_id:

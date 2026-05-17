@@ -72,6 +72,7 @@ class BrowserSession(Protocol):
     def get_cookie(self, name: str) -> str | None: ...
     def get_url(self) -> str: ...
     def is_checked(self, selector: str) -> bool: ...
+    def add_init_script(self, script: str) -> None: ...
 
 
 def open_privy_modal(session: BrowserSession) -> None:
@@ -317,6 +318,16 @@ class RealBrowserSession:
             return False
         return bool(_coerce_evaluate_result(result))
 
+    def add_init_script(self, script: str) -> None:
+        """Register a script that runs at `document_start` on every navigation.
+
+        Issue #638: planting Privy state via `evaluate` after navigate is racy —
+        the SDK has already decided "no session" by the time the write lands.
+        `add_init_script` runs before any page JS boots, so the Privy SDK
+        observes the planted state on its first read.
+        """
+        self._call("/add_init_script", {"script": script})
+
     # -- Lifecycle ----------------------------------------------------------
 
     def close(self) -> None:
@@ -386,10 +397,18 @@ def _coerce_evaluate_result(result: Any) -> Any:
 
 
 def _mcp_tool_args(tool: str, body: dict[str, Any]) -> dict[str, Any]:
-    """Translate the historical BrowserSession body to MCP tool args."""
+    """Translate the historical BrowserSession body to MCP tool args.
+
+    The upgraded Seren Desktop Playwright MCP exposes
+    `playwright_wait_for_selector` with `{selector, state?, timeout?}` —
+    `timeout` is in milliseconds despite the unitless name. Pre-upgrade
+    this branch never fired because the gateway fell through to the
+    `evaluate` poll path in `RealBrowserSession.wait_for`. Now that the
+    dedicated tool exists, we have to send the MCP-native key.
+    """
     if tool == "wait_for_selector":
         return {
             "selector": body.get("selector", ""),
-            "timeout_ms": body.get("timeout") or body.get("timeout_ms", 30_000),
+            "timeout": body.get("timeout") or body.get("timeout_ms", 30_000),
         }
     return dict(body)
