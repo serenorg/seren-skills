@@ -628,3 +628,9 @@ Seed hedge statuses:
 **`blockers` contains `duplicate_open_order:...`.**
 
 - The arb-bot already has an open order at this outcome+side. By design — the bot does not double-quote.
+
+**`create_market_via_ui_unexpected` with `TimeoutError: Timed out waiting for response from playwright-stealth MCP` in `payload.error` (#647).**
+
+- Peer `playwright-stealth` MCP children from other Claude Code / Codex sessions are competing for the host Playwright runtime. Every `--command run --yes-live` cycle now reclaims stale peer children automatically before spawning its own — no manual intervention is needed under normal conditions.
+- If the issue persists, the TimeoutError message embeds the pre-spawn `stale_killed=[...]` PID list. If that list is empty *and* you still see the timeout, the bottleneck is something other than peer-MCP contention (network-mounted home directory, Chromium not installed, disk IO stall) — check `stderr_tail` in the same message.
+- To run the cleanup pass manually (without doing a full cycle), use `python3 scripts/agent.py --command reset-playwright-mcp --json-output`. The envelope reports which PIDs were killed, which were skipped because they belonged to the current process tree, and any per-PID signaling errors.
