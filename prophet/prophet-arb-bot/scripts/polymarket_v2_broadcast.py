@@ -196,6 +196,57 @@ def fetch_safe_nonce(
         return None
 
 
+def compute_wrap_all_target_usdc_e_raw(
+    *,
+    eoa_address: str,
+    proxy_address: Optional[str],
+    seren_publisher: str = "seren-polygon",
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> int:
+    """#620 — `target_usdc_e_raw` for the wrap-all-EOA strategy.
+
+    Returns `proxy_pusd + proxy_usdc_e + eoa_usdc_e` (raw uint256 units).
+
+    Driving the orchestrator with this target makes step 2 transfer
+    ALL EOA USDC.e (deficit = target - proxy_collateral = eoa_usdc_e)
+    and step 4 wrap the freshly-transferred amount. Idempotent on
+    subsequent cycles: when EOA holds zero new USDC.e the target equals
+    the proxy's current collateral, which the orchestrator's skip
+    conditions treat as already-onboarded.
+
+    Returns 0 when `proxy_address is None` (upstream RPC failure
+    resolving the proxy address). That zero is the contract that lets
+    the orchestrator's own preflight surface `proxy_address_unavailable`
+    cleanly rather than masking the upstream error.
+
+    Replaces the legacy `polymarket_avail_usdc * 10**6` fallback that
+    locked target at 1 USDC because CLOB collateral is 0 until a
+    deposit is credited — stranding operator funds and leaving
+    auto-discover seed-preflight blocked at `polymarket_deficit=50.0_usdc`.
+    """
+    if proxy_address is None:
+        return 0
+    proxy_pusd = fetch_erc20_balance_raw(
+        token=POLYGON_PUSD,
+        owner=proxy_address,
+        seren_publisher=seren_publisher,
+        timeout_seconds=timeout_seconds,
+    ) or 0
+    proxy_usdc_e = fetch_erc20_balance_raw(
+        token=POLYGON_USDC_E,
+        owner=proxy_address,
+        seren_publisher=seren_publisher,
+        timeout_seconds=timeout_seconds,
+    ) or 0
+    eoa_usdc_e = fetch_erc20_balance_raw(
+        token=POLYGON_USDC_E,
+        owner=eoa_address,
+        seren_publisher=seren_publisher,
+        timeout_seconds=timeout_seconds,
+    ) or 0
+    return proxy_pusd + proxy_usdc_e + eoa_usdc_e
+
+
 # ---------------------------------------------------------------------------
 # Broadcast helpers. Wrap `_build_and_send_tx` from the legacy
 # broadcaster (reuses EIP-1559 fee resolution, nonce fetch, gas estimate,
@@ -634,5 +685,6 @@ __all__ = [
     "fetch_erc20_balance_raw",
     "fetch_erc20_allowance_raw",
     "fetch_safe_nonce",
+    "compute_wrap_all_target_usdc_e_raw",
     "onboard_polymarket_v2",
 ]

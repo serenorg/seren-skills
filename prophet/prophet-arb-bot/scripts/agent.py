@@ -639,16 +639,32 @@ def _annotate_polymarket_state(
     # `polymarket_v2._check_v2_pinned_target_or_raise`.
     try:
         import os as _os
-        from polymarket_v2_broadcast import onboard_polymarket_v2
+        from polymarket_v2_broadcast import (
+            onboard_polymarket_v2,
+            fetch_proxy_address_for_eoa,
+            compute_wrap_all_target_usdc_e_raw,
+        )
         v2_private_key = (
             _os.getenv("POLY_PRIVATE_KEY") or _os.getenv("WALLET_PRIVATE_KEY") or ""
         ).strip()
         if v2_private_key:
-            # Target the same notional the legacy preflight uses for
-            # the hedge leg sizing. The orchestrator only transfers
-            # USDC.e if proxy is short of this amount, and only wraps
-            # what's already on the proxy.
-            target_raw = max(int(polymarket_avail_usdc * 10**6), 0) or 1_000_000
+            # #620: target = proxy_pusd + proxy_usdc_e + eoa_usdc_e so the
+            # orchestrator transfers ALL EOA USDC.e and wraps it to pUSD on
+            # the proxy. The legacy `polymarket_avail_usdc * 10**6` fallback
+            # locked target at the 1-USDC floor because CLOB collateral is
+            # 0 until a deposit is credited — stranding operator funds and
+            # leaving auto-discover seed-preflight blocked at
+            # `polymarket_deficit=50.0_usdc`. Idempotency is preserved:
+            # subsequent cycles with no new EOA funding produce a target
+            # equal to current proxy collateral, which the orchestrator's
+            # skip conditions treat as already-onboarded.
+            proxy_addr_for_target = fetch_proxy_address_for_eoa(
+                eoa_address=trader_address,
+            )
+            target_raw = compute_wrap_all_target_usdc_e_raw(
+                eoa_address=trader_address,
+                proxy_address=proxy_addr_for_target,
+            )
             v2_result = onboard_polymarket_v2(
                 eoa_address=trader_address,
                 eoa_private_key=v2_private_key,
