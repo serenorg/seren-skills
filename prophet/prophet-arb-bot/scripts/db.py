@@ -22,19 +22,30 @@ Caching:
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
+import socket
 import ssl
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.parse import urlparse
 
 PUBLISHER_HOST = "https://api.serendb.com"
 PUBLISHER_PREFIX = "/publishers/seren-db"
 HTTP_TIMEOUT_SECONDS = 20.0
+# Per-address TCP connect budget. Issue #628: stdlib's
+# `socket.create_connection` reuses the SAME timeout for every address
+# returned by `getaddrinfo`, so an unreachable record (typically IPv6)
+# can burn the full HTTP budget before a reachable one is tried. Curl's
+# Happy Eyeballs sidesteps this by racing connects; we approximate by
+# bounding each attempt to a short timeout and falling through on
+# failure. Five seconds is generous for a healthy TCP handshake and
+# short enough that walking 2-3 stale addresses stays well under the
+# overall HTTP_TIMEOUT_SECONDS budget.
+PER_ADDRESS_CONNECT_TIMEOUT_SECONDS = 5.0
 PG_CONNECT_TIMEOUT_SECONDS = 60.0  # Neon-style compute can cold-start
 
 
@@ -64,6 +75,46 @@ def _http_post(path: str, *, api_key: str, body: dict[str, Any]) -> Any:
     return _http_request("POST", path, api_key=api_key, body=body)
 
 
+def _connect_with_fallback(
+    host: str,
+    port: int,
+    *,
+    per_address_timeout: float = PER_ADDRESS_CONNECT_TIMEOUT_SECONDS,
+) -> socket.socket:
+    """Open a TCP socket to (host, port), iterating resolved addresses.
+
+    Issue #628: stdlib's `socket.create_connection` shares a single
+    timeout across every address `getaddrinfo` returns. When the first
+    record is unreachable — typically an IPv6 record that black-holes at
+    TCP connect — the full timeout fires before later, reachable
+    addresses are attempted. `curl` and the Seren MCP transport sidestep
+    this with Happy Eyeballs; we approximate by capping each attempt to
+    `per_address_timeout` and falling through on connect failure.
+
+    Raises the last seen connect error if no address is reachable, so
+    bootstrap fails loudly instead of returning a half-open state.
+    """
+    addrs = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not addrs:
+        raise OSError(f"no addresses resolved for {host}:{port}")
+    last_exc: BaseException | None = None
+    for af, socktype, proto, _canonname, sockaddr in addrs:
+        sock = socket.socket(af, socktype, proto)
+        try:
+            sock.settimeout(per_address_timeout)
+            sock.connect(sockaddr)
+            return sock
+        except (socket.timeout, TimeoutError, ConnectionError, OSError) as exc:
+            last_exc = exc
+            try:
+                sock.close()
+            except Exception:
+                pass
+            continue
+    assert last_exc is not None  # loop entered ≥ once because addrs is non-empty
+    raise last_exc
+
+
 def _http_request(
     method: str,
     path: str,
@@ -79,24 +130,58 @@ def _http_request(
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    req = Request(
-        f"{PUBLISHER_HOST}{PUBLISHER_PREFIX}{path}",
-        headers=headers,
-        method=method,
-        data=data,
-    )
+
+    url = f"{PUBLISHER_HOST}{PUBLISHER_PREFIX}{path}"
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    request_target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+
+    sock = _connect_with_fallback(host, port)
+    ssl_sock: ssl.SSLSocket | None = None
+    conn: http.client.HTTPSConnection | None = None
     try:
-        with urlopen(req, timeout=HTTP_TIMEOUT_SECONDS, context=_ssl_context()) as r:
-            text = r.read().decode("utf-8")
-    except HTTPError as exc:
-        body_text = ""
+        # Reset the socket timeout to the overall request budget — the
+        # short per-address window only applies to TCP connect.
+        sock.settimeout(HTTP_TIMEOUT_SECONDS)
+        ssl_sock = _ssl_context().wrap_socket(sock, server_hostname=host)
+        sock = None  # ownership transferred to ssl_sock
+        conn = http.client.HTTPSConnection(host, port, timeout=HTTP_TIMEOUT_SECONDS)
+        conn.sock = ssl_sock  # type: ignore[assignment]  # bypass .connect()
+        ssl_sock = None  # ownership transferred to conn
+        conn.request(method, request_target, body=data, headers=headers)
+        resp = conn.getresponse()
+        text = resp.read().decode("utf-8")
+        status = resp.status
+    except Exception:
+        # Make sure no socket leaks on the error path.
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        elif ssl_sock is not None:
+            try:
+                ssl_sock.close()
+            except Exception:
+                pass
+        elif sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        raise
+    else:
         try:
-            body_text = exc.read().decode("utf-8")
+            conn.close()
         except Exception:
             pass
+
+    if status >= 400:
         raise RuntimeError(
-            f"seren-db {method} {path} failed: HTTP {exc.code} body={body_text[:300]}"
-        ) from exc
+            f"seren-db {method} {path} failed: HTTP {status} body={text[:300]}"
+        )
+
     payload = json.loads(text) if text else {}
     # The seren-db publisher uses two envelope shapes:
     #   - { "data": [ ... ] }                 (list responses, e.g. /projects)
