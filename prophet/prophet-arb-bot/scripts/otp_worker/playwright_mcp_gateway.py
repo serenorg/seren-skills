@@ -201,7 +201,7 @@ class PlaywrightStealthGateway:
         fd = proc.stdout.fileno()
         header_buf = bytearray()
         while b"\r\n\r\n" not in header_buf:
-            header_buf.extend(_read_exact(fd, 1, self._timeout_seconds))
+            header_buf.extend(self._read_exact_with_stderr(fd, 1))
             if len(header_buf) > 16384:
                 raise RuntimeError("Invalid MCP header: too large.")
         header_raw, _ = header_buf.split(b"\r\n\r\n", 1)
@@ -217,11 +217,45 @@ class PlaywrightStealthGateway:
                     content_length = -1
         if content_length < 0:
             raise RuntimeError("Invalid MCP header: missing content-length.")
-        body = _read_exact(fd, content_length, self._timeout_seconds)
+        body = self._read_exact_with_stderr(fd, content_length)
         parsed = json.loads(body.decode("utf-8"))
         if not isinstance(parsed, dict):
             raise RuntimeError("Invalid MCP response payload.")
         return parsed
+
+    def _read_exact_with_stderr(self, fd: int, size: int) -> bytes:
+        try:
+            return _read_exact(fd, size, self._timeout_seconds)
+        except TimeoutError as exc:
+            # Issue #638: surface what the MCP child wrote to stderr so
+            # future regressions are diagnosable instead of opaque.
+            stderr_tail = self._drain_stderr_nonblocking()
+            if stderr_tail:
+                raise TimeoutError(
+                    f"{exc} stderr_tail={stderr_tail!r}"
+                ) from exc
+            raise
+
+    def _drain_stderr_nonblocking(self, *, max_bytes: int = 2048) -> str:
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return ""
+        fd = proc.stderr.fileno()
+        chunks: list[bytes] = []
+        remaining = max_bytes
+        try:
+            while remaining > 0:
+                ready, _, _ = select.select([fd], [], [], 0)
+                if not ready:
+                    break
+                chunk = os.read(fd, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        except Exception:
+            return ""
+        return b"".join(chunks).decode("utf-8", errors="replace")
 
 
 def _read_exact(fd: int, size: int, timeout_seconds: float) -> bytes:

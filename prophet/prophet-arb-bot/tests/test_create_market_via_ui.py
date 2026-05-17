@@ -1,5 +1,10 @@
-"""Issue #636: `cmd_create_market_via_ui` is the subprocess-owned
+"""Issue #636/#638: `cmd_create_market_via_ui` is the subprocess-owned
 replacement for the legacy agent-driven Playwright runbook.
+
+Since #638, session establishment lives behind the `establish_session`
+seam — these tests inject a no-op establish callable that returns a
+fresh cache entry, so the inner orchestration is exercised without
+touching `SessionCache`, Playwright, or the OTP modal.
 
 The full flow has many seams; these tests pin only the two critical
 abort paths so we don't ever leak naked Polymarket exposure:
@@ -14,7 +19,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import agent
 from agent import AgentConfig, CycleResult, cmd_create_market_via_ui
 from arbitrage.intelligence import IntelligenceConfig
 from arbitrage.scoring import ScoringConfig
@@ -37,7 +41,12 @@ def _config() -> AgentConfig:
 
 
 class _FreshCacheEntry:
-    """SessionCache entry that reports a fresh JWT + refresh token."""
+    """Stand-in cache entry returned by the stub `establish_session`.
+
+    The inner orchestration consumes `cache_entry.jwt` when calling
+    `compute_seed_intent`, so we just need anything with a `.jwt` and
+    `.refresh_token` truthy.
+    """
 
     jwt = "eyJ.fresh.jwt"
     refresh_token = "rt_fresh"
@@ -48,9 +57,15 @@ class _FreshCacheEntry:
         return True
 
 
-class _StubCache:
-    def read(self) -> _FreshCacheEntry:
-        return _FreshCacheEntry()
+def _stub_establish_session(**_kwargs: Any) -> _FreshCacheEntry:
+    """No-op replacement for `establish_browser_session_for_create`.
+
+    Acts as if the cache was fresh and `restore_privy_session` succeeded.
+    The browser session arg is the stub `_StubSession`; we don't drive
+    it here because the OTP/restore path is exercised in
+    `test_establish_session.py`, not this file.
+    """
+    return _FreshCacheEntry()
 
 
 class _StubSession:
@@ -126,15 +141,7 @@ class _StubCreateMarketUI:
         return self.redirect_market_id
 
 
-def _no_op_restore(session: Any, *, jwt: str, refresh_token: str) -> None:
-    return None
-
-
-def test_create_market_via_ui_no_edge_aborts_without_hedge(
-    monkeypatch: Any,
-) -> None:
-    monkeypatch.setattr(agent, "SessionCache", _StubCache)
-
+def test_create_market_via_ui_no_edge_aborts_without_hedge() -> None:
     record_calls: list[dict[str, Any]] = []
 
     def stub_compute_seed_intent(**kwargs: Any) -> CycleResult:
@@ -159,7 +166,7 @@ def test_create_market_via_ui_no_edge_aborts_without_hedge(
         question="Will X happen?",
         initial_bet_usdc=1.0,
         open_session_factory=lambda: _SessionScope(session),
-        restore_session=_no_op_restore,
+        establish_session=_stub_establish_session,
         create_market_ui=ui,
         compute_seed_intent=stub_compute_seed_intent,
         record_created_market=stub_record_created_market,
@@ -174,11 +181,7 @@ def test_create_market_via_ui_no_edge_aborts_without_hedge(
     assert "fill_bet_form" not in [c.split(":")[0] for c in ui.calls]
 
 
-def test_create_market_via_ui_unwinds_when_prophet_confirm_fails(
-    monkeypatch: Any,
-) -> None:
-    monkeypatch.setattr(agent, "SessionCache", _StubCache)
-
+def test_create_market_via_ui_unwinds_when_prophet_confirm_fails() -> None:
     def stub_compute_seed_intent(**kwargs: Any) -> CycleResult:
         return CycleResult(
             status="ok",
@@ -233,7 +236,7 @@ def test_create_market_via_ui_unwinds_when_prophet_confirm_fails(
         question="Will X happen?",
         initial_bet_usdc=1.0,
         open_session_factory=lambda: _SessionScope(session),
-        restore_session=_no_op_restore,
+        establish_session=_stub_establish_session,
         create_market_ui=ui,
         compute_seed_intent=stub_compute_seed_intent,
         record_created_market=stub_record_created_market,
