@@ -45,9 +45,14 @@ REASON_BANKROLL_TRIM = "bankroll_trim"
 DepthAssessor = Callable[[str, float, float], bool]
 """Callback the agent supplies to the qualifier.
 
-Args: (polymarket_market_id, size_usdc, max_slippage_bps).
+Args: (polymarket_yes_token_id, size_usdc, max_slippage_bps).
 Returns True when the visible Polymarket book can fund a hedge of
 `size_usdc` at slippage ≤ `max_slippage_bps`.
+
+#631: the first arg is the uint256-decimal YES token_id, NOT the
+hex condition_id. Polymarket CLOB's `/book?token_id=` requires the
+former; passing the latter returns an empty payload and silently
+marks every candidate `hedge_ineligible`.
 """
 
 
@@ -83,16 +88,29 @@ def qualify_and_trim_pending(
         return QualifierDecision()
 
     # Phase 1 — depth eligibility (only when a depth_assessor is wired).
+    # #631: feed the YES token_id (uint256 decimal) to the assessor, not
+    # the condition_id (hex). The CLOB's /book endpoint requires the
+    # former; passing the latter returns an empty payload and silently
+    # marks every candidate `hedge_ineligible`.
     eligible: list[dict] = []
     dropped: list[dict] = []
     for entry in pending:
         if depth_assessor is None:
             eligible.append(entry)
             continue
-        market_id = str(entry.get("polymarket_market_id") or "")
+        token_id = str(entry.get("polymarket_yes_token_id") or "")
+        if not token_id:
+            # Defensive — a candidate that arrived without a token_id
+            # cannot be depth-probed. Drop it as ineligible rather than
+            # falling back to condition_id (which is the pre-fix bug we
+            # are closing) or silently letting it through.
+            row = dict(entry)
+            row["reason"] = REASON_HEDGE_INELIGIBLE
+            dropped.append(row)
+            continue
         try:
             ok = bool(
-                depth_assessor(market_id, float(initial_bet_usdc), float(max_hedge_slippage_bps))
+                depth_assessor(token_id, float(initial_bet_usdc), float(max_hedge_slippage_bps))
             )
         except Exception:
             # A depth probe that raised is treated as ineligible — the

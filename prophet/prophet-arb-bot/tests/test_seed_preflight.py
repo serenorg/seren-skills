@@ -40,10 +40,18 @@ def _pending(
     *,
     volume_24h: float,
     initial_bet_usdc: float = 1.0,
+    polymarket_yes_token_id: str | None = None,
 ) -> dict:
     """Shape mirrors `_build_pending_entry` in auto_discover.py."""
     return {
         "polymarket_market_id": polymarket_market_id,
+        # #631: distinct default token_id so tests that don't override
+        # can still tell which id the qualifier passed downstream.
+        "polymarket_yes_token_id": (
+            polymarket_yes_token_id
+            if polymarket_yes_token_id is not None
+            else f"TOKEN_{polymarket_market_id}"
+        ),
         "question": f"q for {polymarket_market_id}",
         "category": "Sports",
         "category_slug": "sports",
@@ -173,8 +181,11 @@ def test_qualifier_drops_depth_insufficient_before_bankroll_trim() -> None:
         _pending("C", volume_24h=60_000),
     ]
 
-    def fake_depth(market_id: str, size_usdc: float, max_slippage_bps: float) -> bool:
-        return market_id != "B-NO-DEPTH"
+    def fake_depth(token_id: str, size_usdc: float, max_slippage_bps: float) -> bool:
+        # #631: the qualifier feeds the YES token_id here, not the
+        # condition_id. The _pending helper defaults
+        # polymarket_yes_token_id to f"TOKEN_{polymarket_market_id}".
+        return token_id != "TOKEN_B-NO-DEPTH"
 
     decision = qualify_and_trim_pending(
         pending=pending,
@@ -234,3 +245,57 @@ def test_qualifier_decision_dataclass_shape() -> None:
     assert isinstance(decision, QualifierDecision)
     assert decision.qualified == []
     assert decision.dropped == []
+
+
+def test_qualifier_feeds_token_id_to_depth_assessor_not_condition_id() -> None:
+    """Issue #631 — the bug closure assertion.
+
+    The qualifier MUST pass `polymarket_yes_token_id` to the depth
+    assessor. Pre-fix it passed `polymarket_market_id` (a hex condition
+    id), which made every Polymarket CLOB `/book?token_id=...` probe
+    return an empty payload — every auto-discover candidate was marked
+    `hedge_ineligible` regardless of real book depth.
+
+    The fixture sets `polymarket_market_id` and
+    `polymarket_yes_token_id` to distinct values so the test cannot
+    pass by coincidence: only the token_id selection unblocks the
+    candidate.
+    """
+    received_ids: list[str] = []
+
+    def capture_depth(market_id: str, size_usdc: float, max_slippage_bps: float) -> bool:
+        received_ids.append(market_id)
+        return True  # accept everything — we're testing what gets passed in.
+
+    pending = [
+        _pending(
+            "cond_abc",
+            volume_24h=50_000,
+            polymarket_yes_token_id="1111111111111111111",
+        ),
+        _pending(
+            "cond_def",
+            volume_24h=40_000,
+            polymarket_yes_token_id="2222222222222222222",
+        ),
+    ]
+
+    decision = qualify_and_trim_pending(
+        pending=pending,
+        max_fundable_count=5,
+        initial_bet_usdc=1.0,
+        depth_assessor=capture_depth,
+        max_hedge_slippage_bps=200.0,
+    )
+
+    # The depth assessor saw the YES token_ids — the values Polymarket
+    # CLOB's `/book` endpoint requires. It did NOT see the hex
+    # condition_ids that would have triggered the original bug.
+    assert received_ids == [
+        "1111111111111111111",
+        "2222222222222222222",
+    ]
+    assert [e["polymarket_market_id"] for e in decision.qualified] == [
+        "cond_abc",
+        "cond_def",
+    ]

@@ -66,6 +66,51 @@ def test_falls_back_to_best_bid_when_outcomes_missing(stub_gateway) -> None:
     assert abs(price.no_price - 0.43) < 1e-9
 
 
+def test_populates_yes_token_id_from_clob_token_ids(stub_gateway) -> None:
+    """Issue #631 — `PolymarketPrice.yes_token_id` MUST come from the
+    Gamma `clobTokenIds[0]` field.
+
+    Why this matters: every downstream consumer of `PolymarketPrice`
+    (depth assessor, hedge submission, seed-bet hedger) calls Polymarket
+    CLOB's `/book?token_id=...` and `create_order(token_id=...)`. Those
+    endpoints expect the uint256 decimal token_id, NOT the hex
+    condition_id. The bug: `fetch_market_price` discarded the
+    `clobTokenIds` field, leaving downstream code to pass condition_id
+    where token_id was required → empty book responses → 100% of
+    delta-neutral trades dead.
+
+    The fix is structural: pipe the YES token_id alongside the
+    condition_id from the moment Gamma hands it to us.
+    """
+    stub_gateway.register(
+        "polymarket-data",
+        "GET",
+        "/markets?condition_ids=0xcond_yankees_mets",
+        [
+            {
+                "conditionId": "0xcond_yankees_mets",
+                # Polymarket Gamma returns clobTokenIds as a list of two
+                # uint256-decimal strings: [YES_token_id, NO_token_id].
+                # The arb-bot trades the YES leg by convention; index 0
+                # is the YES token.
+                "clobTokenIds": [
+                    "75094876810524634581423098765432101234567890",
+                    "21099876543210987654321098765432109876543210",
+                ],
+                "outcomePrices": '["0.55", "0.45"]',
+            }
+        ],
+    )
+    price = fetch_market_price(
+        gateway=stub_gateway, condition_id="0xcond_yankees_mets"
+    )
+    assert price is not None
+    assert price.polymarket_condition_id == "0xcond_yankees_mets"
+    # The YES token_id is what every CLOB call needs. Condition_id stays
+    # too — it's still the canonical pair identity.
+    assert price.yes_token_id == "75094876810524634581423098765432101234567890"
+
+
 def test_uses_condition_ids_filter_for_gamma_lookup(stub_gateway) -> None:
     """Live-bug regression (2026-05-13).
 

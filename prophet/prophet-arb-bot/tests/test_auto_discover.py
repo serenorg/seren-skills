@@ -64,6 +64,12 @@ def _row(
         "closed": closed,
         "active": True,
         "slug": slug,
+        # #631: Polymarket Gamma always returns clobTokenIds on active
+        # markets ([YES_token_id, NO_token_id], both uint256 decimal).
+        # The auto-discover pipeline pipes index 0 (YES) through to the
+        # pending entry so the seed_qualifier can probe Polymarket book
+        # depth. Mirror the field here so test fixtures match production.
+        "clobTokenIds": [f"{condition_id}_YES", f"{condition_id}_NO"],
     }
 
 
@@ -199,8 +205,10 @@ def test_default_auto_discover_checks_later_candidates_before_no_pending_work(
     assert result.candidates_found == 60
     assert result.candidates_evaluated_for_pairing == 60
 
-    def first_50_fail(market_id: str, size_usdc: float, max_slippage_bps: float) -> bool:
-        return market_id == "cond_050"
+    def first_50_fail(token_id: str, size_usdc: float, max_slippage_bps: float) -> bool:
+        # #631: the qualifier feeds the YES token_id, not condition_id.
+        # _row(...) sets clobTokenIds=[f"{cid}_YES", f"{cid}_NO"].
+        return token_id == "cond_050_YES"
 
     decision = qualify_and_trim_pending(
         pending=result.pending_ui_submission,
@@ -266,9 +274,19 @@ def test_pending_ui_submission_entry_matches_bounty_runner_shape() -> None:
     the agent's `/create` Playwright runbook treats both skills'
     output identically. Drift here breaks the runbook silently —
     the agent would still drive the UI but capture the wrong skill's
-    record-back path."""
+    record-back path.
+
+    Issue #631: the entry MUST carry `polymarket_yes_token_id` alongside
+    `polymarket_market_id`. The seed_qualifier's depth_assessor calls
+    Polymarket CLOB's `/book?token_id=...` which requires the uint256
+    decimal token_id, not the hex condition_id. Without this field the
+    depth probe returns empty and every candidate fails as
+    `hedge_ineligible` (proven blast radius: 100% of auto-discover
+    seed candidates rejected in live runs).
+    """
     cand = PolymarketSource(
         polymarket_market_id="cond_abc123",
+        polymarket_yes_token_id="9876543210123456789",
         question="Will the Knicks win Game 5?",
         resolution_date=datetime(2026, 5, 19, 22, 0, 0, tzinfo=timezone.utc),
         category="Sports",
@@ -280,10 +298,13 @@ def test_pending_ui_submission_entry_matches_bounty_runner_shape() -> None:
     entry = _build_pending_entry(cand=cand, initial_bet_usdc=1.0, viewer_id="vid_42")
 
     # The exact eight fields the bounty-runner emits (audited 2026-05-14)
-    # plus the `source_skill` field that lets the agent route the
-    # captured prophet_market_id back to the right skill's persistence.
+    # plus `source_skill` that lets the agent route the captured
+    # prophet_market_id back to the right skill's persistence, plus
+    # `polymarket_yes_token_id` (#631) that lets the seed_qualifier
+    # probe Polymarket book depth without a separate runtime lookup.
     assert set(entry.keys()) == {
         "polymarket_market_id",
+        "polymarket_yes_token_id",
         "question",
         "category",
         "category_slug",
@@ -294,6 +315,7 @@ def test_pending_ui_submission_entry_matches_bounty_runner_shape() -> None:
         "source_skill",
     }
     assert entry["polymarket_market_id"] == "cond_abc123"
+    assert entry["polymarket_yes_token_id"] == "9876543210123456789"
     assert entry["category_slug"] == "sports"
     assert entry["initial_bet_usdc"] == 1.0
     assert entry["prophet_viewer_id"] == "vid_42"

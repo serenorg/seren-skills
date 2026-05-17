@@ -183,7 +183,7 @@ class _StubHedger:
     def submit_hedge(
         self,
         *,
-        condition_id: str,
+        token_id: str,
         hedge_side: str,
         size_usdc: float,
         marketable_price: float,
@@ -192,7 +192,7 @@ class _StubHedger:
             raise RuntimeError("polymarket_clob_rejected: book moved")
         self.submitted.append(
             {
-                "condition_id": condition_id,
+                "token_id": token_id,
                 "hedge_side": hedge_side,
                 "size_usdc": size_usdc,
                 "marketable_price": marketable_price,
@@ -232,6 +232,7 @@ def test_hedge_submits_opposite_side_polymarket_order_on_prophet_fill() -> None:
     outcome = hedge_filled_order(
         prophet_order=filled,
         polymarket_condition_id="cond-abc",
+        polymarket_yes_token_id="999111222333",
         hedger=hedger,
         marketable_price=0.45,
     )
@@ -245,7 +246,11 @@ def test_hedge_submits_opposite_side_polymarket_order_on_prophet_fill() -> None:
     assert len(hedger.submitted) == 1
     assert hedger.submitted[0]["hedge_side"] == "sell"
     assert hedger.submitted[0]["size_usdc"] == pytest.approx(50.0)
-    assert hedger.submitted[0]["condition_id"] == "cond-abc"
+    # Issue #631: hedger.submit_hedge MUST receive the YES token_id,
+    # not the condition_id. Polymarket CLOB's `create_order(token_id=)`
+    # and `/book?token_id=` both expect uint256 decimal token_ids; a
+    # hex condition_id silently fails as `naked_exposure`.
+    assert hedger.submitted[0]["token_id"] == "999111222333"
     assert hedger.unwound == []
 
 
@@ -278,6 +283,7 @@ def test_hedge_failure_invokes_prophet_unwind_and_records_naked_status() -> None
     outcome = hedge_filled_order(
         prophet_order=filled,
         polymarket_condition_id="cond-xyz",
+        polymarket_yes_token_id="777888999",
         hedger=hedger,
         marketable_price=0.58,
     )

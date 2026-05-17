@@ -52,14 +52,17 @@ class _StubHedger:
     def submit_hedge(
         self,
         *,
-        condition_id: str,
+        token_id: str,
         hedge_side: str,
         size_usdc: float,
         marketable_price: float,
     ) -> dict[str, Any]:
+        # #631: hedger.submit_hedge receives the YES token_id (uint256
+        # decimal), not the condition_id. Record what the hedger saw so
+        # tests can assert the correct identifier reached the CLOB seam.
         self.submit_calls.append(
             {
-                "condition_id": condition_id,
+                "token_id": token_id,
                 "hedge_side": hedge_side,
                 "size_usdc": size_usdc,
                 "marketable_price": marketable_price,
@@ -87,6 +90,7 @@ def test_seed_hedge_success_records_hedged_outcome() -> None:
     outcome = hedge_seed_bet(
         prophet_market_id="PMI-1",
         polymarket_condition_id="0xCOND",
+        polymarket_yes_token_id="1111-YES-TOKEN",
         prophet_seed_side="buy",  # bought YES on Prophet
         size_usdc=1.0,
         marketable_price=0.001,
@@ -101,9 +105,10 @@ def test_seed_hedge_success_records_hedged_outcome() -> None:
     assert outcome.error is None
 
     # Hedge side is the OPPOSITE of the Prophet seed:
+    # #631: the hedger sees the YES token_id, not the condition_id.
     assert hedger.submit_calls == [
         {
-            "condition_id": "0xCOND",
+            "token_id": "1111-YES-TOKEN",
             "hedge_side": "sell",
             "size_usdc": 1.0,
             "marketable_price": 0.001,
@@ -121,6 +126,7 @@ def test_seed_hedge_failure_records_no_commit_status() -> None:
     outcome = hedge_seed_bet(
         prophet_market_id="PMI-2",
         polymarket_condition_id="0xCOND",
+        polymarket_yes_token_id="2222-YES-TOKEN",
         prophet_seed_side="buy",
         size_usdc=1.0,
         marketable_price=0.001,
@@ -144,6 +150,7 @@ def test_seed_hedge_missing_order_id_is_no_commit_failure() -> None:
     outcome = hedge_seed_bet(
         prophet_market_id="PMI-3",
         polymarket_condition_id="0xCOND",
+        polymarket_yes_token_id="3333-YES-TOKEN",
         prophet_seed_side="sell",
         size_usdc=1.0,
         marketable_price=0.999,
@@ -170,6 +177,7 @@ def test_seed_hedge_uses_opposite_side_for_sell_seed() -> None:
     hedge_seed_bet(
         prophet_market_id="PMI-4",
         polymarket_condition_id="0xCOND",
+        polymarket_yes_token_id="4444-YES-TOKEN",
         prophet_seed_side="sell",
         size_usdc=1.0,
         marketable_price=0.999,
@@ -194,6 +202,7 @@ def test_seed_hedge_unwinds_polymarket_when_prophet_confirm_declines() -> None:
 
     outcome = unwind_seed_hedge_after_prophet_decline(
         polymarket_condition_id="0xCOND",
+        polymarket_yes_token_id="5555-YES-TOKEN",
         prophet_seed_side="buy",
         size_usdc=1.0,
         marketable_price=0.61,
@@ -204,7 +213,8 @@ def test_seed_hedge_unwinds_polymarket_when_prophet_confirm_declines() -> None:
     assert outcome.polymarket_order_id == "POLY-unwind"
     assert hedger.submit_calls == [
         {
-            "condition_id": "0xCOND",
+            # #631: hedger sees the token_id, not the condition_id.
+            "token_id": "5555-YES-TOKEN",
             "hedge_side": "buy",
             "size_usdc": 1.0,
             "marketable_price": 0.61,

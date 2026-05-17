@@ -84,7 +84,7 @@ from funds_preflight import (
 from polymarket_state import classify_polymarket_collateral_state
 from seed_preflight_orchestration import resolve_seed_preflight_action
 from arbitrage.hedge import hedge_seed_bet  # type: ignore  # re-export
-from polymarket.prices import fetch_market_prices
+from polymarket.prices import fetch_market_price, fetch_market_prices
 from prophet import (
     ProphetClientError,
     ProphetGraphQLError,
@@ -504,29 +504,27 @@ def _build_hedger(config: AgentConfig) -> Any:
                     pass
             self._prophet_cancel = cancel
 
-        def fetch_book(self, condition_id: str) -> dict[str, Any]:
-            # `fetch_book` keys on Polymarket token_id, not condition_id.
-            # The polymarket-data publisher's `/markets?condition_ids`
-            # response carries token_ids; the runner resolves them in
-            # `fetch_market_prices` and caches them. For the depth check
-            # we re-fetch via the publisher's `/books` indirectly through
-            # the live trading client. NOTE: condition_id ≠ token_id;
-            # callers must pass the right one.
-            return fetch_book(condition_id)
+        def fetch_book(self, token_id: str) -> dict[str, Any]:
+            # #631: `fetch_book` keys on Polymarket token_id (uint256
+            # decimal), NOT condition_id (hex). Param name is `token_id`
+            # so the type confusion that broke every delta-neutral cycle
+            # pre-fix is structurally impossible — callers can only
+            # arrive here with a value they explicitly labeled token_id.
+            return fetch_book(token_id)
 
         def submit_hedge(
             self,
             *,
-            condition_id: str,
+            token_id: str,
             hedge_side: str,
             size_usdc: float,
             marketable_price: float,
         ) -> dict[str, Any]:
-            # `condition_id` here is actually the polymarket token_id
-            # for the YES outcome — see scoring.PairPrices contract.
-            # The depth check fed the same id; we keep the naming
-            # consistent with the Hedger protocol.
-            book = fetch_book(condition_id)
+            # #631: `token_id` is the uint256-decimal YES outcome
+            # token_id. The CLOB's `create_order(token_id=...)` and
+            # `/book?token_id=` both require this form; condition_id is
+            # rejected silently. The Hedger protocol enforces the name.
+            book = fetch_book(token_id)
             from polymarket_live import (
                 fetch_fee_rate_bps,
                 snap_price,
@@ -535,12 +533,12 @@ def _build_hedger(config: AgentConfig) -> Any:
             tick_size = safe_str(book.get("tick_size"), "0.01")
             price = snap_price(marketable_price, tick_size, hedge_side.upper())
             neg_risk = bool(book.get("neg_risk", False))
-            fee_bps = fetch_fee_rate_bps(condition_id)
+            fee_bps = fetch_fee_rate_bps(token_id)
             # Convert USDC notional to share count at the marketable
             # price. Polymarket's `create_order` takes `size` in shares.
             shares = size_usdc / max(price, 1e-6)
             response = self._trader.create_order(
-                token_id=condition_id,
+                token_id=token_id,
                 side=hedge_side.upper(),
                 price=price,
                 size=shares,
@@ -826,9 +824,13 @@ def _apply_seed_preflight_and_trim(
     # no live hedger is wired in (no hedge eligibility to check).
     depth_assessor = None
     if delta_neutral and live_hedger is not None:
-        def _assess(market_id: str, size_usdc: float, slippage_bps: float) -> bool:
+        # #631: param is `token_id` (uint256 decimal) not `market_id`.
+        # The qualifier reads `polymarket_yes_token_id` from each
+        # pending entry and feeds it here. Polymarket CLOB's
+        # `/book?token_id=` requires the uint256-decimal form.
+        def _assess(token_id: str, size_usdc: float, slippage_bps: float) -> bool:
             try:
-                book = live_hedger.fetch_book(market_id)
+                book = live_hedger.fetch_book(token_id)
             except Exception:
                 return False
             verdict = assess_polymarket_depth(
@@ -1078,6 +1080,9 @@ def cmd_run(
         elif hasattr(live_hedger, "bind_prophet_cancel"):
             live_hedger.bind_prophet_cancel(order_client, jwt)
         # Map prophet_market_id → polymarket_condition_id for hedge submission.
+        # #631: also resolve YES token_id from the cached polymarket_prices.
+        # The CLOB's create_order needs the uint256-decimal token_id, not
+        # the hex condition_id.
         pair_lookup = {
             p["prophet_market_id"]: p["polymarket_condition_id"] for p in pairs
         }
@@ -1088,6 +1093,23 @@ def cmd_run(
                 condition_id = pair_lookup.get(o.market_id)
                 if not condition_id:
                     continue
+                # #631: token_id is required for the Polymarket leg.
+                # polymarket_prices was populated above from Gamma's
+                # /markets response which carries clobTokenIds. If the
+                # cache miss happens (publisher returned without the
+                # field), skip with a structured naked-exposure record
+                # — submitting with condition_id is the very bug we're
+                # closing.
+                cached_price = polymarket_prices.get(condition_id)
+                yes_token_id = (
+                    cached_price.yes_token_id if cached_price is not None else ""
+                )
+                if not yes_token_id:
+                    recorder.record_blocker(
+                        f"hedge_token_id_missing:{o.order_id}:{condition_id}"
+                    )
+                    hedge_failures += 1
+                    continue
                 # Marketable price is best-opposing-side from Polymarket
                 # book at submission time; we re-fetch inside the hedger.
                 # The hedge_filled_order helper only needs a price for the
@@ -1097,6 +1119,7 @@ def cmd_run(
                 outcome = hedge_filled_order(
                     prophet_order=o,
                     polymarket_condition_id=condition_id,
+                    polymarket_yes_token_id=yes_token_id,
                     hedger=live_hedger,
                     marketable_price=marketable_price,
                 )
@@ -1158,6 +1181,10 @@ def cmd_run(
                 prophet_no=prophet_price.no_price,
                 polymarket_yes=polymarket_price.yes_price,
                 polymarket_no=polymarket_price.no_price,
+                # #631: pipe the YES token_id through so the pre-trade
+                # depth check and hedge submission can hit Polymarket
+                # CLOB's `/book?token_id=` and `create_order(token_id=)`.
+                polymarket_yes_token_id=polymarket_price.yes_token_id,
             )
         )
         verdict = assess_pair_health(
@@ -1194,8 +1221,18 @@ def cmd_run(
         # fails, fall back to the single-leg path with a blocker so the
         # operator can investigate.
         if delta_neutral and live_hedger is not None:
+            # #631: probe Polymarket book using the YES token_id from
+            # the Opportunity. The CLOB rejects condition_id at this
+            # endpoint; pre-fix this silently returned no_liquidity and
+            # blocked every opportunity.
+            if not opp.polymarket_yes_token_id:
+                depth_blocked += 1
+                recorder.record_blocker(
+                    f"depth_check_token_id_missing:{opp.polymarket_condition_id}"
+                )
+                continue
             try:
-                book = live_hedger.fetch_book(opp.polymarket_condition_id)
+                book = live_hedger.fetch_book(opp.polymarket_yes_token_id)
                 hedge_side = "sell" if opp.side.lower() == "buy" else "buy"
                 depth: DepthAssessment = assess_polymarket_depth(
                     book_payload=book,
@@ -1430,8 +1467,10 @@ def cmd_compute_seed_intent(
     polymarket_yes_price: float,
     transport: Any,
     jwt: str,
+    gateway: HttpGateway | None = None,
     poll: Any | None = None,
     fetch_book: Any | None = None,
+    resolve_yes_token_id: Any | None = None,
     poll_interval_s: float = 2.0,
     poll_timeout_s: float = 180.0,
 ) -> CycleResult:
@@ -1523,8 +1562,30 @@ def cmd_compute_seed_intent(
             },
         )
 
+    # #631: Polymarket CLOB's `/book?token_id=` requires the YES
+    # uint256-decimal token_id, not the hex condition_id. Resolve via
+    # Gamma's `/markets?condition_ids=` before probing the book.
+    # The resolver is injectable so tests can short-circuit it without
+    # standing up a full gateway stub.
+    resolver = resolve_yes_token_id or _resolve_yes_token_id
+    yes_token_id = resolver(
+        gateway=gateway,
+        polymarket_condition_id=polymarket_condition_id,
+    )
+    if not yes_token_id:
+        return CycleResult(
+            status="blocked",
+            reason="polymarket_book_unavailable",
+            payload={
+                **base_payload,
+                "is_viable": True,
+                "prophet_fair_value_bps": pricing.yes_fair_value_bps,
+                "polymarket_yes_price": float(polymarket_yes_price),
+                "error": "polymarket_yes_token_id_unavailable",
+            },
+        )
     try:
-        book_payload = fetch_book(polymarket_condition_id)
+        book_payload = fetch_book(yes_token_id)
     except Exception as exc:
         return CycleResult(
             status="blocked",
@@ -1640,6 +1701,32 @@ def _resolve_polymarket_yes_price(
     return 0.0, "empty_book"
 
 
+def _resolve_yes_token_id(
+    *,
+    gateway: HttpGateway | None,
+    polymarket_condition_id: str,
+) -> str:
+    """#631: one-shot lookup of the YES token_id from Polymarket Gamma.
+
+    Used by `cmd_record_created_market` where the cycle hasn't already
+    populated a `polymarket_prices` cache. Returns "" if the gateway
+    is missing or the publisher response doesn't carry clobTokenIds.
+    Callers treat empty as "cannot hedge — fail closed" rather than
+    falling back to condition_id (the very bug we are closing).
+    """
+    if gateway is None or not polymarket_condition_id:
+        return ""
+    try:
+        price = fetch_market_price(
+            gateway=gateway, condition_id=polymarket_condition_id
+        )
+    except Exception:
+        return ""
+    if price is None:
+        return ""
+    return price.yes_token_id or ""
+
+
 # ---------------------------------------------------------------------------
 # Record-created-market (#538)
 #
@@ -1658,6 +1745,7 @@ def cmd_record_created_market(
     polymarket_marketable_price: float = 0.0,
     seed_size_usdc: float | None = None,
     prophet_confirm_declined: bool = False,
+    gateway: HttpGateway | None = None,
 ) -> CycleResult:
     """Handle one agent-driven Prophet `/create` result.
 
@@ -1703,6 +1791,20 @@ def cmd_record_created_market(
                 reason="missing_seed_hedge_inputs",
                 payload=payload,
             )
+        # #631: resolve the YES token_id from Gamma's `clobTokenIds`
+        # so the Polymarket unwind hits `create_order(token_id=...)`
+        # with the value the CLOB requires.
+        yes_token_id = _resolve_yes_token_id(
+            gateway=gateway,
+            polymarket_condition_id=polymarket_condition_id,
+        )
+        if not yes_token_id:
+            payload["hedge_error"] = "polymarket_yes_token_id_unavailable"
+            return CycleResult(
+                status="blocked",
+                reason="polymarket_token_id_unavailable",
+                payload=payload,
+            )
         try:
             hedger = _build_hedger(config)
         except PolymarketCredentialsMissing as exc:
@@ -1712,6 +1814,7 @@ def cmd_record_created_market(
 
         outcome = unwind_seed_hedge_after_prophet_decline(
             polymarket_condition_id=polymarket_condition_id,
+            polymarket_yes_token_id=yes_token_id,
             prophet_seed_side=prophet_seed_side,
             size_usdc=size,
             marketable_price=float(polymarket_marketable_price),
@@ -1734,6 +1837,20 @@ def cmd_record_created_market(
         )
 
     if wants_seed_action and not prophet_market_id:
+        # #631: resolve YES token_id before constructing the hedger so
+        # we fail fast (and cheaply) on a token_id miss rather than
+        # initializing the live trading client only to throw later.
+        yes_token_id = _resolve_yes_token_id(
+            gateway=gateway,
+            polymarket_condition_id=polymarket_condition_id,
+        )
+        if not yes_token_id:
+            payload["hedge_error"] = "polymarket_yes_token_id_unavailable"
+            return CycleResult(
+                status="blocked",
+                reason="polymarket_token_id_unavailable",
+                payload=payload,
+            )
         try:
             hedger = _build_hedger(config)
         except PolymarketCredentialsMissing as exc:
@@ -1744,6 +1861,7 @@ def cmd_record_created_market(
         outcome = hedge_seed_bet(
             prophet_market_id="",
             polymarket_condition_id=polymarket_condition_id,
+            polymarket_yes_token_id=yes_token_id,
             prophet_seed_side=prophet_seed_side,
             size_usdc=size,
             marketable_price=float(polymarket_marketable_price),
@@ -1993,6 +2111,11 @@ def main(argv: list[str] | None = None) -> int:
             polymarket_marketable_price=args.polymarket_marketable_price,
             seed_size_usdc=args.seed_size_usdc,
             prophet_confirm_declined=args.prophet_confirm_declined,
+            # #631: gateway is needed to resolve the YES token_id from
+            # Polymarket Gamma before any seed hedge / unwind submits
+            # to the CLOB. cmd_run already had this — cmd_record_created
+            # _market did not.
+            gateway=gateway,
         )
     elif args.command == "compute-seed-intent":
         if not args.odds_session_id or not args.polymarket_condition_id:
@@ -2030,6 +2153,13 @@ def main(argv: list[str] | None = None) -> int:
                     polymarket_yes_price=args.polymarket_yes_price,
                     transport=transport,
                     jwt=jwt,
+                    # #631: cmd_compute_seed_intent now resolves the YES
+                    # token_id via Gamma before probing Polymarket's
+                    # /book endpoint. Without the gateway it fails fast
+                    # with polymarket_book_unavailable rather than
+                    # silently passing condition_id and getting an
+                    # empty book (the pre-fix bug).
+                    gateway=gateway,
                     poll_interval_s=args.poll_interval_s,
                     poll_timeout_s=args.poll_timeout_s,
                 )

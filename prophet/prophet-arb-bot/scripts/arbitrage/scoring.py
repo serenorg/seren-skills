@@ -34,6 +34,11 @@ class PairPrices:
     prophet_no: float
     polymarket_yes: float
     polymarket_no: float
+    # #631 — YES token_id (uint256 decimal) propagated from
+    # PolymarketPrice. The pre-trade depth check and hedge submission
+    # both need this; condition_id alone is insufficient. Default ""
+    # keeps legacy test fixtures constructible.
+    polymarket_yes_token_id: str = ""
 
     def is_priced(self) -> bool:
         return self.prophet_yes > 0 and self.polymarket_yes > 0
@@ -65,6 +70,12 @@ class Opportunity:
     limit_price: float  # the price we'll quote on prophet
     reason: str = ""
     health_warnings: list[str] = field(default_factory=list)
+    # #631 — YES token_id (uint256 decimal) carried through from
+    # PairPrices so the pre-trade depth check and hedge submission
+    # can hit Polymarket CLOB's `/book?token_id=` and
+    # `create_order(token_id=)`. Default "" so existing test
+    # fixtures that construct Opportunity directly still work.
+    polymarket_yes_token_id: str = ""
 
     def is_actionable(self) -> bool:
         """Whether the agent should submit this opportunity as an order.
@@ -113,6 +124,7 @@ def score_pair(
         return Opportunity(
             prophet_market_id=prices.prophet_market_id,
             polymarket_condition_id=prices.polymarket_condition_id,
+            polymarket_yes_token_id=prices.polymarket_yes_token_id,
             side="buy",
             outcome="yes",
             prophet_price=prices.prophet_yes,
@@ -162,6 +174,7 @@ def score_pair(
     return Opportunity(
         prophet_market_id=prices.prophet_market_id,
         polymarket_condition_id=prices.polymarket_condition_id,
+        polymarket_yes_token_id=prices.polymarket_yes_token_id,
         side=side,
         outcome="yes",
         prophet_price=prophet_price,

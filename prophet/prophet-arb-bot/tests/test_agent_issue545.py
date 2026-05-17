@@ -183,14 +183,15 @@ class _SeedHedger:
     def submit_hedge(
         self,
         *,
-        condition_id: str,
+        token_id: str,
         hedge_side: str,
         size_usdc: float,
         marketable_price: float,
     ) -> dict[str, Any]:
+        # #631: hedger.submit_hedge accepts `token_id`, not `condition_id`.
         self.submitted.append(
             {
-                "condition_id": condition_id,
+                "token_id": token_id,
                 "hedge_side": hedge_side,
                 "size_usdc": size_usdc,
                 "marketable_price": marketable_price,
@@ -211,6 +212,14 @@ def test_record_created_market_preconfirm_submits_polymarket_first(
 ) -> None:
     hedger = _SeedHedger()
     monkeypatch.setattr(agent, "_build_hedger", lambda config: hedger)
+    # #631: cmd_record_created_market resolves the YES token_id via
+    # Polymarket Gamma; short-circuit to keep this test focused on the
+    # seed-hedge submission semantics.
+    monkeypatch.setattr(
+        agent,
+        "_resolve_yes_token_id",
+        lambda *, gateway, polymarket_condition_id: "YES-TOKEN-545",
+    )
     monkeypatch.setattr(
         agent,
         "upsert_arb_pair",
@@ -233,7 +242,7 @@ def test_record_created_market_preconfirm_submits_polymarket_first(
     assert result.payload["next_action"] == "click_prophet_confirm"
     assert hedger.submitted == [
         {
-            "condition_id": "0xCOND",
+            "token_id": "YES-TOKEN-545",
             "hedge_side": "sell",
             "size_usdc": 1.0,
             "marketable_price": 0.001,
@@ -246,6 +255,11 @@ def test_record_created_market_unwinds_after_prophet_confirm_decline(
 ) -> None:
     hedger = _SeedHedger()
     monkeypatch.setattr(agent, "_build_hedger", lambda config: hedger)
+    monkeypatch.setattr(
+        agent,
+        "_resolve_yes_token_id",
+        lambda *, gateway, polymarket_condition_id: "YES-TOKEN-545",
+    )
 
     result = agent.cmd_record_created_market(
         config=_config(),
@@ -261,7 +275,7 @@ def test_record_created_market_unwinds_after_prophet_confirm_decline(
     assert result.payload["hedge_status"] == "unwound_after_prophet_decline"
     assert hedger.submitted == [
         {
-            "condition_id": "0xCOND",
+            "token_id": "YES-TOKEN-545",
             "hedge_side": "buy",
             "size_usdc": 1.0,
             "marketable_price": 0.62,
