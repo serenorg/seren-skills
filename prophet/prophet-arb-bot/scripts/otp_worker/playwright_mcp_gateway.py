@@ -76,12 +76,25 @@ PROPHET_STABLE_URL = "https://app.prophetmarket.ai/markets"
 #       The MCP's hand-rolled addInitScript double-patches
 #       navigator.permissions.query on top of the stealth plugin's own
 #       evasion. Off for /create.
+#   BROWSER_TYPE=chrome (issue #685)
+#       After #684 wired the three vars above into every spawn site, live
+#       cycles still blocked at OtpEmailTimeout: privy:connections never
+#       landed in localStorage. Side-by-side ps evidence showed the
+#       connected MCP launching Google Chrome while the bundled MCP fell
+#       through to Playwright's bundled Chromium. Privy's embedded-wallet
+#       provisioning needs Chrome-specific surfaces (Widevine CDM, GAIA
+#       identity, WebAuthn platform authenticator) that vanilla Chromium
+#       does not ship. The bundled MCP's browser.ts:309 already reads
+#       BROWSER_TYPE and routes "chrome" to the installed-browser
+#       registry's executablePath (or Playwright's channel="chrome"
+#       fallback) — same path the connected MCP uses.
 PRIVY_COMPATIBLE_ENV: dict[str, str] = {
     "SEREN_PLAYWRIGHT_HEADLESS": "0",
     "SEREN_PLAYWRIGHT_STEALTH_EVASIONS_DISABLE": (
         "iframe.contentWindow,navigator.permissions"
     ),
     "SEREN_PLAYWRIGHT_DISABLE_PAGE_INIT_PATCH": "1",
+    "BROWSER_TYPE": "chrome",
 }
 _RESET_ENTRY_CAPTURE_SCRIPT = """
 (() => {
