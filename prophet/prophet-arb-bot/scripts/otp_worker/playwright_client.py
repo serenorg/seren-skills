@@ -43,6 +43,12 @@ PRIVY_TOKEN_LOCAL_STORAGE_KEY = "privy:token"
 # `window.localStorage["privy:refresh_token"]`. Keep the legacy cookie name
 # as a fallback so operators on older Privy installs don't regress.
 PRIVY_REFRESH_LOCAL_STORAGE_KEY = "privy:refresh_token"
+# Issue #674: the Privy SDK requires `privy:pat` (Privy access token) and
+# `privy:id_token` (identity token) in localStorage alongside `privy:token`
+# at boot. Without them, `Dy._getToken` calls `Dh.destroyLocalState` and
+# wipes everything to force re-login. Capture and plant all three keys.
+PRIVY_PAT_LOCAL_STORAGE_KEY = "privy:pat"
+PRIVY_ID_TOKEN_LOCAL_STORAGE_KEY = "privy:id_token"
 PRIVY_REFRESH_COOKIE = "privy-refresh-token"
 PRIVY_TOKEN_COOKIE = "privy-token"
 PRIVY_SESSION_COOKIE = "privy-session"
@@ -54,6 +60,8 @@ class PrivyAuthArtifacts:
     refresh_token: str
     privy_token_cookie: str
     privy_session_cookie: str
+    privy_pat: str = ""
+    privy_id_token: str = ""
 
 
 class BrowserSession(Protocol):
@@ -216,11 +224,25 @@ def capture_artifacts(session: BrowserSession, *, jwt: str) -> PrivyAuthArtifact
         )
         if _is_privy_deprecation_marker(refresh_token):
             refresh_token = ""
+    # Issue #674: read `privy:pat` and `privy:id_token` from localStorage.
+    # The Privy SDK persists both as JSON-stringified strings (literal
+    # surrounding quotes), so `_unwrap_jwt` strips them the same way it
+    # strips the wrapping from `privy:token` and `privy:refresh_token`.
+    # Empty strings (legacy SDKs that don't populate one of these keys)
+    # round-trip cleanly through the cache and the restore script.
+    privy_pat = _unwrap_jwt(
+        session.get_local_storage(PRIVY_PAT_LOCAL_STORAGE_KEY)
+    ) or ""
+    privy_id_token = _unwrap_jwt(
+        session.get_local_storage(PRIVY_ID_TOKEN_LOCAL_STORAGE_KEY)
+    ) or ""
     return PrivyAuthArtifacts(
         jwt=jwt,
         refresh_token=refresh_token,
         privy_token_cookie=session.get_cookie(PRIVY_TOKEN_COOKIE) or "",
         privy_session_cookie=session.get_cookie(PRIVY_SESSION_COOKIE) or "",
+        privy_pat=privy_pat,
+        privy_id_token=privy_id_token,
     )
 
 

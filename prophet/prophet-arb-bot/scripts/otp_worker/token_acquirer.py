@@ -213,6 +213,10 @@ def acquire_token(
         state="fresh",
         consecutive_refresh_failures=0,
         prophet_viewer_id=viewer_id,
+        # Issue #674: persist the SDK's full localStorage state so the
+        # next cycle's restore plants all three keys the SDK requires.
+        privy_pat=artifacts.privy_pat,
+        privy_id_token=artifacts.privy_id_token,
     )
     cache.write(entry)
 

@@ -92,7 +92,7 @@ def test_establish_returns_when_fresh_cache_and_privy_observable() -> None:
     restore_calls: list[dict[str, Any]] = []
     acquirer_calls: list[dict[str, Any]] = []
 
-    def restore(s: Any, *, jwt: str, refresh_token: str) -> None:
+    def restore(s: Any, *, jwt: str, refresh_token: str, **_kw: Any) -> None:
         restore_calls.append({"jwt": jwt, "refresh_token": refresh_token})
 
     def acquirer(**kw: Any) -> None:
@@ -139,7 +139,7 @@ def test_establish_falls_through_to_acquirer_when_verification_fails() -> None:
 
     acquirer_calls: list[dict[str, Any]] = []
 
-    def restore(s: Any, *, jwt: str, refresh_token: str) -> None:
+    def restore(s: Any, *, jwt: str, refresh_token: str, **_kw: Any) -> None:
         # restore ran, but Privy didn't observe it — verify fails.
         return None
 
@@ -180,7 +180,7 @@ def test_establish_skips_restore_when_cache_is_stale() -> None:
     restore_calls: list[dict[str, Any]] = []
     acquirer_calls: list[dict[str, Any]] = []
 
-    def restore(s: Any, *, jwt: str, refresh_token: str) -> None:
+    def restore(s: Any, *, jwt: str, refresh_token: str, **_kw: Any) -> None:
         restore_calls.append({"jwt": jwt, "refresh_token": refresh_token})
 
     def acquirer(**kw: Any) -> None:
@@ -230,7 +230,7 @@ def test_establish_fails_closed_with_restore_exception_when_restore_raises() -> 
     class _BoomMcpError(RuntimeError):
         pass
 
-    def restore(s: Any, *, jwt: str, refresh_token: str) -> None:
+    def restore(s: Any, *, jwt: str, refresh_token: str, **_kw: Any) -> None:
         raise _BoomMcpError("playwright_add_init_script rejected: tool not found")
 
     def acquirer(**kw: Any) -> None:
@@ -352,7 +352,7 @@ def test_establish_enters_cache_fresh_branch_with_jwt_only_session() -> None:
     restore_calls: list[dict[str, Any]] = []
     acquirer_calls: list[dict[str, Any]] = []
 
-    def restore(s: Any, *, jwt: str, refresh_token: str) -> None:
+    def restore(s: Any, *, jwt: str, refresh_token: str, **_kw: Any) -> None:
         restore_calls.append({"jwt": jwt, "refresh_token": refresh_token})
 
     def acquirer(**kw: Any) -> None:

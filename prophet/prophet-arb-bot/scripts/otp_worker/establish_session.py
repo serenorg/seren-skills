@@ -121,7 +121,15 @@ def establish_browser_session_for_create(
     # refresh token is empty.
     if entry.is_fresh() and entry.jwt:
         try:
-            restore(session, jwt=entry.jwt, refresh_token=entry.refresh_token)
+            restore(
+                session,
+                jwt=entry.jwt,
+                refresh_token=entry.refresh_token,
+                # Issue #674: plant the SDK's full localStorage state so
+                # _getToken doesn't wipe everything within ~550ms of boot.
+                privy_pat=getattr(entry, "privy_pat", "") or "",
+                privy_id_token=getattr(entry, "privy_id_token", "") or "",
+            )
         except Exception as restore_exc:
             # Issue #662: the previous `except Exception: pass` silently
             # swallowed the failure and fell through to OTP cold-start,
