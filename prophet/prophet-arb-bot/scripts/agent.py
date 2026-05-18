@@ -2427,11 +2427,15 @@ class _WarmCreateMarketUiContext:
             finally:
                 pw_gateway.__exit__(None, None, None)
             raise
-        if (
-            cache_entry is None
-            or not getattr(cache_entry, "jwt", "")
-            or not getattr(cache_entry, "refresh_token", "")
-        ):
+        # Issue #670: #666 retired the Privy localStorage refresh-token
+        # mechanism server-side and dropped the refresh_token requirement
+        # from `establish_browser_session_for_create` (establish_session.py:122).
+        # The wrapper carried a duplicate refresh-token check that #666
+        # missed, which rejected every JWT-only cache entry returned by
+        # the inner establish call. The wrapper's role is to fail closed
+        # when there's no usable session — that's a missing JWT, not a
+        # missing refresh token.
+        if cache_entry is None or not getattr(cache_entry, "jwt", ""):
             try:
                 session_scope.__exit__(None, None, None)
             finally:
