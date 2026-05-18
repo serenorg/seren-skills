@@ -53,6 +53,28 @@ _PRIVY_OBSERVABLE_BUDGET_SECONDS = 8.0
 _PRIVY_OBSERVABLE_POLL_INTERVAL_SECONDS = 0.25
 _PRIVY_OBSERVABLE_SIGN_IN_PROBE_MS = 1_500
 
+# Issue #714: Probe whether the SDK rejected the planted session by
+# navigating to a guarded route. ``restore_privy_session`` navigates to
+# ``PROPHET_APP_URL`` (homepage), which doesn't require auth, so any
+# observability check there is a false positive. ``/create`` is the
+# guarded route the per-entry driver actually needs; if the SDK rejects
+# the planted session it (a) calls ``destroyLocalState`` which clears
+# ``privy:token`` and ``privy:refresh_token`` and (b) ``router.push``-es
+# to ``/?returnTo=%2Fcreate``. Either signal is conclusive — poll for
+# both over a budget large enough to cover SDK boot variance under MCP
+# cold-launch contention (1-4s typical, 8s ceiling). If either fires,
+# fall through to in-context OTP via ``acquirer()``.
+#
+# Budget matches ``_PRIVY_OBSERVABLE_BUDGET_SECONDS`` (8s) so the
+# negative-signal window is at least as long as the positive-signal
+# window the existing observable check uses. Pre-#714 the cache-fresh
+# branch trusted only the positive signal and false-positived on the
+# unauth-tolerant homepage; #714's probe is the negative-signal
+# counterpart.
+_PROBE_CREATE_URL = f"{PROPHET_APP_URL}/create"
+_SDK_SETTLE_BUDGET_SECONDS = 8.0
+_SDK_SETTLE_POLL_INTERVAL_SECONDS = 0.25
+
 
 class SessionEstablishmentFailed(Exception):
     """Caller should surface `prophet_session_unavailable`.
@@ -168,12 +190,47 @@ def establish_browser_session_for_create(
                 },
             ) from restore_exc
         else:
-            if _privy_session_observable(session):
+            # Issue #714: probe whether the SDK actually accepts the
+            # planted session by navigating to ``/create`` (the guarded
+            # route the per-entry driver needs). ``restore`` navigated
+            # to the homepage, which doesn't require auth — observing
+            # planted state there is a false positive that lets a
+            # cross-context-replayed session sail past
+            # ``_privy_session_observable`` and then fail per-entry
+            # with ``ocs_session_id_not_captured``. See #713 close
+            # comment for the proof that ``/create`` redirect is purely
+            # client-side: the page itself is statically prerendered
+            # (200 + 23KB body with or without cookies), and the
+            # ``/?returnTo=%2Fcreate`` redirect comes from the Privy
+            # SDK running ``destroyLocalState`` + ``router.push`` after
+            # its server-side ``users/me`` validation rejects the
+            # replayed session. Detecting that rejection here is what
+            # lets the existing fall-through to ``acquirer(...)`` do
+            # an in-context OTP and produce a working session.
+            if _sdk_rejected_planted_session_at_create(session):
+                observable_diag = _capture_observable_check(session)
+            elif _privy_session_observable(session):
                 return entry
-            observable_diag = _capture_observable_check(session)
+            else:
+                observable_diag = _capture_observable_check(session)
 
     # Silent restore failed / cache stale → drive OTP cold-start on the
     # same session so the authenticated browser is the one we hand back.
+    #
+    # Issue #714 follow-up: ``acquirer``'s ``gateway`` argument is used to
+    # construct the Gmail/Outlook InboxReader (see
+    # ``otp_worker/inbox_reader.py:make_inbox_reader``) which calls
+    # ``gateway.call(publisher=...)`` — that is the HttpGateway publisher
+    # path, NOT the Playwright MCP gateway. The pre-#714 wiring passed
+    # ``pw_gateway`` when present, which would have raised
+    # ``EmailPublisherUnavailable`` from inside the inbox reader the moment
+    # the warm-context OTP fall-through fired. The pre-#714 observability
+    # check on the homepage false-positived 100% of the time, so this code
+    # path was never actually exercised in production — #714's probe-
+    # /create check makes it reachable, exposing the latent bug. Always
+    # pass ``config_gateway`` here; ``pw_gateway`` is the wrong type for
+    # publisher routing. ``browser_session`` separately carries the
+    # Playwright handle the acquirer uses for the in-browser OTP dance.
     try:
         acquirer(
             email=email,
@@ -181,7 +238,7 @@ def establish_browser_session_for_create(
             seren_user_id=seren_user_id,
             bounty_id=bounty_id,
             browser_session=session,
-            gateway=pw_gateway if pw_gateway is not None else config_gateway,
+            gateway=config_gateway,
             transport=transport,
             cache=cache,
         )
@@ -281,6 +338,104 @@ def _on_prophet_origin(session: BrowserSession) -> bool:
     if "returnTo=" in url or "/login" in url:
         return False
     return True
+
+
+def _sdk_rejected_planted_session_at_create(
+    session: BrowserSession,
+    *,
+    budget_seconds: float = _SDK_SETTLE_BUDGET_SECONDS,
+    poll_interval_seconds: float = _SDK_SETTLE_POLL_INTERVAL_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> bool:
+    """Probe whether the Privy SDK rejects the planted session.
+
+    Issue #714: navigate to ``/create`` (the guarded route the per-entry
+    driver needs) and poll for either of the two signals the Privy SDK
+    emits on session rejection:
+
+    1. **URL redirect to ``/?returnTo=``.** The SDK's ``router.push``
+       after ``destroyLocalState`` redirects to the homepage with the
+       ``returnTo`` query param.
+
+    2. **``privy:token`` cleared from localStorage.** The SDK's
+       ``destroyLocalState`` wipes the token-bearing keys atomically.
+       This signal sometimes fires before the redirect lands, giving
+       us a slightly earlier negative signal.
+
+    Either signal is conclusive. The first live test of #714 caught
+    the URL signal in <3s on a fast cycle but missed it on a slower
+    cycle where SDK boot took longer than the original 3s budget — at
+    which point the observable check false-positived because the URL
+    was still ``/create`` and ``privy:token`` was still present.
+    Adding the localStorage signal plus expanding the budget to 8s
+    (matching ``_PRIVY_OBSERVABLE_BUDGET_SECONDS``) closes that race.
+
+    Stubs that don't expose ``navigate``, ``get_url``, or
+    ``get_local_storage`` are tolerated — in that case the relevant
+    signal is skipped. If both signal sources are unavailable, returns
+    False (no evidence of rejection) so existing establish-path tests
+    that mock minimal sessions don't need to add navigation plumbing.
+    """
+    navigate = getattr(session, "navigate", None)
+    if callable(navigate):
+        try:
+            navigate(_PROBE_CREATE_URL)
+        except Exception:
+            # A navigation error doesn't itself prove rejection. Fall
+            # through to the polls; if a prior page is still showing,
+            # the polls will read its state and return False.
+            pass
+
+    get_url = getattr(session, "get_url", None)
+    get_local_storage = getattr(session, "get_local_storage", None)
+    if get_url is None and get_local_storage is None:
+        # No way to read either rejection signal. Caller falls back to
+        # the observable check.
+        return False
+
+    # Read the initial privy:token snapshot. If it was already empty
+    # before the probe ran (no restore happened, or restore is broken),
+    # we can't use "token cleared" as a signal — only an
+    # initially-present-then-cleared transition is conclusive. Snapshot
+    # outside the poll loop so the comparison is stable.
+    initial_token_present: bool
+    if callable(get_local_storage):
+        try:
+            initial_token = get_local_storage("privy:token")
+            initial_token_present = bool(initial_token)
+        except Exception:
+            initial_token_present = False
+    else:
+        initial_token_present = False
+
+    deadline = clock() + max(budget_seconds, 0.0)
+    interval = max(poll_interval_seconds, 0.05)
+    while True:
+        # Signal A: URL redirected off the guarded route.
+        if callable(get_url):
+            try:
+                url = get_url() or ""
+            except Exception:
+                url = ""
+            if "returnTo=" in url:
+                return True
+
+        # Signal B: planted privy:token was destroyed mid-flight.
+        # Only treat the transition (initially present → now absent) as
+        # rejection. A token that was never planted to begin with is
+        # not a signal — it's the absence of evidence.
+        if initial_token_present and callable(get_local_storage):
+            try:
+                current_token = get_local_storage("privy:token")
+            except Exception:
+                current_token = None
+            if not current_token:
+                return True
+
+        if clock() >= deadline:
+            return False
+        sleep(interval)
 
 
 def _capture_observable_check(session: BrowserSession) -> dict[str, Any]:

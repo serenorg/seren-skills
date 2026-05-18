@@ -385,6 +385,298 @@ def test_establish_enters_cache_fresh_branch_with_jwt_only_session() -> None:
     assert getattr(result, "refresh_token", "") == ""
 
 
+def test_establish_falls_through_to_otp_when_sdk_redirects_create_to_returnto() -> None:
+    """Issue #714: cross-context replay of a captured Privy session is
+    rejected by the SDK at boot. ``restore_privy_session`` plants the
+    cookies + localStorage and navigates to the homepage (which does
+    not require auth). The pre-#714 observability check ran against
+    the homepage and false-positived — planted state appeared present
+    because the homepage's SDK boot hadn't decided yet. Then the
+    per-entry driver navigated to ``/create``, the SDK ran validation,
+    Privy rejected (server-side device binding), the SDK ran
+    ``destroyLocalState`` + ``router.push('/?returnTo=/create')``, and
+    the AI-seed-calc capture never fired.
+
+    The #714 fix: probe ``/create`` directly inside
+    ``establish_browser_session_for_create``. If the SDK redirects to
+    ``/?returnTo=`` within the boot window, the planted session is
+    proven unusable — fall through to in-context OTP via
+    ``acquirer(...)`` instead of trusting it.
+
+    Pin the contract: a session whose URL goes to ``/?returnTo=/create``
+    after the probe navigation MUST trigger the OTP fall-through, and
+    the acquirer MUST receive the same browser_session (so the OTP
+    happens in the warm context that will then drive ``/create``).
+    """
+    cache = _StubCache(
+        [
+            _Entry(jwt="cached_j", refresh_token="", state="fresh", fresh=True),
+            _Entry(jwt="post_otp_j", refresh_token="", state="fresh", fresh=True),
+        ]
+    )
+
+    class _ReplayedSessionRejectedByPrivy:
+        """Session that simulates the cross-context rejection.
+
+        ``restore`` plants state and navigates to the homepage; the SDK
+        boots, calls ``auth.privy.io/api/v1/users/me``, server-side
+        device binding rejects, SDK clears the planted token and pushes
+        ``/?returnTo=/create``. By the time the establish helper probes
+        ``/create`` directly, the SDK has already executed its
+        rejection path and the URL is on the homepage with returnTo.
+        """
+
+        def __init__(self) -> None:
+            self._url = "https://app.prophetmarket.ai/"
+            self.navigated_to: list[str] = []
+
+        def navigate(self, url: str) -> None:
+            self.navigated_to.append(url)
+            # Privy SDK boots on /create, rejects the replayed session,
+            # redirects to homepage with returnTo.
+            self._url = "https://app.prophetmarket.ai/?returnTo=%2Fcreate"
+
+        def get_url(self) -> str:
+            return self._url
+
+        # Stubs for _privy_session_observable's fall-back path — never
+        # reached in the happy negative path, but present in case the
+        # SDK-rejection probe ever short-circuits to it.
+        def get_local_storage(self, key: str) -> str | None:
+            return None
+
+        def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
+            return None
+
+    session = _ReplayedSessionRejectedByPrivy()
+    restore_calls: list[dict[str, Any]] = []
+    acquirer_calls: list[dict[str, Any]] = []
+
+    def restore(s: Any, *, jwt: str, refresh_token: str, **_kw: Any) -> None:
+        # Real restore plants state and navigates to homepage. Mirror
+        # that here so the probe's navigate-to-/create is the only
+        # thing that triggers the rejection redirect.
+        restore_calls.append({"jwt": jwt, "refresh_token": refresh_token})
+
+    def acquirer(**kw: Any) -> None:
+        acquirer_calls.append(kw)
+
+    result = establish_browser_session_for_create(
+        session=session,
+        email="e@example.com",
+        provider="gmail",
+        seren_user_id="",
+        bounty_id="",
+        config_gateway=object(),
+        transport=object(),
+        pw_gateway=None,
+        cache=cache,
+        acquirer=acquirer,
+        refresher=lambda **_: None,
+        restore=restore,
+    )
+
+    # The probe navigated to /create (the whole point of #714 — the
+    # observability check on the homepage was a false positive).
+    assert any(
+        "/create" in u for u in session.navigated_to
+    ), f"probe must navigate to /create; got {session.navigated_to!r}"
+
+    # Cache replay was attempted, then proved unusable, then OTP ran
+    # on the same session.
+    assert len(restore_calls) == 1
+    assert len(acquirer_calls) == 1
+    assert acquirer_calls[0]["browser_session"] is session, (
+        "OTP fall-through must hand off the warm session — that is the "
+        "entire point of in-context OTP. #714 phase 1 keeps the two-"
+        "BrowserContext architecture but routes OTP through the warm "
+        "context whenever cross-context cache replay is detected as "
+        "rejected."
+    )
+    # Returned entry comes from the cache after the OTP wrote fresh state.
+    assert getattr(result, "jwt", "") == "post_otp_j"
+
+
+def test_establish_falls_through_to_otp_when_privy_token_destroyed_pre_redirect() -> None:
+    """Issue #714 follow-up: the SDK's rejection path runs
+    ``destroyLocalState`` BEFORE the ``router.push`` redirect lands.
+    On slower cycles where SDK boot exceeds the original 3s probe
+    budget, the redirect would arrive late but ``destroyLocalState``
+    had already wiped ``privy:token``. The original probe only watched
+    the URL signal, so it missed that window and the establish helper
+    false-positived back into the observable check.
+
+    The strengthened probe polls BOTH signals over an 8s budget:
+    1. URL contains ``returnTo=`` (post-redirect)
+    2. ``privy:token`` was initially planted but is now cleared
+       (post-``destroyLocalState``, pre-redirect)
+
+    Pin the new signal: a session where the planted token disappears
+    mid-probe — without any URL change — MUST still trigger OTP
+    fall-through. The transition (initially-present → absent) is the
+    conclusive part; an always-absent token is not a signal (it's the
+    absence of evidence — the planted state was never present).
+    """
+    cache = _StubCache(
+        [
+            _Entry(jwt="cached_j", refresh_token="", state="fresh", fresh=True),
+            _Entry(jwt="post_otp_j", refresh_token="", state="fresh", fresh=True),
+        ]
+    )
+
+    class _SessionDestroysTokenWithoutRedirect:
+        """Mimics the pre-redirect rejection window.
+
+        The SDK has booted on ``/create``, called
+        ``auth.privy.io/api/v1/users/me``, been rejected by device
+        binding, and is mid-way through its destroy-then-redirect dance:
+        ``destroyLocalState`` has cleared ``privy:token`` but the
+        ``router.push`` to ``/?returnTo=`` hasn't fired yet. URL is
+        still ``/create``.
+        """
+
+        def __init__(self) -> None:
+            self._url = "https://app.prophetmarket.ai/create"
+            self._token: str | None = "planted_token_bytes"
+            self.navigated_to: list[str] = []
+            self._read_count = 0
+
+        def navigate(self, url: str) -> None:
+            self.navigated_to.append(url)
+
+        def get_url(self) -> str:
+            return self._url
+
+        def get_local_storage(self, key: str) -> str | None:
+            if key != "privy:token":
+                return None
+            # First read snapshots the planted state; subsequent reads
+            # see the SDK has destroyed it.
+            self._read_count += 1
+            if self._read_count == 1:
+                return self._token
+            self._token = None
+            return None
+
+        def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
+            return None
+
+    session = _SessionDestroysTokenWithoutRedirect()
+    acquirer_calls: list[dict[str, Any]] = []
+
+    def acquirer(**kw: Any) -> None:
+        acquirer_calls.append(kw)
+
+    result = establish_browser_session_for_create(
+        session=session,
+        email="e@example.com",
+        provider="gmail",
+        seren_user_id="",
+        bounty_id="",
+        config_gateway=object(),
+        transport=object(),
+        pw_gateway=None,
+        cache=cache,
+        acquirer=acquirer,
+        refresher=lambda **_: None,
+        restore=lambda *a, **kw: None,
+    )
+
+    # Probe ran (token-destroy signal alone is conclusive, no URL change needed).
+    assert len(acquirer_calls) == 1, (
+        f"token destruction must trigger OTP fall-through; "
+        f"acquirer called {len(acquirer_calls)} time(s) "
+        f"(navigated_to={session.navigated_to!r}, url={session.get_url()!r})"
+    )
+    assert acquirer_calls[0]["browser_session"] is session
+    assert getattr(result, "jwt", "") == "post_otp_j"
+
+
+def test_establish_routes_acquirer_to_http_gateway_not_playwright_gateway() -> None:
+    """Issue #714 follow-up: when the cache-fresh branch falls through to
+    in-context OTP, the ``acquirer`` call must receive the publisher
+    HttpGateway as ``gateway``, NOT the Playwright MCP gateway.
+
+    ``acquire_token`` uses its ``gateway`` argument to build a Gmail/Outlook
+    InboxReader (`otp_worker/inbox_reader.py:make_inbox_reader`), which
+    calls ``gateway.call(publisher=...)`` against the publisher gateway.
+    The Playwright MCP gateway has no such method — passing it would
+    raise ``EmailPublisherUnavailable`` from inside the inbox reader the
+    moment OTP fired.
+
+    Pre-#714, the cache-fresh branch's ``_privy_session_observable``
+    check false-positived on the homepage so the fall-through never ran
+    in production. #714's probe-/create makes the fall-through reachable
+    and exposes the wrong gateway wiring. Pin the contract: regardless
+    of whether ``pw_gateway`` is non-None, the acquirer receives
+    ``config_gateway``.
+    """
+    cache = _StubCache(
+        [
+            _Entry(jwt="cached_j", refresh_token="", state="fresh", fresh=True),
+            _Entry(jwt="post_otp_j", refresh_token="", state="fresh", fresh=True),
+        ]
+    )
+
+    class _SessionRejectedAtCreate:
+        def __init__(self) -> None:
+            self._url = "https://app.prophetmarket.ai/"
+            self.navigated_to: list[str] = []
+
+        def navigate(self, url: str) -> None:
+            self.navigated_to.append(url)
+            self._url = "https://app.prophetmarket.ai/?returnTo=%2Fcreate"
+
+        def get_url(self) -> str:
+            return self._url
+
+        def get_local_storage(self, key: str) -> str | None:
+            return None
+
+        def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
+            return None
+
+    session = _SessionRejectedAtCreate()
+
+    config_gateway = object()  # the HttpGateway (publisher routing)
+    pw_gateway = object()      # the Playwright MCP gateway (NOT for publishers)
+
+    captured: dict[str, Any] = {}
+
+    def acquirer(**kw: Any) -> None:
+        captured.update(kw)
+
+    establish_browser_session_for_create(
+        session=session,
+        email="e@example.com",
+        provider="gmail",
+        seren_user_id="",
+        bounty_id="",
+        config_gateway=config_gateway,
+        transport=object(),
+        pw_gateway=pw_gateway,
+        cache=cache,
+        acquirer=acquirer,
+        refresher=lambda **_: None,
+        restore=lambda *a, **kw: None,
+    )
+
+    # The probe ran (#714) and detected rejection → acquirer fired.
+    assert captured, "acquirer must be called after SDK rejection detected"
+
+    # The gateway routed to acquirer MUST be the HttpGateway, not the
+    # Playwright MCP gateway. This is the bug #714's fix uncovered.
+    assert captured["gateway"] is config_gateway, (
+        f"acquirer.gateway must be config_gateway (HttpGateway); "
+        f"got pw_gateway={captured['gateway'] is pw_gateway}, "
+        f"config_gateway={captured['gateway'] is config_gateway}"
+    )
+
+    # browser_session is a separate argument — that one IS the warm
+    # Playwright-driven session.
+    assert captured["browser_session"] is session
+
+
 def test_establish_attaches_cache_check_when_guard_bypassed_and_otp_fails() -> None:
     """Issue #664: when the cache-fresh guard at the top of
     `establish_browser_session_for_create` evaluates False, the function
