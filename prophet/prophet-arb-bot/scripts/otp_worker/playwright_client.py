@@ -94,6 +94,7 @@ class BrowserSession(Protocol):
     def get_url(self) -> str: ...
     def is_checked(self, selector: str) -> bool: ...
     def add_init_script(self, script: str) -> None: ...
+    def add_cookies(self, cookies: list[dict[str, Any]]) -> None: ...
 
 
 def open_privy_modal(session: BrowserSession) -> None:
@@ -458,6 +459,25 @@ class RealBrowserSession:
         observes the planted state on its first read.
         """
         self._call("/add_init_script", {"script": script})
+
+    def add_cookies(self, cookies: list[dict[str, Any]]) -> None:
+        """Plant cookies on the BrowserContext.
+
+        Issue #705: Prophet's middleware checks the `privy-session`
+        HTTP cookie (HttpOnly + Secure) when deciding whether to render
+        `/create` vs redirect to `/?returnTo=/create`. The cookie is
+        captured at OTP-login time and persisted to the session cache
+        but, prior to #705, was never planted back into the warm
+        browser context on session restore — so every cached cycle
+        landed on the homepage with no graphql / no AI calc.
+
+        Caller MUST pass cookie dicts shaped for Playwright's
+        `BrowserContext.addCookies` API: `{name, value, domain, path,
+        httpOnly?, secure?, sameSite?}`.
+        """
+        if not cookies:
+            return
+        self._call("/add_cookies", {"cookies": cookies})
 
     # -- Lifecycle ----------------------------------------------------------
 
