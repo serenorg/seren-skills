@@ -219,6 +219,11 @@ def acquire_token(
         jwt_expires_at=expires_at,
         refresh_token=artifacts.refresh_token,
         privy_session_cookie=artifacts.privy_session_cookie,
+        # Issue #707: persist the JWT-bearing cookie too. Prophet's
+        # middleware checks both; pre-#707 we captured but never saved
+        # this one, so every cached cycle had only half the auth state
+        # and /create kept redirecting to /?returnTo=/create.
+        privy_token_cookie=artifacts.privy_token_cookie,
         last_refreshed_at=now().isoformat(),
         state="fresh",
         consecutive_refresh_failures=0,

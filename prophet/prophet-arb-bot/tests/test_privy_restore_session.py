@@ -144,6 +144,43 @@ def test_privy_restore_plants_session_cookie_before_navigate() -> None:
     )
 
 
+def test_privy_restore_plants_both_cookies_when_both_present() -> None:
+    """Issue #707: Privy SDK writes BOTH `privy-token` and `privy-session`
+    at login. Prophet middleware checks both. #706 restored only
+    `privy-session` and /create still redirected — this test pins that
+    both cookies survive into the single add_cookies call when both are
+    in the cache, with the JWT-bearing token cookie carrying the same
+    HttpOnly+Secure+Lax attributes Privy set at login.
+    """
+    session = _StubSession()
+
+    restore_privy_session(
+        session,
+        jwt="eyJ.j.w.t",
+        refresh_token="",
+        privy_session_cookie="sess_xyz_789",
+        privy_token_cookie="tok_abc_123",
+    )
+
+    assert len(session.cookies_added) == 1, session.cookies_added
+    cookies = session.cookies_added[0]["cookies"]
+
+    by_name = {c["name"]: c for c in cookies}
+    assert set(by_name.keys()) == {"privy-session", "privy-token"}
+
+    tok = by_name["privy-token"]
+    assert tok["value"] == "tok_abc_123"
+    assert tok["domain"] == "app.prophetmarket.ai"
+    assert tok["path"] == "/"
+    assert tok["httpOnly"] is True
+    assert tok["secure"] is True
+    assert tok["sameSite"] == "Lax"
+
+    # Both cookies must land BEFORE the navigate so middleware sees them
+    # on the very first /create request.
+    assert session.cookies_added[0]["navigations_at_call"] == 0
+
+
 def test_privy_restore_skips_cookie_when_cache_has_no_value() -> None:
     """Issue #705: an empty `privy_session_cookie` (legacy cache, or a
     capture path that hasn't been wired yet) MUST NOT trigger an
