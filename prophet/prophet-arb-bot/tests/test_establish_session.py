@@ -385,6 +385,118 @@ def test_establish_enters_cache_fresh_branch_with_jwt_only_session() -> None:
     assert getattr(result, "refresh_token", "") == ""
 
 
+def test_establish_falls_through_to_otp_when_sdk_redirects_create_to_returnto() -> None:
+    """Issue #714: cross-context replay of a captured Privy session is
+    rejected by the SDK at boot. ``restore_privy_session`` plants the
+    cookies + localStorage and navigates to the homepage (which does
+    not require auth). The pre-#714 observability check ran against
+    the homepage and false-positived — planted state appeared present
+    because the homepage's SDK boot hadn't decided yet. Then the
+    per-entry driver navigated to ``/create``, the SDK ran validation,
+    Privy rejected (server-side device binding), the SDK ran
+    ``destroyLocalState`` + ``router.push('/?returnTo=/create')``, and
+    the AI-seed-calc capture never fired.
+
+    The #714 fix: probe ``/create`` directly inside
+    ``establish_browser_session_for_create``. If the SDK redirects to
+    ``/?returnTo=`` within the boot window, the planted session is
+    proven unusable — fall through to in-context OTP via
+    ``acquirer(...)`` instead of trusting it.
+
+    Pin the contract: a session whose URL goes to ``/?returnTo=/create``
+    after the probe navigation MUST trigger the OTP fall-through, and
+    the acquirer MUST receive the same browser_session (so the OTP
+    happens in the warm context that will then drive ``/create``).
+    """
+    cache = _StubCache(
+        [
+            _Entry(jwt="cached_j", refresh_token="", state="fresh", fresh=True),
+            _Entry(jwt="post_otp_j", refresh_token="", state="fresh", fresh=True),
+        ]
+    )
+
+    class _ReplayedSessionRejectedByPrivy:
+        """Session that simulates the cross-context rejection.
+
+        ``restore`` plants state and navigates to the homepage; the SDK
+        boots, calls ``auth.privy.io/api/v1/users/me``, server-side
+        device binding rejects, SDK clears the planted token and pushes
+        ``/?returnTo=/create``. By the time the establish helper probes
+        ``/create`` directly, the SDK has already executed its
+        rejection path and the URL is on the homepage with returnTo.
+        """
+
+        def __init__(self) -> None:
+            self._url = "https://app.prophetmarket.ai/"
+            self.navigated_to: list[str] = []
+
+        def navigate(self, url: str) -> None:
+            self.navigated_to.append(url)
+            # Privy SDK boots on /create, rejects the replayed session,
+            # redirects to homepage with returnTo.
+            self._url = "https://app.prophetmarket.ai/?returnTo=%2Fcreate"
+
+        def get_url(self) -> str:
+            return self._url
+
+        # Stubs for _privy_session_observable's fall-back path — never
+        # reached in the happy negative path, but present in case the
+        # SDK-rejection probe ever short-circuits to it.
+        def get_local_storage(self, key: str) -> str | None:
+            return None
+
+        def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
+            return None
+
+    session = _ReplayedSessionRejectedByPrivy()
+    restore_calls: list[dict[str, Any]] = []
+    acquirer_calls: list[dict[str, Any]] = []
+
+    def restore(s: Any, *, jwt: str, refresh_token: str, **_kw: Any) -> None:
+        # Real restore plants state and navigates to homepage. Mirror
+        # that here so the probe's navigate-to-/create is the only
+        # thing that triggers the rejection redirect.
+        restore_calls.append({"jwt": jwt, "refresh_token": refresh_token})
+
+    def acquirer(**kw: Any) -> None:
+        acquirer_calls.append(kw)
+
+    result = establish_browser_session_for_create(
+        session=session,
+        email="e@example.com",
+        provider="gmail",
+        seren_user_id="",
+        bounty_id="",
+        config_gateway=object(),
+        transport=object(),
+        pw_gateway=None,
+        cache=cache,
+        acquirer=acquirer,
+        refresher=lambda **_: None,
+        restore=restore,
+    )
+
+    # The probe navigated to /create (the whole point of #714 — the
+    # observability check on the homepage was a false positive).
+    assert any(
+        "/create" in u for u in session.navigated_to
+    ), f"probe must navigate to /create; got {session.navigated_to!r}"
+
+    # Cache replay was attempted, then proved unusable, then OTP ran
+    # on the same session.
+    assert len(restore_calls) == 1
+    assert len(acquirer_calls) == 1
+    assert acquirer_calls[0]["browser_session"] is session, (
+        "OTP fall-through must hand off the warm session — that is the "
+        "entire point of in-context OTP. #714 phase 1 keeps the two-"
+        "BrowserContext architecture but routes OTP through the warm "
+        "context whenever cross-context cache replay is detected as "
+        "rejected."
+    )
+    # Returned entry comes from the cache after the OTP wrote fresh state.
+    assert getattr(result, "jwt", "") == "post_otp_j"
+
+
 def test_establish_attaches_cache_check_when_guard_bypassed_and_otp_fails() -> None:
     """Issue #664: when the cache-fresh guard at the top of
     `establish_browser_session_for_create` evaluates False, the function

@@ -53,6 +53,18 @@ _PRIVY_OBSERVABLE_BUDGET_SECONDS = 8.0
 _PRIVY_OBSERVABLE_POLL_INTERVAL_SECONDS = 0.25
 _PRIVY_OBSERVABLE_SIGN_IN_PROBE_MS = 1_500
 
+# Issue #714: Probe whether the SDK rejected the planted session by
+# navigating to a guarded route. ``restore_privy_session`` navigates to
+# ``PROPHET_APP_URL`` (homepage), which doesn't require auth, so any
+# observability check there is a false positive. ``/create`` is the
+# guarded route the per-entry driver actually needs; if the SDK rejects
+# the planted session it redirects to ``/?returnTo=%2Fcreate`` within
+# the boot window. Poll for that redirect; if observed, fall through
+# to in-context OTP via ``acquirer()``.
+_PROBE_CREATE_URL = f"{PROPHET_APP_URL}/create"
+_SDK_SETTLE_BUDGET_SECONDS = 3.0
+_SDK_SETTLE_POLL_INTERVAL_SECONDS = 0.25
+
 
 class SessionEstablishmentFailed(Exception):
     """Caller should surface `prophet_session_unavailable`.
@@ -168,9 +180,29 @@ def establish_browser_session_for_create(
                 },
             ) from restore_exc
         else:
-            if _privy_session_observable(session):
+            # Issue #714: probe whether the SDK actually accepts the
+            # planted session by navigating to ``/create`` (the guarded
+            # route the per-entry driver needs). ``restore`` navigated
+            # to the homepage, which doesn't require auth — observing
+            # planted state there is a false positive that lets a
+            # cross-context-replayed session sail past
+            # ``_privy_session_observable`` and then fail per-entry
+            # with ``ocs_session_id_not_captured``. See #713 close
+            # comment for the proof that ``/create`` redirect is purely
+            # client-side: the page itself is statically prerendered
+            # (200 + 23KB body with or without cookies), and the
+            # ``/?returnTo=%2Fcreate`` redirect comes from the Privy
+            # SDK running ``destroyLocalState`` + ``router.push`` after
+            # its server-side ``users/me`` validation rejects the
+            # replayed session. Detecting that rejection here is what
+            # lets the existing fall-through to ``acquirer(...)`` do
+            # an in-context OTP and produce a working session.
+            if _sdk_rejected_planted_session_at_create(session):
+                observable_diag = _capture_observable_check(session)
+            elif _privy_session_observable(session):
                 return entry
-            observable_diag = _capture_observable_check(session)
+            else:
+                observable_diag = _capture_observable_check(session)
 
     # Silent restore failed / cache stale → drive OTP cold-start on the
     # same session so the authenticated browser is the one we hand back.
@@ -281,6 +313,58 @@ def _on_prophet_origin(session: BrowserSession) -> bool:
     if "returnTo=" in url or "/login" in url:
         return False
     return True
+
+
+def _sdk_rejected_planted_session_at_create(
+    session: BrowserSession,
+    *,
+    budget_seconds: float = _SDK_SETTLE_BUDGET_SECONDS,
+    poll_interval_seconds: float = _SDK_SETTLE_POLL_INTERVAL_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> bool:
+    """Probe whether the Privy SDK rejects the planted session.
+
+    Issue #714: navigate to ``/create`` (a guarded route — actually the
+    one we need) and poll the page URL for the ``returnTo=`` redirect
+    that the Privy SDK emits when it rejects the planted session. The
+    redirect lands within the SDK's boot window (1-3s on a warm cold
+    Chromium), so a 3s budget is sufficient under normal conditions
+    without slowing the happy path materially. Returns True iff a
+    redirect was observed — caller should then fall through to
+    in-context OTP via ``acquirer(...)`` rather than trusting the
+    planted state.
+
+    Stubs that don't expose ``navigate`` or ``get_url`` are tolerated —
+    in that case we return False (no evidence of rejection) so existing
+    establish-path tests don't need to add navigation plumbing.
+    """
+    navigate = getattr(session, "navigate", None)
+    if callable(navigate):
+        try:
+            navigate(_PROBE_CREATE_URL)
+        except Exception:
+            # A navigation error doesn't itself prove rejection. Fall
+            # through to the URL poll; if a prior page is still
+            # showing, the poll will read its URL and return False.
+            pass
+
+    get_url = getattr(session, "get_url", None)
+    if get_url is None:
+        return False
+
+    deadline = clock() + max(budget_seconds, 0.0)
+    interval = max(poll_interval_seconds, 0.05)
+    while True:
+        try:
+            url = get_url() or ""
+        except Exception:
+            url = ""
+        if "returnTo=" in url:
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(interval)
 
 
 def _capture_observable_check(session: BrowserSession) -> dict[str, Any]:
