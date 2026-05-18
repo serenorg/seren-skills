@@ -1,0 +1,25 @@
+{
+  "slug": "asana",
+  "name": "Asana",
+  "publisher_category": "integration",
+  "integration_type": "api",
+  "billing_model": "x402_per_request",
+  "wallet_address": "0x83334ef0C6f6396413C508A7762741e9FD8B20E9",
+  "wallet_network_id": "eip155:8453",
+  "requires_user_oauth": true,
+  "undocumented_endpoint_policy": "default_deny",
+  "pricing": [
+    {
+      "price_per_call": "0.00100000",
+      "price_per_get": "0.00900000",
+      "price_per_post": "0.01200000",
+      "price_per_put": "0.01200000",
+      "price_per_patch": "0.01200000",
+      "price_per_delete": "0.01200000",
+      "minimum_balance": "1.00000000",
+      "low_balance_threshold": "0.50000000",
+      "prepaid_enabled": true,
+      "onchain_enabled": true
+    }
+  ]
+}

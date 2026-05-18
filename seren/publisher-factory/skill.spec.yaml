@@ -1,0 +1,102 @@
+skill: publisher-factory
+description: >
+  Create or refresh Seren API publisher definitions for any target company,
+  category, competitor set, or adjacent SaaS/API leader after live catalog and
+  auth gates.
+triggers:
+  - create a publisher for a company
+  - create publishers for a product category
+  - generate API integration publishers for competitors
+  - clone the Asana publisher pattern for another SaaS/API company
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  target:
+    type: string
+    description: Target company, product, category, or competitive set to evaluate.
+  update_existing:
+    type: boolean
+    description: Allow updates to matching existing publishers.
+    default: false
+  max_candidates:
+    type: integer
+    description: >
+      Maximum companies to evaluate after target, competitors, and adjacent
+      leaders are expanded.
+    min: 1
+    max: 50
+    default: 20
+  deployment_mode:
+    type: string
+    description: Deployment behavior for validated publishers.
+    enum: [dry-run, deploy]
+    default: dry-run
+secrets:
+  - SEREN_API_KEY
+connectors:
+  publisher_catalog:
+    kind: seren_publisher
+    publisher: seren-skills
+  asana_template:
+    kind: seren_publisher
+    publisher: asana
+  research:
+    kind: seren_publisher
+    publisher: perplexity
+  oauth_providers:
+    kind: seren_publisher
+    publisher: seren-skills
+policies:
+  dry_run_default: true
+  idempotency_required: true
+workflow:
+  steps:
+    - id: list_all_publishers
+      use: connector.publisher_catalog.get
+      with:
+        path: /publishers
+    - id: fuzzy_search_target
+      use: connector.publisher_catalog.get
+      with:
+        path: /publishers
+        search: "{target}"
+        from_step: list_all_publishers
+    - id: exact_target_lookup
+      use: connector.publisher_catalog.get
+      with:
+        path: /publishers/{target}
+        from_step: fuzzy_search_target
+    - id: load_asana_template
+      use: connector.asana_template.get
+      with:
+        path: /publishers/asana
+    - id: resolve_organization
+      use: connector.publisher_catalog.get
+      with:
+        path: /organizations
+    - id: list_oauth_providers
+      use: connector.oauth_providers.get
+      with:
+        path: /organizations/{organization_id}/oauth-providers
+        from_step: resolve_organization
+    - id: research_official_api
+      use: connector.research.post
+      with:
+        path: /chat/completions
+        target: "{target}"
+    - id: build_validation_report
+      use: transform.create_plan
+      with:
+        deployment_mode: "{deployment_mode}"
+        max_candidates: "{max_candidates}"
+tests:
+  quick:
+    - validates_catalog_guard
+  smoke:
+    - keeps_fuzzy_matches_out_of_existing
+publish:
+  org: seren
+  slug: publisher-factory
+metadata:
+  category: integrations

@@ -1,0 +1,16 @@
+{
+  "connectors": [
+    "publisher_catalog",
+    "asana_template",
+    "research",
+    "oauth_providers"
+  ],
+  "dry_run": true,
+  "inputs": {
+    "deployment_mode": "dry-run",
+    "max_candidates": 20,
+    "target": "",
+    "update_existing": false
+  },
+  "skill": "publisher-factory"
+}
