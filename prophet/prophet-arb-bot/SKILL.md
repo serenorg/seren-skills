@@ -600,12 +600,15 @@ Per-entry blocking reasons surfaced in `ui_submission_results.reason`:
   `window.fetch` and `XMLHttpRequest`, matches any URL containing
   `graphql` or `odds`, and walks responses recursively for a
   `sessionId`/`session_id`/`oddsSessionId` field under any `odds`-shaped
-  ancestor — so this blocker should be rare. When it does fire, dump
-  the diagnostic ring buffer via `create_market_ui.read_capture_observations(session)`
-  to see whether *any* odds traffic was observed; an empty buffer points
-  to a transport Prophet adopted that neither `fetch` nor `XHR` covers,
-  while a non-empty buffer with `ok: false` rows points to schema drift
-  beyond the recursive walker's reach.
+  ancestor — so this blocker should be rare. Since #695, the blocked
+  envelope carries `payload.capture_observations` (the diagnostic ring
+  buffer) and `payload.capture_error` (any JS error the shim caught)
+  directly, so the operator can tell the failure mode without re-driving:
+  an empty `capture_observations` list points to a transport Prophet
+  adopted that neither `fetch` nor `XHR` covers; a non-empty list with
+  `ok: false` rows points to schema drift beyond the recursive walker's
+  reach; a non-empty `capture_error` points to the wrapper itself
+  raising during interception.
 - `odds_session_not_completed` / `odds_session_timeout` /
   `prophet_market_not_viable` / `no_edge` — Prophet's AI rejected or
   did not justify a seed bet. Abandon the entry; no exposure was created.

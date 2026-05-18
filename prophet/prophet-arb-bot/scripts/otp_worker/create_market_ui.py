@@ -261,6 +261,26 @@ def read_capture_observations(session: Any) -> list[dict[str, Any]]:
     return []
 
 
+def read_capture_error(session: Any) -> str:
+    """Return the last JS error stashed by the capture wrapper.
+
+    The wrapper writes ``String(e)`` to ``window.__seren_capture__.error``
+    whenever it catches an exception in the fetch/XHR interception path
+    (e.g. ``Response.clone()`` blew up on a streamed body, or the URL
+    regex threw on a non-string argument). Surfaced alongside the
+    diagnostic ring buffer on the `ocs_session_id_not_captured` blocked
+    envelope so operators can tell capture-script failures from quiet
+    transport / schema drift without re-driving the cycle.
+
+    Returns "" if no error was captured or the wrapper isn't installed.
+    """
+    result = _evaluate(
+        session,
+        "(() => (window.__seren_capture__ && window.__seren_capture__.error) || '')()",
+    )
+    return result if isinstance(result, str) else ""
+
+
 def poll_for_ocs_id(
     session: Any,
     *,

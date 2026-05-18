@@ -2629,6 +2629,34 @@ def _run_create_market_via_ui_inner(
     if (result := _budget_exceeded()) is not None:
         return result
     if not ocs_id:
+        # Issue #695: SKILL.md promised the operator that this blocker
+        # would carry the diagnostic ring buffer plus any captured JS
+        # error. Without these on the envelope, an empty buffer (new
+        # transport) and a non-empty buffer with `ok: false` rows
+        # (schema drift) are indistinguishable, and every recurrence
+        # forces a re-drive with a debugger. Read both before returning.
+        try:
+            payload["capture_observations"] = (
+                create_market_ui.read_capture_observations(session)
+            )
+        except Exception as exc:
+            payload["capture_observations_error"] = (
+                f"{type(exc).__name__}:{str(exc)[:200]}"
+            )
+        read_capture_error = getattr(create_market_ui, "read_capture_error", None)
+        if callable(read_capture_error):
+            try:
+                payload["capture_error"] = read_capture_error(session)
+            except Exception as exc:
+                payload["capture_error"] = (
+                    f"capture_error_read_failed:{type(exc).__name__}:"
+                    f"{str(exc)[:200]}"
+                )
+        else:
+            # Older create_market_ui modules (pre-#695) don't expose
+            # read_capture_error. Surface "" so consumers can rely on
+            # the key existing regardless of skill version.
+            payload["capture_error"] = ""
         return CycleResult(
             status="blocked",
             reason="ocs_session_id_not_captured",
