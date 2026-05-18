@@ -45,8 +45,12 @@ from otp_worker import playwright_mcp_gateway as pmg
 # Chrome instead of bundled Chromium (Privy's embedded wallet needs
 # Chrome-specific surfaces). See tests/test_privy_env_browser_type_chrome_issue685.py
 # for the dedicated rationale test.
+# Issue #687 dropped SEREN_PLAYWRIGHT_HEADLESS=0: with BROWSER_TYPE=chrome
+# in place, headless Chrome (the bundled MCP's default when the var is
+# unset) is what Privy is actually tested against; headed Chrome times
+# out at 30s on Privy embedded-wallet provisioning. See
+# tests/test_privy_env_headless_default_issue687.py.
 EXPECTED_PRIVY_PROFILE_KEYS = {
-    "SEREN_PLAYWRIGHT_HEADLESS": "0",
     "SEREN_PLAYWRIGHT_STEALTH_EVASIONS_DISABLE": (
         "iframe.contentWindow,navigator.permissions"
     ),

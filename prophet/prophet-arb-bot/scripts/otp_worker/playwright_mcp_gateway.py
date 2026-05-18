@@ -65,10 +65,6 @@ PROPHET_STABLE_URL = "https://app.prophetmarket.ai/markets"
 # old Desktop, so propagating the profile is safe even when unrecognized.
 #
 # Profile rationale (see issue body for the full audit):
-#   HEADLESS=0
-#       Headless Chromium has known iframe regressions
-#       (microsoft/playwright#31896, #33674) that break Privy's wallet
-#       sandbox.
 #   STEALTH_EVASIONS_DISABLE=iframe.contentWindow,navigator.permissions
 #       The two surfaces Privy probes. Drop these two evasions, keep the
 #       rest so Prophet's anti-bot surface still tolerates us.
@@ -88,8 +84,19 @@ PROPHET_STABLE_URL = "https://app.prophetmarket.ai/markets"
 #       BROWSER_TYPE and routes "chrome" to the installed-browser
 #       registry's executablePath (or Playwright's channel="chrome"
 #       fallback) — same path the connected MCP uses.
+#
+# NOTE: SEREN_PLAYWRIGHT_HEADLESS=0 was previously set here on the strength
+# of Desktop #1957's README warning about headless Chromium iframe
+# regressions (microsoft/playwright#31896, #33674). After #685/#686 routed
+# the bundled MCP to real Google Chrome, side-by-side ps -o command=
+# evidence (issue #687, 2026-05-18) showed the connected MCP that does
+# provision Privy in ~5s is itself running headless Chrome, while our
+# headed Chrome times out at 30s. The iframe regression is Chromium-
+# specific; real Chrome handles headless fine. The Desktop README
+# guidance was right for Chromium and wrong for Chrome. We rely on the
+# bundled MCP's default — shouldLaunchHeadless() returns true when the
+# var is unset (browser.ts:362) — so omission yields headless.
 PRIVY_COMPATIBLE_ENV: dict[str, str] = {
-    "SEREN_PLAYWRIGHT_HEADLESS": "0",
     "SEREN_PLAYWRIGHT_STEALTH_EVASIONS_DISABLE": (
         "iframe.contentWindow,navigator.permissions"
     ),
