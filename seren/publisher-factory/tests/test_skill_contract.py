@@ -17,8 +17,14 @@ def test_skill_identity_and_live_catalog_guard() -> None:
 
     assert "name: publisher-factory" in content
     assert "list_agent_publishers" in content
+    assert "get_agent_publisher" in content
+    assert "list_organizations" in content
+    assert "organization_id" in content
     assert re.search(r"no arguments|without arguments|empty argument", lower)
+    assert "fuzzy" in lower
+    assert re.search(r"exact\s+existence check", lower)
     assert "third-party" in lower
+    assert 'list_agent_publishers` with `slug: "asana"' not in content
 
 
 def test_research_scope_and_verification_gates() -> None:
@@ -44,7 +50,9 @@ def test_publisher_contract_and_report_groups() -> None:
         "undocumented_endpoint_policy: default_deny",
         "clone the live asana",
         "oauth",
+        "never reuse asana's oauth provider",
         "api key",
+        "passthrough headers",
         "protected",
         "logo_status: missing",
         "do not persist",

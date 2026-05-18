@@ -31,12 +31,16 @@ catalog is live and changes frequently.
 
 After the empty-argument catalog call:
 
-1. Call `list_agent_publishers` with the target company slug or search term.
-2. Call `list_agent_publishers` with `slug: "asana"` and use that live Asana
+1. Call `list_agent_publishers` with the target company search term and
+   `verbose: true` to discover fuzzy matches.
+2. Call `get_agent_publisher` with the normalized target slug for the exact
+   existence check. A fuzzy search result is not an existing publisher unless
+   its slug or display name exactly matches the target.
+3. Call `get_agent_publisher` with `slug: "asana"` and use that live Asana
    publisher as the source template.
-3. If a candidate publisher already exists, report it under `existing` unless
+4. If a candidate publisher already exists, report it under `existing` unless
    the operator explicitly asked to update it.
-4. Never rely on memory, stale local docs, or prior runs to decide publisher
+5. Never rely on memory, stale local docs, or prior runs to decide publisher
    availability.
 
 ## Required Inputs
@@ -74,7 +78,7 @@ private partner APIs, invite-only APIs, or undocumented routes.
 Clone the live Asana publisher exactly for commercial and ownership settings:
 
 - pricing fields
-- owner and organization fields
+- owner fields when exposed by the live publisher response
 - x402 wallet address and wallet network/Base network settings
 - contact and support metadata where applicable
 - prepaid and onchain billing settings
@@ -82,6 +86,21 @@ Clone the live Asana publisher exactly for commercial and ownership settings:
 
 Do not hard-code old Asana values. Read the live Asana publisher during the run
 and copy the relevant values into each new publisher.
+
+Resolve the deployment organization explicitly. `create_publisher` requires
+`organization_id`, and publisher detail responses may not expose it. Call
+`list_organizations` and use the operator-selected organization, or the single
+personal organization when only one is returned. If multiple organizations are
+available and the operator has not selected one, ask before deployment.
+
+Do not clone Asana product-specific fields:
+
+- API URL
+- endpoint catalog
+- capability claims
+- auth documentation
+- OAuth provider ID or slug
+- resource descriptions
 
 ## Generated Publisher Contract
 
@@ -110,6 +129,17 @@ Auth support:
 - Use API key auth when the official API uses token or key based access.
 - If both OAuth and API key auth are supported, include both and mark the
   preferred official flow.
+- For user-owned personal access tokens or bearer tokens, use a gateway
+  supported user-token path such as passthrough headers or token exchange. Do
+  not convert a user's PAT into a shared static upstream key.
+- If OAuth is selected, first list the organization OAuth providers and reuse a
+  target-specific provider only when it already exists for that company. Create
+  a new target-specific provider only when the required client credentials and
+  official OAuth URLs are available.
+- Never reuse Asana's OAuth provider for another company.
+- If the API is OAuth-only and no target-specific OAuth provider can be
+  resolved or created, block deployment and report the missing OAuth provider as
+  the next action.
 
 Endpoint catalog rules:
 
@@ -131,14 +161,17 @@ Logo rules:
 Deploy or update only after all required gates pass:
 
 1. Live publisher catalog was queried with no arguments.
-2. Existing publisher status was checked for the candidate.
-3. The live Asana publisher was loaded as the template.
-4. Official API docs were found.
-5. Perplexity verification passed.
-6. Authentication method is known.
-7. Endpoint catalog is populated from official docs.
-8. Destructive endpoints are marked protected.
-9. Basic health check passes, or the official docs provide enough static
+2. Existing publisher status was checked with `get_agent_publisher`.
+3. The live Asana publisher was loaded with `get_agent_publisher` as the
+   commercial template.
+4. Deployment `organization_id` was resolved with `list_organizations`.
+5. Official API docs were found.
+6. Perplexity verification passed.
+7. Authentication method is known.
+8. OAuth provider or user-token path is valid when user auth is required.
+9. Endpoint catalog is populated from official docs.
+10. Destructive endpoints are marked protected.
+11. Basic health check passes, or the official docs provide enough static
    metadata to create a non-callable blocked stub.
 
 If any gate fails, block or skip the candidate. Do not deploy partial publisher
