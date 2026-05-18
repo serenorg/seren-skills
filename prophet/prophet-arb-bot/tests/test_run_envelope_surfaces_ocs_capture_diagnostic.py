@@ -242,3 +242,166 @@ def test_cmd_run_envelope_omits_capture_fields_when_entry_succeeded(
     assert entry["status"] == "ok"
     assert "capture_observations" not in entry
     assert "capture_error" not in entry
+
+
+# ---------------------------------------------------------------------------
+# #726 — hedge_failure lift on hedge_failed_no_commit blocks
+
+
+_FAKE_HEDGE_FAILURE = {
+    "error_class": "unknown",
+    "clob_http_status": None,
+    "clob_error_message": None,
+    "exception_type": "RuntimeError",
+    "exception_message": "ALLOWANCE_NOT_GRANTED: please approve spender 0xE111...996B",
+    "submitted_order": {
+        "token_id": "111111-YES",
+        "hedge_side": "sell",
+        "size_usdc": 1.0,
+        "marketable_price": 0.001,
+    },
+    "attempts": 1,
+}
+
+
+def test_envelope_lifts_hedge_failure_on_hedge_failed_no_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#722 wired structured hedge_failure into CycleResult.payload, but
+    `_build_ui_submission_entry` only surfaced diagnostic fields for
+    `ocs_session_id_not_captured`. Without this seam, the operator sees
+    `error_class=unknown` in the progress stream but can never read the
+    raw CLOB message to extend the classifier — every unknown stays
+    unknown forever."""
+    pending = [_pending("cond_a", question="Question A?")]
+
+    monkeypatch.setattr(agent, "RunRecorder", _Recorder)
+    monkeypatch.setattr(agent, "_resolve_target", lambda config: object())
+    monkeypatch.setattr(
+        agent, "_acquire_jwt", lambda **kwargs: ("eyJ.jwt", "vid_1", "cache")
+    )
+    monkeypatch.setattr(agent, "list_arb_pairs", lambda target: [])
+    monkeypatch.setattr(
+        agent,
+        "run_auto_discover",
+        lambda **kwargs: AutoDiscoverResult(
+            candidates_found=1,
+            already_paired=0,
+            raw_markets_fetched=1,
+            markets_passing_gates=1,
+            candidates_evaluated_for_pairing=1,
+            max_candidates=250,
+            auto_paired=[],
+            pending_ui_submission=list(pending),
+        ),
+    )
+    monkeypatch.setattr(
+        agent, "_apply_seed_preflight_and_trim", lambda **kwargs: None
+    )
+
+    def stub_create_market_via_ui(**_: Any) -> CycleResult:
+        return CycleResult(
+            status="blocked",
+            reason="hedge_failed_no_commit",
+            payload={
+                "polymarket_condition_id": "cond_a",
+                "question": "Question A?",
+                "hedge_status": "hedge_failed_no_commit",
+                "hedge_error": "ALLOWANCE_NOT_GRANTED: please approve spender 0xE111...996B",
+                "hedge_attempts": 1,
+                "hedge_failure": dict(_FAKE_HEDGE_FAILURE),
+            },
+        )
+
+    result = agent.cmd_run(
+        config=_config(),
+        gateway=object(),
+        yes_live=True,
+        transport=object(),
+        hedger=object(),
+        create_market_via_ui=stub_create_market_via_ui,
+    )
+
+    ui_results = result.payload.get("ui_submission_results")
+    assert isinstance(ui_results, list) and len(ui_results) == 1, ui_results
+    entry = ui_results[0]
+    assert entry["status"] == "blocked"
+    assert entry["reason"] == "hedge_failed_no_commit"
+
+    # The structured failure must reach the envelope so the operator can
+    # diagnose without a re-run.
+    assert "hedge_failure" in entry, (
+        "ui_submission_results[i] must surface hedge_failure on a "
+        "hedge_failed_no_commit block; saw "
+        f"{sorted(entry.keys())}"
+    )
+    assert entry["hedge_failure"] == _FAKE_HEDGE_FAILURE
+    # The convenience top-level fields must also survive — they're what
+    # the chat-side renderer reads without descending into hedge_failure.
+    assert entry.get("hedge_attempts") == 1
+    assert entry.get("hedge_error", "").startswith("ALLOWANCE_NOT_GRANTED")
+
+
+def test_envelope_does_not_lift_hedge_failure_on_unrelated_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reason-scoped lift: an `ocs_session_id_not_captured` block that
+    happens to carry a stray `hedge_failure` key (it shouldn't, but
+    defense-in-depth) must NOT bleed it into the envelope. The lift seam
+    must be reason-keyed so envelope rows stay lean per their failure
+    mode."""
+    pending = [_pending("cond_a", question="Question A?")]
+
+    monkeypatch.setattr(agent, "RunRecorder", _Recorder)
+    monkeypatch.setattr(agent, "_resolve_target", lambda config: object())
+    monkeypatch.setattr(
+        agent, "_acquire_jwt", lambda **kwargs: ("eyJ.jwt", "vid_1", "cache")
+    )
+    monkeypatch.setattr(agent, "list_arb_pairs", lambda target: [])
+    monkeypatch.setattr(
+        agent,
+        "run_auto_discover",
+        lambda **kwargs: AutoDiscoverResult(
+            candidates_found=1,
+            already_paired=0,
+            raw_markets_fetched=1,
+            markets_passing_gates=1,
+            candidates_evaluated_for_pairing=1,
+            max_candidates=250,
+            auto_paired=[],
+            pending_ui_submission=list(pending),
+        ),
+    )
+    monkeypatch.setattr(
+        agent, "_apply_seed_preflight_and_trim", lambda **kwargs: None
+    )
+
+    def stub_create_market_via_ui(**_: Any) -> CycleResult:
+        return CycleResult(
+            status="blocked",
+            reason="ocs_session_id_not_captured",
+            payload={
+                "polymarket_condition_id": "cond_a",
+                "question": "Question A?",
+                # Stray field that shouldn't be lifted on this reason.
+                "hedge_failure": dict(_FAKE_HEDGE_FAILURE),
+            },
+        )
+
+    result = agent.cmd_run(
+        config=_config(),
+        gateway=object(),
+        yes_live=True,
+        transport=object(),
+        hedger=object(),
+        create_market_via_ui=stub_create_market_via_ui,
+    )
+
+    ui_results = result.payload.get("ui_submission_results")
+    assert isinstance(ui_results, list) and len(ui_results) == 1
+    entry = ui_results[0]
+    assert entry["reason"] == "ocs_session_id_not_captured"
+    assert "hedge_failure" not in entry, (
+        "Envelope row must stay lean — hedge_failure only lifts on "
+        "hedge_failed_no_commit reason"
+    )
