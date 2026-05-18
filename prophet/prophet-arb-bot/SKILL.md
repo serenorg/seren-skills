@@ -568,7 +568,14 @@ Per-entry blocking reasons surfaced in `ui_submission_results.reason`:
   and message, and `payload.auth_source` reads
   `prophet_session_unavailable:restore_failed` so operators can
   distinguish a restore-time failure from an OTP-side failure
-  without burning an email round-trip. If the cached refresh
+  without burning an email round-trip. Since #664 the OTP
+  fall-through path also attaches `payload.cache_check` with the
+  decision inputs the cache-fresh guard actually saw (`state`,
+  `is_fresh`, `jwt_present`, `refresh_token_present`, `jwt_expires_at`)
+  so operators can tell whether the guard rejected the cache (one
+  of those fields was False) or whether it accepted the cache and
+  the failure was downstream (in which case `observable_check` or
+  `restore_exception` will also be present). If the cached refresh
   token has been revoked server-side, re-login at
   `app.prophetmarket.ai` once to regenerate.
 - `seren_desktop_playwright_mcp_unavailable` — no `playwright-stealth`
