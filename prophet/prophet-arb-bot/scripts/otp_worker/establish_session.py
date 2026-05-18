@@ -58,11 +58,21 @@ _PRIVY_OBSERVABLE_SIGN_IN_PROBE_MS = 1_500
 # ``PROPHET_APP_URL`` (homepage), which doesn't require auth, so any
 # observability check there is a false positive. ``/create`` is the
 # guarded route the per-entry driver actually needs; if the SDK rejects
-# the planted session it redirects to ``/?returnTo=%2Fcreate`` within
-# the boot window. Poll for that redirect; if observed, fall through
-# to in-context OTP via ``acquirer()``.
+# the planted session it (a) calls ``destroyLocalState`` which clears
+# ``privy:token`` and ``privy:refresh_token`` and (b) ``router.push``-es
+# to ``/?returnTo=%2Fcreate``. Either signal is conclusive — poll for
+# both over a budget large enough to cover SDK boot variance under MCP
+# cold-launch contention (1-4s typical, 8s ceiling). If either fires,
+# fall through to in-context OTP via ``acquirer()``.
+#
+# Budget matches ``_PRIVY_OBSERVABLE_BUDGET_SECONDS`` (8s) so the
+# negative-signal window is at least as long as the positive-signal
+# window the existing observable check uses. Pre-#714 the cache-fresh
+# branch trusted only the positive signal and false-positived on the
+# unauth-tolerant homepage; #714's probe is the negative-signal
+# counterpart.
 _PROBE_CREATE_URL = f"{PROPHET_APP_URL}/create"
-_SDK_SETTLE_BUDGET_SECONDS = 3.0
+_SDK_SETTLE_BUDGET_SECONDS = 8.0
 _SDK_SETTLE_POLL_INTERVAL_SECONDS = 0.25
 
 
@@ -340,19 +350,32 @@ def _sdk_rejected_planted_session_at_create(
 ) -> bool:
     """Probe whether the Privy SDK rejects the planted session.
 
-    Issue #714: navigate to ``/create`` (a guarded route — actually the
-    one we need) and poll the page URL for the ``returnTo=`` redirect
-    that the Privy SDK emits when it rejects the planted session. The
-    redirect lands within the SDK's boot window (1-3s on a warm cold
-    Chromium), so a 3s budget is sufficient under normal conditions
-    without slowing the happy path materially. Returns True iff a
-    redirect was observed — caller should then fall through to
-    in-context OTP via ``acquirer(...)`` rather than trusting the
-    planted state.
+    Issue #714: navigate to ``/create`` (the guarded route the per-entry
+    driver needs) and poll for either of the two signals the Privy SDK
+    emits on session rejection:
 
-    Stubs that don't expose ``navigate`` or ``get_url`` are tolerated —
-    in that case we return False (no evidence of rejection) so existing
-    establish-path tests don't need to add navigation plumbing.
+    1. **URL redirect to ``/?returnTo=``.** The SDK's ``router.push``
+       after ``destroyLocalState`` redirects to the homepage with the
+       ``returnTo`` query param.
+
+    2. **``privy:token`` cleared from localStorage.** The SDK's
+       ``destroyLocalState`` wipes the token-bearing keys atomically.
+       This signal sometimes fires before the redirect lands, giving
+       us a slightly earlier negative signal.
+
+    Either signal is conclusive. The first live test of #714 caught
+    the URL signal in <3s on a fast cycle but missed it on a slower
+    cycle where SDK boot took longer than the original 3s budget — at
+    which point the observable check false-positived because the URL
+    was still ``/create`` and ``privy:token`` was still present.
+    Adding the localStorage signal plus expanding the budget to 8s
+    (matching ``_PRIVY_OBSERVABLE_BUDGET_SECONDS``) closes that race.
+
+    Stubs that don't expose ``navigate``, ``get_url``, or
+    ``get_local_storage`` are tolerated — in that case the relevant
+    signal is skipped. If both signal sources are unavailable, returns
+    False (no evidence of rejection) so existing establish-path tests
+    that mock minimal sessions don't need to add navigation plumbing.
     """
     navigate = getattr(session, "navigate", None)
     if callable(navigate):
@@ -360,23 +383,56 @@ def _sdk_rejected_planted_session_at_create(
             navigate(_PROBE_CREATE_URL)
         except Exception:
             # A navigation error doesn't itself prove rejection. Fall
-            # through to the URL poll; if a prior page is still
-            # showing, the poll will read its URL and return False.
+            # through to the polls; if a prior page is still showing,
+            # the polls will read its state and return False.
             pass
 
     get_url = getattr(session, "get_url", None)
-    if get_url is None:
+    get_local_storage = getattr(session, "get_local_storage", None)
+    if get_url is None and get_local_storage is None:
+        # No way to read either rejection signal. Caller falls back to
+        # the observable check.
         return False
+
+    # Read the initial privy:token snapshot. If it was already empty
+    # before the probe ran (no restore happened, or restore is broken),
+    # we can't use "token cleared" as a signal — only an
+    # initially-present-then-cleared transition is conclusive. Snapshot
+    # outside the poll loop so the comparison is stable.
+    initial_token_present: bool
+    if callable(get_local_storage):
+        try:
+            initial_token = get_local_storage("privy:token")
+            initial_token_present = bool(initial_token)
+        except Exception:
+            initial_token_present = False
+    else:
+        initial_token_present = False
 
     deadline = clock() + max(budget_seconds, 0.0)
     interval = max(poll_interval_seconds, 0.05)
     while True:
-        try:
-            url = get_url() or ""
-        except Exception:
-            url = ""
-        if "returnTo=" in url:
-            return True
+        # Signal A: URL redirected off the guarded route.
+        if callable(get_url):
+            try:
+                url = get_url() or ""
+            except Exception:
+                url = ""
+            if "returnTo=" in url:
+                return True
+
+        # Signal B: planted privy:token was destroyed mid-flight.
+        # Only treat the transition (initially present → now absent) as
+        # rejection. A token that was never planted to begin with is
+        # not a signal — it's the absence of evidence.
+        if initial_token_present and callable(get_local_storage):
+            try:
+                current_token = get_local_storage("privy:token")
+            except Exception:
+                current_token = None
+            if not current_token:
+                return True
+
         if clock() >= deadline:
             return False
         sleep(interval)

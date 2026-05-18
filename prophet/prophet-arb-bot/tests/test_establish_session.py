@@ -497,6 +497,101 @@ def test_establish_falls_through_to_otp_when_sdk_redirects_create_to_returnto() 
     assert getattr(result, "jwt", "") == "post_otp_j"
 
 
+def test_establish_falls_through_to_otp_when_privy_token_destroyed_pre_redirect() -> None:
+    """Issue #714 follow-up: the SDK's rejection path runs
+    ``destroyLocalState`` BEFORE the ``router.push`` redirect lands.
+    On slower cycles where SDK boot exceeds the original 3s probe
+    budget, the redirect would arrive late but ``destroyLocalState``
+    had already wiped ``privy:token``. The original probe only watched
+    the URL signal, so it missed that window and the establish helper
+    false-positived back into the observable check.
+
+    The strengthened probe polls BOTH signals over an 8s budget:
+    1. URL contains ``returnTo=`` (post-redirect)
+    2. ``privy:token`` was initially planted but is now cleared
+       (post-``destroyLocalState``, pre-redirect)
+
+    Pin the new signal: a session where the planted token disappears
+    mid-probe — without any URL change — MUST still trigger OTP
+    fall-through. The transition (initially-present → absent) is the
+    conclusive part; an always-absent token is not a signal (it's the
+    absence of evidence — the planted state was never present).
+    """
+    cache = _StubCache(
+        [
+            _Entry(jwt="cached_j", refresh_token="", state="fresh", fresh=True),
+            _Entry(jwt="post_otp_j", refresh_token="", state="fresh", fresh=True),
+        ]
+    )
+
+    class _SessionDestroysTokenWithoutRedirect:
+        """Mimics the pre-redirect rejection window.
+
+        The SDK has booted on ``/create``, called
+        ``auth.privy.io/api/v1/users/me``, been rejected by device
+        binding, and is mid-way through its destroy-then-redirect dance:
+        ``destroyLocalState`` has cleared ``privy:token`` but the
+        ``router.push`` to ``/?returnTo=`` hasn't fired yet. URL is
+        still ``/create``.
+        """
+
+        def __init__(self) -> None:
+            self._url = "https://app.prophetmarket.ai/create"
+            self._token: str | None = "planted_token_bytes"
+            self.navigated_to: list[str] = []
+            self._read_count = 0
+
+        def navigate(self, url: str) -> None:
+            self.navigated_to.append(url)
+
+        def get_url(self) -> str:
+            return self._url
+
+        def get_local_storage(self, key: str) -> str | None:
+            if key != "privy:token":
+                return None
+            # First read snapshots the planted state; subsequent reads
+            # see the SDK has destroyed it.
+            self._read_count += 1
+            if self._read_count == 1:
+                return self._token
+            self._token = None
+            return None
+
+        def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
+            return None
+
+    session = _SessionDestroysTokenWithoutRedirect()
+    acquirer_calls: list[dict[str, Any]] = []
+
+    def acquirer(**kw: Any) -> None:
+        acquirer_calls.append(kw)
+
+    result = establish_browser_session_for_create(
+        session=session,
+        email="e@example.com",
+        provider="gmail",
+        seren_user_id="",
+        bounty_id="",
+        config_gateway=object(),
+        transport=object(),
+        pw_gateway=None,
+        cache=cache,
+        acquirer=acquirer,
+        refresher=lambda **_: None,
+        restore=lambda *a, **kw: None,
+    )
+
+    # Probe ran (token-destroy signal alone is conclusive, no URL change needed).
+    assert len(acquirer_calls) == 1, (
+        f"token destruction must trigger OTP fall-through; "
+        f"acquirer called {len(acquirer_calls)} time(s) "
+        f"(navigated_to={session.navigated_to!r}, url={session.get_url()!r})"
+    )
+    assert acquirer_calls[0]["browser_session"] is session
+    assert getattr(result, "jwt", "") == "post_otp_j"
+
+
 def test_establish_routes_acquirer_to_http_gateway_not_playwright_gateway() -> None:
     """Issue #714 follow-up: when the cache-fresh branch falls through to
     in-context OTP, the ``acquirer`` call must receive the publisher
