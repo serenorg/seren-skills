@@ -13,10 +13,23 @@ restore script at `document_start` on every navigation. The Privy SDK
 reads `localStorage` during its boot path, so by the time the SDK runs
 the planted state is already there.
 
-The Privy SDK serializes each token via `JSON.stringify` before writing
-to localStorage, so each value must land wrapped in balanced double-
-quotes for the SDK to unwrap correctly via
-`localStorage.getItem(k).slice(1, -1)`.
+The Privy SDK uses two persistence shapes:
+
+  - Plain string values (`privy:token`, `privy:refresh_token`,
+    `privy:caid`, `privy:<app_id>:recent-login-method`) are stored as
+    `JSON.stringify(value)`, i.e. the bare string wrapped in literal
+    surrounding double quotes. The SDK strips that wrapping via
+    `localStorage.getItem(k).slice(1, -1)`.
+  - JSON values (`privy:connections` is a JSON array of wallet
+    connections) are stored as the JSON itself, with no extra outer
+    wrapping. `capture_artifacts` reads them verbatim and the restore
+    helper plants them verbatim.
+
+Issue #676: roll back the privy:pat / privy:id_token contract added by
+PR #675 (#674). Those keys do not exist on Prophet's live Privy session
+(verified by manual MCP walk-through, 2026-05-18). Capture and plant
+`privy:connections` (the embedded wallet `/create` signs with),
+`privy:caid`, and `privy:<app_id>:recent-login-method` instead.
 """
 
 from __future__ import annotations
@@ -26,8 +39,9 @@ from typing import Any
 
 from .playwright_client import (
     PROPHET_APP_URL,
-    PRIVY_ID_TOKEN_LOCAL_STORAGE_KEY,
-    PRIVY_PAT_LOCAL_STORAGE_KEY,
+    PRIVY_CAID_LOCAL_STORAGE_KEY,
+    PRIVY_CONNECTIONS_LOCAL_STORAGE_KEY,
+    PRIVY_RECENT_LOGIN_METHOD_LOCAL_STORAGE_KEY,
     PRIVY_REFRESH_LOCAL_STORAGE_KEY,
     PRIVY_TOKEN_LOCAL_STORAGE_KEY,
 )
@@ -40,29 +54,23 @@ def restore_privy_session(
     *,
     jwt: str,
     refresh_token: str,
-    privy_pat: str = "",
-    privy_id_token: str = "",
+    privy_connections: str = "",
+    privy_caid: str = "",
+    privy_recent_login_method: str = "",
 ) -> None:
     """Plant Privy session state into the caller's browser, then navigate.
 
-    Registers a `document_start` init script that writes the JSON-quoted
-    Privy state into ``localStorage`` on the Prophet origin, then
-    navigates once. The init script persists for the lifetime of the
-    browser context, so subsequent navigations (e.g. to ``/create``)
-    also see the planted state.
+    Registers a `document_start` init script that writes the Privy
+    state into ``localStorage`` on the Prophet origin, then navigates
+    once. The init script persists for the lifetime of the browser
+    context, so subsequent navigations (e.g. to ``/create``) also see
+    the planted state.
 
-    Issue #674: a manual diagnostic probe with a ``removeItem`` hook
-    proved that ``Dy._getToken`` calls ``Dh.destroyLocalState`` within
-    ~550ms of page boot when only a subset of the SDK's expected
-    ``privy:*`` localStorage keys are present. Specifically the SDK
-    wipes ``privy:token``, ``privy:refresh_token``, ``privy:pat``, and
-    ``privy:id_token`` together. Planting ``privy:token`` alone (the
-    pre-#674 contract) reliably triggers the wipe, which is why every
-    ``/create`` cycle bounced to ``/?returnTo=/create`` and surfaced as
-    ``ocs_session_id_not_captured``.
-
-    The fix: plant ``privy:pat`` and ``privy:id_token`` alongside
-    ``privy:token`` when the cache carries them.
+    Issue #676: ``privy:connections`` carries the embedded wallet
+    metadata Prophet's ``/create`` flow uses to sign
+    ``createMarketWithBet``. Without it, the SDK boots without a
+    signer and the cycle either bounces to ``/?returnTo=/create`` or
+    stalls at the in-browser signing prompt.
 
     Issue #666: ``privy:refresh_token`` was retired server-side. An
     empty ``refresh_token`` (the post-#666 cache shape) is fine; we
@@ -75,22 +83,20 @@ def restore_privy_session(
     script = _build_init_script(
         jwt=jwt,
         refresh_token=refresh_token,
-        privy_pat=privy_pat,
-        privy_id_token=privy_id_token,
+        privy_connections=privy_connections,
+        privy_caid=privy_caid,
+        privy_recent_login_method=privy_recent_login_method,
     )
     session.add_init_script(script)
     session.navigate(PROPHET_APP_URL)
 
 
-def _setter_js(key: str, value: str) -> str:
-    """Inline JS that writes ``localStorage[key] = JSON.stringify(value)``.
+def _setter_js_string(key: str, value: str) -> str:
+    """Plant a Privy *string* value: SDK stores ``JSON.stringify(value)``.
 
-    The Privy SDK persists strings double-quoted (it serializes with
-    ``JSON.stringify``), so we wrap once via ``json.dumps(value)``
-    (producing ``"…"``-quoted JSON) and then ``json.dumps`` again to
-    safely escape that into a JS string literal. The double-encoding
-    keeps the injection safe — a malicious cache value can't escape its
-    own quotes.
+    The double-encoding (`json.dumps(json.dumps(value))`) keeps the
+    injection safe — a malicious cache value cannot escape its own
+    quotes.
     """
     wrapped = json.dumps(value)
     return (
@@ -102,12 +108,31 @@ def _setter_js(key: str, value: str) -> str:
     )
 
 
+def _setter_js_raw_json(key: str, raw_json: str) -> str:
+    """Plant a Privy *raw-JSON* value (e.g. ``privy:connections`` array).
+
+    ``capture_artifacts`` reads the localStorage value verbatim for
+    JSON-array keys, so the cache already carries the canonical
+    serialization. We plant that string as-is — no additional
+    ``JSON.stringify`` wrapping — because the SDK reads these keys
+    with ``JSON.parse`` directly.
+    """
+    return (
+        "      window.localStorage.setItem("
+        + json.dumps(key)
+        + ", "
+        + json.dumps(raw_json)
+        + ");"
+    )
+
+
 def _build_init_script(
     *,
     jwt: str,
     refresh_token: str,
-    privy_pat: str = "",
-    privy_id_token: str = "",
+    privy_connections: str = "",
+    privy_caid: str = "",
+    privy_recent_login_method: str = "",
 ) -> str:
     """Build the JS that plants Privy state at ``document_start``.
 
@@ -117,18 +142,25 @@ def _build_init_script(
     to leak Privy tokens to those origins.
 
     Each Privy key is planted only when we have a non-empty value for
-    it. Per #674's diagnostic probe, planting an empty value (or the
-    legacy ``"deprecated"`` sentinel for refresh_token, per #666) is
-    treated by the SDK as a corruption marker and triggers
+    it. Per the #666/#674 diagnostics, planting an empty value (or the
+    legacy ``"deprecated"`` sentinel for ``refresh_token``, per #666)
+    is treated by the SDK as a corruption marker and triggers
     ``destroyLocalState`` regardless of which OTHER keys are present.
     """
-    body = _setter_js(PRIVY_TOKEN_LOCAL_STORAGE_KEY, jwt)
+    body = _setter_js_string(PRIVY_TOKEN_LOCAL_STORAGE_KEY, jwt)
     if refresh_token:
-        body += _setter_js(PRIVY_REFRESH_LOCAL_STORAGE_KEY, refresh_token)
-    if privy_pat:
-        body += _setter_js(PRIVY_PAT_LOCAL_STORAGE_KEY, privy_pat)
-    if privy_id_token:
-        body += _setter_js(PRIVY_ID_TOKEN_LOCAL_STORAGE_KEY, privy_id_token)
+        body += _setter_js_string(PRIVY_REFRESH_LOCAL_STORAGE_KEY, refresh_token)
+    if privy_connections:
+        body += _setter_js_raw_json(
+            PRIVY_CONNECTIONS_LOCAL_STORAGE_KEY, privy_connections
+        )
+    if privy_caid:
+        body += _setter_js_string(PRIVY_CAID_LOCAL_STORAGE_KEY, privy_caid)
+    if privy_recent_login_method:
+        body += _setter_js_string(
+            PRIVY_RECENT_LOGIN_METHOD_LOCAL_STORAGE_KEY,
+            privy_recent_login_method,
+        )
     return (
         "(function () {"
         "  try {"

@@ -125,10 +125,15 @@ def establish_browser_session_for_create(
                 session,
                 jwt=entry.jwt,
                 refresh_token=entry.refresh_token,
-                # Issue #674: plant the SDK's full localStorage state so
-                # _getToken doesn't wipe everything within ~550ms of boot.
-                privy_pat=getattr(entry, "privy_pat", "") or "",
-                privy_id_token=getattr(entry, "privy_id_token", "") or "",
+                # Issue #676: plant the keys the SDK actually writes —
+                # privy:connections carries the embedded wallet the
+                # `/create` signing flow uses. Rollback of PR #675's
+                # privy:pat / privy:id_token contract.
+                privy_connections=getattr(entry, "privy_connections", "") or "",
+                privy_caid=getattr(entry, "privy_caid", "") or "",
+                privy_recent_login_method=(
+                    getattr(entry, "privy_recent_login_method", "") or ""
+                ),
             )
         except Exception as restore_exc:
             # Issue #662: the previous `except Exception: pass` silently

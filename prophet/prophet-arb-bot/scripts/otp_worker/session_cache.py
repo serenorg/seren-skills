@@ -31,11 +31,16 @@ class SessionCacheEntry:
     state: CacheState = "needs_otp"
     consecutive_refresh_failures: int = 0
     prophet_viewer_id: str = ""
-    # Issue #674: legacy caches default to empty; operators recover on
-    # the next OTP cold-start which captures the SDK's full localStorage
-    # state and writes the fresh values here.
-    privy_pat: str = ""
-    privy_id_token: str = ""
+    # Issue #676: roll back the privy:pat / privy:id_token slots from
+    # PR #675 (those keys do not exist on Prophet's live Privy session)
+    # and carry the keys the SDK actually writes. Legacy caches that
+    # still hold ``privy_pat`` / ``privy_id_token`` are silently dropped
+    # by the unknown-field filter in ``SessionCache.read``. Operators
+    # recover on the next OTP cold-start which captures the SDK's
+    # full localStorage state and writes the fresh values here.
+    privy_connections: str = ""
+    privy_caid: str = ""
+    privy_recent_login_method: str = ""
 
     def is_fresh(self, *, leeway_seconds: int = 60) -> bool:
         """JWT is usable now and not within `leeway_seconds` of expiry."""
