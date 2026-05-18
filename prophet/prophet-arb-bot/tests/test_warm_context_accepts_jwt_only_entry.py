@@ -57,7 +57,10 @@ def test_warm_context_open_accepts_jwt_only_cache_entry(monkeypatch):
     # The actual gateway + browser session don't need to do anything; the
     # bug is the post-establish predicate over the returned cache entry,
     # not the MCP plumbing.
-    monkeypatch.setattr(agent, "PlaywrightStealthGateway", lambda: _NoopMcpContext())
+    # Issue #681: ``_open()`` now passes ``env_overrides=PRIVY_COMPATIBLE_ENV``
+    # to the gateway. Accept and ignore any kwargs — these tests cover the
+    # JWT-only acceptance predicate, not the env-propagation contract.
+    monkeypatch.setattr(agent, "PlaywrightStealthGateway", lambda **_: _NoopMcpContext())
     monkeypatch.setattr(
         agent, "RealBrowserSession", lambda *, gateway: _NoopMcpContext()
     )
@@ -96,7 +99,10 @@ def test_warm_context_open_still_rejects_missing_jwt(monkeypatch):
         "_resolve_default_command",
         classmethod(lambda cls: ["node", "/fake/playwright-stealth/index.js"]),
     )
-    monkeypatch.setattr(agent, "PlaywrightStealthGateway", lambda: _NoopMcpContext())
+    # Issue #681: ``_open()`` now passes ``env_overrides=PRIVY_COMPATIBLE_ENV``
+    # to the gateway. Accept and ignore any kwargs — these tests cover the
+    # JWT-only acceptance predicate, not the env-propagation contract.
+    monkeypatch.setattr(agent, "PlaywrightStealthGateway", lambda **_: _NoopMcpContext())
     monkeypatch.setattr(
         agent, "RealBrowserSession", lambda *, gateway: _NoopMcpContext()
     )

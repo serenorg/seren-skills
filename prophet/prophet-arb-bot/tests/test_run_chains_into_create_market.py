@@ -170,7 +170,12 @@ class _FakeWarmGateway:
     instances: list["_FakeWarmGateway"] = []
     enter_count = 0
 
-    def __init__(self) -> None:
+    def __init__(self, **_: Any) -> None:
+        # Issue #681: ``env_overrides=`` is now passed to the gateway by
+        # ``_WarmCreateMarketUiContext._open()``. The stub silently absorbs it
+        # because these tests exercise the cycle-batching logic above the
+        # gateway, not the env-propagation contract (covered in
+        # ``test_playwright_mcp_privy_env.py``).
         self.resets = 0
         self.health_checks = 0
         self.exited = False
