@@ -28,7 +28,7 @@ import select
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from otp_worker.playwright_mcp_lifecycle import (
     KillReport,
@@ -57,6 +57,32 @@ DEFAULT_BUNDLED_PATHS = (
 DEFAULT_TIMEOUT_SECONDS = 180.0
 MCP_PROTOCOL_VERSION = "2024-11-05"
 PROPHET_STABLE_URL = "https://app.prophetmarket.ai/markets"
+
+# Issue #681: Privy-compatible env profile for the bundled `playwright-stealth`
+# MCP. Honored by Desktop #1957 (commit 34e6621e); older Desktop builds
+# silently ignore these vars and the child launches headless + full-stealth.
+# The skill still fails closed downstream (`prophet_session_unavailable`) on
+# old Desktop, so propagating the profile is safe even when unrecognized.
+#
+# Profile rationale (see issue body for the full audit):
+#   HEADLESS=0
+#       Headless Chromium has known iframe regressions
+#       (microsoft/playwright#31896, #33674) that break Privy's wallet
+#       sandbox.
+#   STEALTH_EVASIONS_DISABLE=iframe.contentWindow,navigator.permissions
+#       The two surfaces Privy probes. Drop these two evasions, keep the
+#       rest so Prophet's anti-bot surface still tolerates us.
+#   DISABLE_PAGE_INIT_PATCH=1
+#       The MCP's hand-rolled addInitScript double-patches
+#       navigator.permissions.query on top of the stealth plugin's own
+#       evasion. Off for /create.
+PRIVY_COMPATIBLE_ENV: dict[str, str] = {
+    "SEREN_PLAYWRIGHT_HEADLESS": "0",
+    "SEREN_PLAYWRIGHT_STEALTH_EVASIONS_DISABLE": (
+        "iframe.contentWindow,navigator.permissions"
+    ),
+    "SEREN_PLAYWRIGHT_DISABLE_PAGE_INIT_PATCH": "1",
+}
 _RESET_ENTRY_CAPTURE_SCRIPT = """
 (() => {
   try {
@@ -102,6 +128,7 @@ class PlaywrightStealthGateway:
         *,
         command: list[str] | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        env_overrides: Mapping[str, str] | None = None,
     ) -> None:
         resolved = command if command is not None else self._resolve_default_command()
         if not resolved:
@@ -111,6 +138,14 @@ class PlaywrightStealthGateway:
             )
         self._command = resolved
         self._timeout_seconds = timeout_seconds
+        # Issue #681: when set, the Node child receives os.environ extended
+        # with these overrides. When None (default), Popen is called without
+        # an ``env`` kwarg so the child inherits the parent env exactly as it
+        # has since #580 — preserving the OTP cold-start path's stealth-on
+        # profile and avoiding behavior drift for every other gateway caller.
+        self._env_overrides: dict[str, str] | None = (
+            dict(env_overrides) if env_overrides else None
+        )
         self._proc: subprocess.Popen[bytes] | None = None
         self._next_request_id = 1
         # Issue #647: KillReport from the pre-spawn cleanup pass. Surfaced in
@@ -168,12 +203,18 @@ class PlaywrightStealthGateway:
         # Diagnostic-only — no longer affects timeout dispatch.
         self._first_tool_call_pending = True
 
-        self._proc = subprocess.Popen(
-            self._command,
+        # Issue #681: propagate Privy-compatible env overrides into the Node
+        # child via Popen(env=...). When no overrides are configured, the
+        # kwarg is intentionally omitted so the child keeps inheriting parent
+        # env — preserving the OTP cold-start path's full-stealth profile.
+        popen_kwargs: dict[str, Any] = dict(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        if self._env_overrides:
+            popen_kwargs["env"] = {**os.environ, **self._env_overrides}
+        self._proc = subprocess.Popen(self._command, **popen_kwargs)
         self._request(
             "initialize",
             {

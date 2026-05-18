@@ -70,6 +70,7 @@ from otp_worker.establish_session import (
 from otp_worker.playwright_client import RealBrowserSession
 from otp_worker import playwright_mcp_gateway as _playwright_mcp_gateway
 from otp_worker.playwright_mcp_gateway import (
+    PRIVY_COMPATIBLE_ENV,
     PlaywrightMcpUnavailable,
     PlaywrightStealthGateway,
 )
@@ -2380,7 +2381,14 @@ def _default_browser_session_factory() -> Any:
 
     class _SessionScope:
         def __enter__(self) -> Any:
-            self._gw = PlaywrightStealthGateway().__enter__()
+            # Issue #681: standalone per-entry `/create` runs (used by
+            # --command create-market-via-ui) must launch with the
+            # Privy-compatible profile so the embedded wallet provisions.
+            # Mirrors the warm-context wiring in
+            # `_WarmCreateMarketUiContext._open()`.
+            self._gw = PlaywrightStealthGateway(
+                env_overrides=PRIVY_COMPATIBLE_ENV,
+            ).__enter__()
             self._session = RealBrowserSession(gateway=self._gw).__enter__()
             return self._session
 
@@ -2440,7 +2448,14 @@ class _WarmCreateMarketUiContext:
             return False
 
     def _open(self) -> None:
-        pw_gateway = PlaywrightStealthGateway().__enter__()
+        # Issue #681: spawn the cycle-scoped `/create` MCP child with the
+        # Privy-compatible env profile (HEADLESS=0, two stealth evasions
+        # dropped, page-init patch off). Older Desktop builds ignore these
+        # vars and the child launches stealth-on; the skill still fails
+        # closed downstream on `prophet_session_unavailable` in that case.
+        pw_gateway = PlaywrightStealthGateway(
+            env_overrides=PRIVY_COMPATIBLE_ENV,
+        ).__enter__()
         try:
             session_scope = RealBrowserSession(gateway=pw_gateway).__enter__()
         except Exception:
