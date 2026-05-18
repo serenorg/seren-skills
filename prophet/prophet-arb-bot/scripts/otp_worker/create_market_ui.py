@@ -141,8 +141,17 @@ _CAPTURE_SCRIPT = """
       try {
         let url = '';
         const a0 = args && args[0];
+        // Issue #699: fetch's first arg can be a string, a Request, a
+        // URL object, or any object with a `Symbol.toPrimitive`. Next.js
+        // and modern Apollo Client pass URL objects (`.href`, not
+        // `.url`), which the pre-#699 wrapper extracted as `''` —
+        // URL_RE.test('') was false, the record/walk branch was
+        // skipped, and the diagnostic ring buffer stayed empty on every
+        // ocs_session_id_not_captured block. Cover all four shapes.
         if (typeof a0 === 'string') { url = a0; }
         else if (a0 && typeof a0.url === 'string') { url = a0.url; }
+        else if (a0 && typeof a0.href === 'string') { url = a0.href; }
+        else if (a0 != null) { try { url = String(a0); } catch (e) { url = ''; } }
         if (URL_RE.test(url)) {
           const clone = resp.clone();
           clone.text().then((txt) => {

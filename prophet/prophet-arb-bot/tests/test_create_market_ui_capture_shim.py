@@ -131,6 +131,42 @@ def test_capture_script_wraps_both_fetch_and_xhr() -> None:
     assert "XHR.prototype.send" in script, "XHR.send interception missing"
 
 
+def test_capture_script_extracts_url_from_url_objects() -> None:
+    """Issue #699: Prophet's Next.js client calls `fetch(new URL(...))`.
+    URL objects have `.href`, not `.url`, so the pre-#699 wrapper
+    extracted `url=''` for every call, `URL_RE.test('')` returned false,
+    and the recording branch was never reached. 100% empty observation
+    buffer on every `ocs_session_id_not_captured` block.
+
+    The fetch URL extraction MUST cover:
+      - bare string (already covered)
+      - Request object: `.url`
+      - URL object: `.href`
+      - Anything else stringifiable: `String(a0)` fallback
+
+    Empirical evidence (connected Playwright MCP against
+    https://app.prophetmarket.ai/markets): every fetch arg is a URL
+    object with `urlProp: null, hrefProp: "https://..."`. Without `.href`,
+    capture silently fails for the entire page.
+    """
+    script = _CAPTURE_SCRIPT
+    # The Request-object branch must still be present (back-compat).
+    assert "a0.url" in script, "Request-object URL extraction missing"
+    # NEW: URL-object branch.
+    assert "a0.href" in script, (
+        "URL-object extraction missing — fetch(new URL(...)) yields "
+        "args[0] with `.href`, not `.url`. Prophet's Next.js client "
+        "lands here on every request; without this, observed buffer "
+        "stays empty and ocs_session_id_not_captured fires 100% of the time."
+    )
+    # NEW: stringify fallback for anything else stringifiable.
+    assert "String(a0)" in script, (
+        "String(a0) fallback missing — covers exotic args[0] shapes "
+        "(URL polyfills, custom Request wrappers) so future drift won't "
+        "silently zero the buffer again."
+    )
+
+
 def test_capture_script_uses_widened_url_filter() -> None:
     """Root cause #2 fix: the URL filter MUST match `graphql` OR `odds`
     (case-insensitive). The old `url.includes('/graphql')` was brittle —
