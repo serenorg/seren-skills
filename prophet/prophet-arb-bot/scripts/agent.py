@@ -1229,6 +1229,13 @@ def cmd_run(
                 # observability ran.
                 if exc.details.get("restore_exception") is not None:
                     _finish_payload["restore_exception"] = exc.details["restore_exception"]
+                # Issue #664: surface the cache_check snapshot so operators
+                # can tell whether the cache-fresh guard saw a fresh entry
+                # or one of (state, is_fresh, jwt_present, refresh_token_present)
+                # rejected it. Closes the diagnostic gap left by #660+#662
+                # when the guard bypasses the restore branch entirely.
+                if exc.details.get("cache_check") is not None:
+                    _finish_payload["cache_check"] = exc.details["cache_check"]
                 return _finish(CycleResult(
                     status="blocked",
                     reason="prophet_session_unavailable",
@@ -2264,6 +2271,10 @@ def cmd_create_market_via_ui(
                 # so operators can identify which MCP call failed.
                 if exc.details.get("restore_exception") is not None:
                     payload["restore_exception"] = exc.details["restore_exception"]
+                # Issue #664: surface the cache_check snapshot so the
+                # per-entry blocked envelope shows what the guard saw.
+                if exc.details.get("cache_check") is not None:
+                    payload["cache_check"] = exc.details["cache_check"]
                 return CycleResult(
                     status="blocked",
                     reason="prophet_session_unavailable",

@@ -98,6 +98,19 @@ def establish_browser_session_for_create(
         refresher(cache=cache)
         entry = cache.read()
 
+    # Issue #664: capture a non-PII snapshot of the entry the cache-fresh
+    # guard is about to inspect. Surfaced in `SessionEstablishmentFailed.details`
+    # on the OTP fall-through path so operators can tell why the guard
+    # bypassed the restore branch even when the on-disk cache looks fresh.
+    # No JWT bytes, no email — just the decision inputs the guard read.
+    cache_check: dict[str, Any] = {
+        "state": getattr(entry, "state", ""),
+        "is_fresh": bool(entry.is_fresh()),
+        "jwt_present": bool(getattr(entry, "jwt", "")),
+        "refresh_token_present": bool(getattr(entry, "refresh_token", "")),
+        "jwt_expires_at": getattr(entry, "jwt_expires_at", ""),
+    }
+
     observable_diag: dict[str, Any] | None = None
     if entry.is_fresh() and entry.jwt and entry.refresh_token:
         try:
@@ -143,12 +156,12 @@ def establish_browser_session_for_create(
         PrivyAuthFailed,
         IdentityMismatch,
     ) as exc:
-        details: dict[str, Any] = {}
+        details: dict[str, Any] = {"cache_check": cache_check}
         if observable_diag is not None:
             details["observable_check"] = observable_diag
         raise SessionEstablishmentFailed(
             f"prophet_session_unavailable:{type(exc).__name__}",
-            details=details or None,
+            details=details,
         ) from exc
 
     # Re-read the cache: the acquirer wrote a fresh entry on success.

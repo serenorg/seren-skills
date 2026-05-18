@@ -323,6 +323,79 @@ def test_establish_attaches_observable_check_when_fresh_cache_falls_through() ->
         raise AssertionError("expected SessionEstablishmentFailed")
 
 
+def test_establish_attaches_cache_check_when_guard_bypassed_and_otp_fails() -> None:
+    """Issue #664: when the cache-fresh guard at the top of
+    `establish_browser_session_for_create` evaluates False, the function
+    skips the restore + observability sub-tree entirely and falls
+    straight through to OTP. If the OTP path then raises, the blocked
+    envelope carries neither `restore_exception` (#662) nor
+    `observable_check` (#660) — both of those are populated only inside
+    the cache-fresh branch — so the operator sees a bare
+    `prophet_session_unavailable:EmailPublisherUnavailable` with no clue
+    why the guard rejected the cache.
+
+    Fix: always capture a `cache_check` snapshot of the entry the guard
+    actually saw (state, is_fresh result, jwt-present bool,
+    refresh_token-present bool, jwt_expires_at) and attach it to
+    `details["cache_check"]` whenever the OTP fall-through path raises.
+    The snapshot carries no PII — no JWT bytes, no email — just the
+    decision inputs the guard read.
+    """
+    cache = _StubCache(
+        # Cache returns a state that the guard rejects: `state="needs_otp"`,
+        # `is_fresh=False`, no jwt, no refresh_token. Exactly the
+        # scenario the user saw in #664 according to the local replay:
+        # one of these three is silently False at warm-context time even
+        # though the on-disk JSON looked fresh.
+        [_Entry(jwt="", refresh_token="", state="needs_otp", fresh=False)]
+    )
+    session = _Session(observable=False)
+
+    from otp_worker import EmailPublisherUnavailable
+
+    def acquirer(**_kw: Any) -> None:
+        raise EmailPublisherUnavailable("no email publisher connected")
+
+    try:
+        establish_browser_session_for_create(
+            session=session,
+            email="e@example.com",
+            provider="gmail",
+            seren_user_id="",
+            bounty_id="",
+            config_gateway=object(),
+            transport=object(),
+            pw_gateway=None,
+            cache=cache,
+            acquirer=acquirer,
+            refresher=lambda **_: None,
+            restore=lambda *a, **kw: None,
+        )
+    except SessionEstablishmentFailed as exc:
+        # The reason must carry the OTP exception suffix so the existing
+        # blocked-envelope wiring keeps working.
+        assert exc.reason == "prophet_session_unavailable:EmailPublisherUnavailable"
+        # Both legacy diagnostics stay absent in the bypass path — they
+        # only fire inside the cache-fresh branch.
+        assert exc.details.get("restore_exception") is None
+        assert exc.details.get("observable_check") is None
+        # NEW: cache_check must surface what the guard actually saw.
+        cache_check = exc.details.get("cache_check")
+        assert cache_check is not None, (
+            "cache_check must be attached when the guard bypass falls "
+            "through to OTP — that's the whole point of #664"
+        )
+        assert cache_check["state"] == "needs_otp"
+        assert cache_check["is_fresh"] is False
+        assert cache_check["jwt_present"] is False
+        assert cache_check["refresh_token_present"] is False
+        # Empty jwt_expires_at is the stale-cache marker — surface it
+        # as-is so the operator can compare against the on-disk file.
+        assert "jwt_expires_at" in cache_check
+    else:
+        raise AssertionError("expected SessionEstablishmentFailed")
+
+
 def test_establish_raises_session_establishment_failed_on_otp_timeout() -> None:
     cache = _StubCache(
         [_Entry(jwt="", refresh_token="", state="needs_otp", fresh=False)]
