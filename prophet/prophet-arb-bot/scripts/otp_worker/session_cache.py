@@ -31,6 +31,11 @@ class SessionCacheEntry:
     state: CacheState = "needs_otp"
     consecutive_refresh_failures: int = 0
     prophet_viewer_id: str = ""
+    # Issue #674: legacy caches default to empty; operators recover on
+    # the next OTP cold-start which captures the SDK's full localStorage
+    # state and writes the fresh values here.
+    privy_pat: str = ""
+    privy_id_token: str = ""
 
     def is_fresh(self, *, leeway_seconds: int = 60) -> bool:
         """JWT is usable now and not within `leeway_seconds` of expiry."""
