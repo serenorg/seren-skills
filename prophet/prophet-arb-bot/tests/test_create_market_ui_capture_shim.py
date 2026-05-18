@@ -290,6 +290,35 @@ def test_back_compat_alias_still_exported() -> None:
     assert _FETCH_CAPTURE_SCRIPT is _CAPTURE_SCRIPT
 
 
+def test_question_input_selector_matches_user_facing_textarea() -> None:
+    """Issue #720: Prophet's ``/create`` textarea has empty ``name`` and
+    ``id`` attributes — only a placeholder describing a future-tense
+    question (``e.g. Will Tesla stock close above $300...``). The
+    pre-#720 selector ``textarea[name="question"], #question-input``
+    matched some hidden form input via Playwright's resolver but never
+    the user-facing textarea, so ``fill`` wrote to the wrong target,
+    Validate Question stayed disabled (``0/300 chars``), and
+    StartOddsCalculation never fired — the cycle blocked with
+    ocs_session_id_not_captured even though the page reached /create
+    with auth.
+
+    Pin the contract: ``SEL_QUESTION_INPUT`` MUST include a bare
+    ``textarea`` selector so the no-attribute textarea is still hit.
+    The bare-tag fallback is safe on ``/create`` because Prophet renders
+    exactly one textarea there (confirmed live, post-auth).
+    """
+    from otp_worker.create_market_ui import SEL_QUESTION_INPUT
+
+    parts = [p.strip() for p in SEL_QUESTION_INPUT.split(",")]
+    assert "textarea" in parts, (
+        f"SEL_QUESTION_INPUT must contain a bare ``textarea`` selector "
+        f"so Prophet's empty-name/empty-id textarea on /create is still "
+        f"matched. Live evidence: "
+        f"textarea_state = [{{name:'', id:'', placeholder:'e.g. Will Tesla...'}}]. "
+        f"Got: {SEL_QUESTION_INPUT!r}"
+    )
+
+
 def test_capture_script_extracts_session_id_from_polling_url() -> None:
     """Issue #716 bug 1: the prior body-parse path raced Apollo's stream
     consumer — every `clone().text()` returned an empty body and the

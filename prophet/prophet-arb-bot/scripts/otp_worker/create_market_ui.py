@@ -41,7 +41,19 @@ from typing import Any
 
 PROPHET_CREATE_URL = "https://app.prophetmarket.ai/create"
 
-SEL_QUESTION_INPUT = 'textarea[name="question"], #question-input'
+# Issue #720: Prophet's user-facing textarea on /create has empty `name`
+# and `id` attributes — only a future-tense placeholder. The pre-#720
+# selector matched a hidden form element somewhere in the DOM, so `fill`
+# wrote to the wrong target; the visible textarea stayed at 0/300 chars,
+# Validate Question stayed disabled, and StartOddsCalculation never
+# fired. Try the specific selectors first (in case Prophet adds the name
+# attr back in a future build), then a placeholder-anchored selector,
+# then the bare `textarea` fallback that matches the single textarea
+# Prophet currently renders on /create.
+SEL_QUESTION_INPUT = (
+    'textarea[name="question"], #question-input, '
+    'textarea[placeholder*="future" i], textarea'
+)
 SEL_VALIDATE_QUESTION_BUTTON = 'button:has-text("Validate Question")'
 SEL_CREATE_MARKET_BUTTON = 'button:has-text("Create Market")'
 SEL_BET_AMOUNT_INPUT = 'input[name="bet-amount"], #bet-amount-input'
