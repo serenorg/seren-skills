@@ -927,6 +927,45 @@ def _apply_seed_preflight_and_trim(
     return None
 
 
+def _build_ui_submission_entry(
+    *,
+    polymarket_condition_id: str,
+    sub: CycleResult,
+) -> dict[str, Any]:
+    """Build a single `ui_submission_results` row from a `cmd_create_market_via_ui`
+    result, lifting selected diagnostic fields out of `sub.payload` so they
+    survive into the final `--json-output` envelope.
+
+    Issue #697: #696 wired `capture_observations` + `capture_error` into
+    `CycleResult.payload` for `ocs_session_id_not_captured` blocks, but
+    both `ui_submission_results.append` sites in cmd_run only kept four
+    keys — the diagnostic existed in memory and was then dropped before
+    `json.dumps` printed the envelope. SKILL.md promised the operator
+    could tell empty-buffer (new transport) from non-empty-buffer
+    (schema drift) from the envelope alone; this helper keeps that
+    promise by surfacing the diagnostic at the cmd_run boundary too.
+    """
+    entry: dict[str, Any] = {
+        "polymarket_condition_id": polymarket_condition_id,
+        "status": sub.status,
+        "reason": sub.reason,
+        "prophet_market_id": sub.payload.get("prophet_market_id", ""),
+    }
+    # Issue #672: warm-health signal in the final envelope, not just in
+    # payload, so operators can see at a glance when a reopen was triggered.
+    if sub.payload.get("warm_unhealthy_post_entry"):
+        entry["warm_unhealthy_post_entry"] = True
+    # Issue #697: OCS-capture diagnostic ring buffer + JS error survive
+    # only on the specific block reason where they were populated. Other
+    # block reasons (e.g. polymarket_book_unavailable) don't carry them
+    # and don't gain from envelope bloat.
+    if sub.reason == "ocs_session_id_not_captured":
+        for key in ("capture_observations", "capture_observations_error", "capture_error"):
+            if key in sub.payload:
+                entry[key] = sub.payload[key]
+    return entry
+
+
 def cmd_run(
     *,
     config: AgentConfig,
@@ -1168,12 +1207,12 @@ def cmd_run(
                     entry_total=total_entries,
                 )
                 ui_submission_results.append(
-                    {
-                        "polymarket_condition_id": entry.get("polymarket_market_id", ""),
-                        "status": sub.status,
-                        "reason": sub.reason,
-                        "prophet_market_id": sub.payload.get("prophet_market_id", ""),
-                    }
+                    _build_ui_submission_entry(
+                        polymarket_condition_id=entry.get(
+                            "polymarket_market_id", ""
+                        ),
+                        sub=sub,
+                    )
                 )
                 if sub.status == "ok":
                     progress.emit(
@@ -1253,18 +1292,12 @@ def cmd_run(
                                     progress.emit(
                                         "prophet_session_restored", idx=idx + 1
                                     )
-                        ui_entry: dict[str, Any] = {
-                            "polymarket_condition_id": entry.get("polymarket_market_id", ""),
-                            "status": sub.status,
-                            "reason": sub.reason,
-                            "prophet_market_id": sub.payload.get("prophet_market_id", ""),
-                        }
-                        # Issue #672: surface the warm-health signal in the
-                        # final envelope, not just in payload, so operators
-                        # can see at a glance when the reopen was triggered
-                        # without spelunking through nested payload fields.
-                        if sub.payload.get("warm_unhealthy_post_entry"):
-                            ui_entry["warm_unhealthy_post_entry"] = True
+                        ui_entry = _build_ui_submission_entry(
+                            polymarket_condition_id=entry.get(
+                                "polymarket_market_id", ""
+                            ),
+                            sub=sub,
+                        )
                         ui_submission_results.append(ui_entry)
                         if sub.status == "ok":
                             progress.emit(
