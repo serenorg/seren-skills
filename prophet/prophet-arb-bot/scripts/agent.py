@@ -959,8 +959,20 @@ def _build_ui_submission_entry(
     # only on the specific block reason where they were populated. Other
     # block reasons (e.g. polymarket_book_unavailable) don't carry them
     # and don't gain from envelope bloat.
+    # Issue #701: also lift the total_fetch_calls counter and
+    # unmatched_sample so an empty `capture_observations` can be
+    # disambiguated from "wrapper installed but page didn't fire any
+    # matching requests".
     if sub.reason == "ocs_session_id_not_captured":
-        for key in ("capture_observations", "capture_observations_error", "capture_error"):
+        for key in (
+            "capture_observations",
+            "capture_observations_error",
+            "capture_error",
+            "capture_total_fetch_calls",
+            "capture_total_fetch_calls_error",
+            "capture_unmatched_sample",
+            "capture_unmatched_sample_error",
+        ):
             if key in sub.payload:
                 entry[key] = sub.payload[key]
     return entry
@@ -2690,6 +2702,32 @@ def _run_create_market_via_ui_inner(
             # read_capture_error. Surface "" so consumers can rely on
             # the key existing regardless of skill version.
             payload["capture_error"] = ""
+        # Issue #701: counters and unmatched-URL sample so the operator
+        # can distinguish wrapper-not-installed from wrapper-installed-
+        # but-zero-matches. Best-effort: missing readers degrade to
+        # 0 / [] so consumers can rely on the keys existing.
+        read_total = getattr(create_market_ui, "read_capture_total_fetch_calls", None)
+        if callable(read_total):
+            try:
+                payload["capture_total_fetch_calls"] = read_total(session)
+            except Exception as exc:
+                payload["capture_total_fetch_calls_error"] = (
+                    f"{type(exc).__name__}:{str(exc)[:200]}"
+                )
+                payload["capture_total_fetch_calls"] = 0
+        else:
+            payload["capture_total_fetch_calls"] = 0
+        read_unmatched = getattr(create_market_ui, "read_capture_unmatched_sample", None)
+        if callable(read_unmatched):
+            try:
+                payload["capture_unmatched_sample"] = read_unmatched(session)
+            except Exception as exc:
+                payload["capture_unmatched_sample_error"] = (
+                    f"{type(exc).__name__}:{str(exc)[:200]}"
+                )
+                payload["capture_unmatched_sample"] = []
+        else:
+            payload["capture_unmatched_sample"] = []
         return CycleResult(
             status="blocked",
             reason="ocs_session_id_not_captured",

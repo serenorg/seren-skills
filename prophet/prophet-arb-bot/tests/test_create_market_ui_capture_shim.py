@@ -167,6 +167,35 @@ def test_capture_script_extracts_url_from_url_objects() -> None:
     )
 
 
+def test_capture_script_records_total_fetch_calls_and_unmatched_sample() -> None:
+    """Issue #701: a 100% empty `observed` buffer used to look identical
+    whether the wrapper failed to install or the page issued only URLs
+    that didn't match URL_RE. The wrapper MUST also expose:
+
+      - `total_fetch_calls` counter, incremented on every `fetch(...)`
+        invocation, so the operator can tell 0 fetches (wrapper installed
+        but page silent) from N fetches (wrapper installed and active).
+      - `unmatched_sample` ring buffer of URLs that didn't match URL_RE,
+        so the operator can see what endpoints `/create` actually hits
+        and decide whether the filter needs widening.
+
+    Both are structural pins on the JS source; runtime semantics are
+    exercised in the production browser.
+    """
+    script = _CAPTURE_SCRIPT
+    # Counter is declared on the capture object and incremented in fetch.
+    assert "total_fetch_calls: 0" in script, "counter init missing"
+    assert "total_fetch_calls += 1" in script, "counter increment missing"
+    # Unmatched-URL ring buffer is declared and capped.
+    assert "unmatched_sample: []" in script, "unmatched_sample init missing"
+    assert "function recordUnmatched(" in script, "recordUnmatched helper missing"
+    assert "um.length >= 10" in script, "unmatched_sample cap missing"
+    # The fetch wrapper invokes recordUnmatched in the else branch.
+    assert "recordUnmatched(url)" in script, (
+        "recordUnmatched not invoked on URL_RE-miss path"
+    )
+
+
 def test_capture_script_uses_widened_url_filter() -> None:
     """Root cause #2 fix: the URL filter MUST match `graphql` OR `odds`
     (case-insensitive). The old `url.includes('/graphql')` was brittle —

@@ -66,6 +66,14 @@ _CAPTURE_SCRIPT = """
     startOddsCalculation: null,
     observed: [],
     error: null,
+    // Issue #701: counters and unmatched-URL ring buffer so the operator
+    // can tell three states apart on an empty `observed`:
+    //   (a) wrapper not installed → __seren_capture__ undefined
+    //   (b) wrapper installed, 0 fetches → total_fetch_calls === 0
+    //   (c) wrapper installed, N fetches, none matched URL_RE → N>0 and
+    //       unmatched_sample populated → see what /create actually issues
+    total_fetch_calls: 0,
+    unmatched_sample: [],
   };
   const URL_RE = /(graphql|odds)/i;
   const SESSION_KEY_RE = /^(sessionId|session_id|oddsSessionId|odds_session_id)$/;
@@ -76,6 +84,17 @@ _CAPTURE_SCRIPT = """
       const obs = window.__seren_capture__.observed;
       if (obs.length >= 20) { obs.shift(); }
       obs.push({ url: String(url || '').slice(0, 200), ok: !!ok, shape: shape || '' });
+    } catch (e) { /* swallow */ }
+  }
+
+  function recordUnmatched(url) {
+    // Issue #701: keep a small sample of URLs the page issued but the
+    // URL_RE filter rejected. 10 is enough to spot a pattern (e.g.
+    // /api/seed-calc, /api/inference) without bloating the envelope.
+    try {
+      const um = window.__seren_capture__.unmatched_sample;
+      if (um.length >= 10) { um.shift(); }
+      um.push(String(url || '').slice(0, 200));
     } catch (e) { /* swallow */ }
   }
 
@@ -137,6 +156,9 @@ _CAPTURE_SCRIPT = """
   const origFetch = window.fetch ? window.fetch.bind(window) : null;
   if (origFetch) {
     window.fetch = async (...args) => {
+      // Issue #701: increment total counter BEFORE the await so even a
+      // crashed origFetch leaves a visible signal that the wrapper ran.
+      try { window.__seren_capture__.total_fetch_calls += 1; } catch (e) {}
       const resp = await origFetch(...args);
       try {
         let url = '';
@@ -160,6 +182,8 @@ _CAPTURE_SCRIPT = """
               extractAndStash(url, parsed);
             } catch (e) { record(url, false, 'unparseable'); }
           }).catch(() => {});
+        } else {
+          recordUnmatched(url);
         }
       } catch (e) { window.__seren_capture__.error = String(e); }
       return resp;
@@ -267,6 +291,49 @@ def read_capture_observations(session: Any) -> list[dict[str, Any]]:
     )
     if isinstance(result, list):
         return [r for r in result if isinstance(r, dict)]
+    return []
+
+
+def read_capture_total_fetch_calls(session: Any) -> int:
+    """Return how many times the fetch wrapper saw a call.
+
+    Issue #701: lets the operator distinguish three states that all
+    produced an empty `observed` buffer under the pre-#701 wrapper:
+      - 0 → wrapper installed but page never fired a fetch
+      - N>0 with `observed==[]` → wrapper installed, but no URL matched
+        the `(graphql|odds)` filter; check `unmatched_sample` for hints
+      - N>0 with `observed` populated → matched and walker ran (handled
+        by existing `read_capture_observations`)
+
+    Returns 0 if the wrapper isn't installed.
+    """
+    result = _evaluate(
+        session,
+        "(() => (window.__seren_capture__ && window.__seren_capture__.total_fetch_calls) || 0)()",
+    )
+    if isinstance(result, bool):
+        return 0
+    if isinstance(result, int):
+        return result
+    if isinstance(result, float):
+        return int(result)
+    return 0
+
+
+def read_capture_unmatched_sample(session: Any) -> list[str]:
+    """Return up to 10 URLs the fetch wrapper saw that didn't match URL_RE.
+
+    Issue #701: when `observed` is empty but `total_fetch_calls` > 0, the
+    sample shows what endpoints the page DID hit so the operator can
+    decide whether the URL filter needs widening or the OCS endpoint
+    moved entirely.
+    """
+    result = _evaluate(
+        session,
+        "(() => (window.__seren_capture__ && window.__seren_capture__.unmatched_sample) || [])()",
+    )
+    if isinstance(result, list):
+        return [s for s in result if isinstance(s, str)]
     return []
 
 
