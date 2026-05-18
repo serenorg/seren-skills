@@ -429,7 +429,18 @@ def _acquire_jwt(
 
     facade = AuthFacade(cache=cache)
     try:
-        with PlaywrightStealthGateway() as pw_gateway, RealBrowserSession(
+        # Issue #683: Privy provisions the embedded wallet *during* the OTP
+        # login redirect (Privy is Prophet's auth provider, not a post-auth
+        # step), so the OTP cold-start gateway needs the same env profile
+        # the /create gateways got in #682. Until
+        # serenorg/seren-desktop#1958 flips the bundled MCP's defaults to
+        # Privy-compatible, this wiring is the only thing that lets a
+        # fresh-cache cycle complete OTP without blocking on
+        # `OtpEmailTimeout: privy:connections did not appear`. Once #1958
+        # ships, this becomes a no-op (same as default).
+        with PlaywrightStealthGateway(
+            env_overrides=PRIVY_COMPATIBLE_ENV,
+        ) as pw_gateway, RealBrowserSession(
             gateway=pw_gateway
         ) as session:
             fresh = facade.get_fresh_jwt(
