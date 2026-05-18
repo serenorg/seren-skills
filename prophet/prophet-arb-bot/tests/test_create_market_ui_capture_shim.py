@@ -288,3 +288,83 @@ def test_back_compat_alias_still_exported() -> None:
     don't break on upgrade.
     """
     assert _FETCH_CAPTURE_SCRIPT is _CAPTURE_SCRIPT
+
+
+def test_capture_script_extracts_session_id_from_polling_url() -> None:
+    """Issue #716 bug 1: the prior body-parse path raced Apollo's stream
+    consumer — every `clone().text()` returned an empty body and the
+    walker found no sessionId. Live diag confirmed it: `matched_text_failed=51`
+    across cycles, zero observations recorded.
+
+    The fix is to bypass the body parse entirely for the polling URL.
+    Prophet's Apollo client fires `OddsCalculationSession($id: ID!)` as
+    a GET with `variables={"id":"<sessionId>"}` in the query string at
+    1Hz right after `StartOddsCalculation`. The sessionId is in the URL
+    itself — no clone, no text(), no JSON.parse of the response body.
+
+    Pin the new URL-side extraction so a future refactor can't quietly
+    revert to the racy body-parse path.
+    """
+    script = _CAPTURE_SCRIPT
+    # The polling-URL matcher must be present.
+    assert "OddsCalculationSession" in script, (
+        "polling-URL matcher missing — without it the wrapper has no "
+        "race-free path to the sessionId and ocs_session_id_not_captured "
+        "fires even when the mutation succeeded"
+    )
+    # The extractor MUST pull `variables=` from the query string and
+    # JSON.parse it. Body parsing is async + races Apollo; URL parsing
+    # is synchronous.
+    assert "variables=" in script, "variables query-param extraction missing"
+    assert "decodeURIComponent" in script, (
+        "URL extraction needs decodeURIComponent — variables= value is "
+        "url-encoded JSON"
+    )
+
+
+def test_open_create_form_dismisses_got_it_dialog() -> None:
+    """Issue #716 bug 2: Prophet's `/create` page shows a preview-mode
+    "GOT IT!" beta dialog on every fresh browser context. My manual MCP
+    walkthrough dismissed it before clicking Validate. The bot's flow
+    didn't — Validate clicks landed on the modal backdrop, the form
+    never advanced, and StartOddsCalculation never fired.
+
+    Pin the dismissal contract: `open_create_form` must call a
+    `dismiss_preview_dialog` helper before clicking Validate Question.
+    """
+    session = _RecordingSession()
+    open_create_form(session, question="Will X happen?")
+
+    kinds = [k for (k, _) in session.events]
+
+    # There must be at least one evaluate that targets the Got it dialog,
+    # OR a click on a "Got it!"-text selector. We let the implementation
+    # pick the safer path (evaluate is preferred — no failure if absent).
+    got_it_dismissal_present = any(
+        ("evaluate" == k and ("got it" in v.lower() or "got_it" in v.lower()))
+        or ("click" == k and "got it" in str(v).lower())
+        for (k, v) in session.events
+    )
+    assert got_it_dismissal_present, (
+        f"open_create_form must dismiss the Got-it! preview dialog "
+        f"before clicking Validate Question; events were: {kinds}"
+    )
+
+    # And the dismissal must come BEFORE the Validate Question click.
+    validate_idx = next(
+        (i for i, (k, v) in enumerate(session.events)
+         if k == "click" and "validate" in str(v).lower()),
+        -1,
+    )
+    dismiss_idx = next(
+        (i for i, (k, v) in enumerate(session.events)
+         if (k == "evaluate" and "got it" in str(v).lower())
+         or (k == "click" and "got it" in str(v).lower())),
+        -1,
+    )
+    assert dismiss_idx >= 0 and validate_idx >= 0, kinds
+    assert dismiss_idx < validate_idx, (
+        f"Got-it dismissal must come BEFORE Validate Question click; "
+        f"dismiss at {dismiss_idx}, validate at {validate_idx}, "
+        f"events: {kinds}"
+    )
