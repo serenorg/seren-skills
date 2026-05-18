@@ -43,12 +43,20 @@ PRIVY_TOKEN_LOCAL_STORAGE_KEY = "privy:token"
 # `window.localStorage["privy:refresh_token"]`. Keep the legacy cookie name
 # as a fallback so operators on older Privy installs don't regress.
 PRIVY_REFRESH_LOCAL_STORAGE_KEY = "privy:refresh_token"
-# Issue #674: the Privy SDK requires `privy:pat` (Privy access token) and
-# `privy:id_token` (identity token) in localStorage alongside `privy:token`
-# at boot. Without them, `Dy._getToken` calls `Dh.destroyLocalState` and
-# wipes everything to force re-login. Capture and plant all three keys.
-PRIVY_PAT_LOCAL_STORAGE_KEY = "privy:pat"
-PRIVY_ID_TOKEN_LOCAL_STORAGE_KEY = "privy:id_token"
+# Issue #676: roll back the privy:pat / privy:id_token contract that PR #675
+# (#674) introduced. A manual MCP walk-through against app.prophetmarket.ai
+# (2026-05-18) enumerated the live SDK's localStorage and found neither key
+# present — they are not part of Privy's session contract on Prophet.
+# The keys the SDK actually writes (and that warm-context restore needs to
+# replay) are `privy:connections` (embedded wallet metadata used by the
+# `/create` signing flow), `privy:caid` (anonymous client UUID), and the
+# namespaced `privy:<app_id>:recent-login-method` entry.
+PROPHET_PRIVY_APP_ID = "cmm1b0n2n00tq0clhm0ooeq1b"
+PRIVY_CONNECTIONS_LOCAL_STORAGE_KEY = "privy:connections"
+PRIVY_CAID_LOCAL_STORAGE_KEY = "privy:caid"
+PRIVY_RECENT_LOGIN_METHOD_LOCAL_STORAGE_KEY = (
+    f"privy:{PROPHET_PRIVY_APP_ID}:recent-login-method"
+)
 PRIVY_REFRESH_COOKIE = "privy-refresh-token"
 PRIVY_TOKEN_COOKIE = "privy-token"
 PRIVY_SESSION_COOKIE = "privy-session"
@@ -60,8 +68,12 @@ class PrivyAuthArtifacts:
     refresh_token: str
     privy_token_cookie: str
     privy_session_cookie: str
-    privy_pat: str = ""
-    privy_id_token: str = ""
+    # Issue #676: the embedded wallet that signs `createMarketWithBet` on
+    # `/create` lives inside `privy:connections`. Without it on restore,
+    # the SDK has no signer. Persist alongside the JWT.
+    privy_connections: str = ""
+    privy_caid: str = ""
+    privy_recent_login_method: str = ""
 
 
 class BrowserSession(Protocol):
@@ -224,25 +236,30 @@ def capture_artifacts(session: BrowserSession, *, jwt: str) -> PrivyAuthArtifact
         )
         if _is_privy_deprecation_marker(refresh_token):
             refresh_token = ""
-    # Issue #674: read `privy:pat` and `privy:id_token` from localStorage.
-    # The Privy SDK persists both as JSON-stringified strings (literal
-    # surrounding quotes), so `_unwrap_jwt` strips them the same way it
-    # strips the wrapping from `privy:token` and `privy:refresh_token`.
-    # Empty strings (legacy SDKs that don't populate one of these keys)
-    # round-trip cleanly through the cache and the restore script.
-    privy_pat = _unwrap_jwt(
-        session.get_local_storage(PRIVY_PAT_LOCAL_STORAGE_KEY)
+    # Issue #676: read the three SDK-written keys (privy:connections,
+    # privy:caid, privy:<app_id>:recent-login-method). privy:connections
+    # is a JSON-stringified ARRAY (no outer surrounding quotes), so do
+    # NOT route it through `_unwrap_jwt`, which would corrupt it by
+    # stripping the leading `[` and trailing `]` if they happened to be
+    # quote characters. The other two are JSON-quoted strings and unwrap
+    # the same way the JWT does.
+    privy_connections = (
+        session.get_local_storage(PRIVY_CONNECTIONS_LOCAL_STORAGE_KEY) or ""
+    )
+    privy_caid = _unwrap_jwt(
+        session.get_local_storage(PRIVY_CAID_LOCAL_STORAGE_KEY)
     ) or ""
-    privy_id_token = _unwrap_jwt(
-        session.get_local_storage(PRIVY_ID_TOKEN_LOCAL_STORAGE_KEY)
+    privy_recent_login_method = _unwrap_jwt(
+        session.get_local_storage(PRIVY_RECENT_LOGIN_METHOD_LOCAL_STORAGE_KEY)
     ) or ""
     return PrivyAuthArtifacts(
         jwt=jwt,
         refresh_token=refresh_token,
         privy_token_cookie=session.get_cookie(PRIVY_TOKEN_COOKIE) or "",
         privy_session_cookie=session.get_cookie(PRIVY_SESSION_COOKIE) or "",
-        privy_pat=privy_pat,
-        privy_id_token=privy_id_token,
+        privy_connections=privy_connections,
+        privy_caid=privy_caid,
+        privy_recent_login_method=privy_recent_login_method,
     )
 
 

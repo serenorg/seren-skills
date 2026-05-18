@@ -213,10 +213,13 @@ def acquire_token(
         state="fresh",
         consecutive_refresh_failures=0,
         prophet_viewer_id=viewer_id,
-        # Issue #674: persist the SDK's full localStorage state so the
-        # next cycle's restore plants all three keys the SDK requires.
-        privy_pat=artifacts.privy_pat,
-        privy_id_token=artifacts.privy_id_token,
+        # Issue #676: persist the keys the SDK actually writes
+        # (privy:connections + privy:caid + privy:<app_id>:recent-login-method)
+        # so the next cycle's restore plants what the `/create` signing
+        # flow needs. Rollback of PR #675's privy:pat / privy:id_token.
+        privy_connections=artifacts.privy_connections,
+        privy_caid=artifacts.privy_caid,
+        privy_recent_login_method=artifacts.privy_recent_login_method,
     )
     cache.write(entry)
 
