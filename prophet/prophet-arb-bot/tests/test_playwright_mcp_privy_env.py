@@ -41,12 +41,17 @@ from otp_worker import playwright_mcp_gateway as pmg
 # Subset matching the issue's "Recommended profile for prophet-arb-bot /create".
 # Pulled by name rather than hard-coded in the assertion so the source-of-truth
 # constant in playwright_mcp_gateway.py is the thing under test.
+# Issue #685 added BROWSER_TYPE=chrome so the bundled MCP launches Google
+# Chrome instead of bundled Chromium (Privy's embedded wallet needs
+# Chrome-specific surfaces). See tests/test_privy_env_browser_type_chrome_issue685.py
+# for the dedicated rationale test.
 EXPECTED_PRIVY_PROFILE_KEYS = {
     "SEREN_PLAYWRIGHT_HEADLESS": "0",
     "SEREN_PLAYWRIGHT_STEALTH_EVASIONS_DISABLE": (
         "iframe.contentWindow,navigator.permissions"
     ),
     "SEREN_PLAYWRIGHT_DISABLE_PAGE_INIT_PATCH": "1",
+    "BROWSER_TYPE": "chrome",
 }
 
 
