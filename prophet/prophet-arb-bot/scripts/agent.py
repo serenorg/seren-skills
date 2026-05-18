@@ -1224,6 +1224,11 @@ def cmd_run(
                 # operators can tell which signal failed without re-running.
                 if exc.details.get("observable_check") is not None:
                     _finish_payload["observable_check"] = exc.details["observable_check"]
+                # Issue #662: surface the underlying restore exception
+                # when the warm-context restore path raised before
+                # observability ran.
+                if exc.details.get("restore_exception") is not None:
+                    _finish_payload["restore_exception"] = exc.details["restore_exception"]
                 return _finish(CycleResult(
                     status="blocked",
                     reason="prophet_session_unavailable",
@@ -2255,6 +2260,10 @@ def cmd_create_market_via_ui(
                 # per-entry create-market-via-ui path.
                 if exc.details.get("observable_check") is not None:
                     payload["observable_check"] = exc.details["observable_check"]
+                # Issue #662: surface the underlying restore exception
+                # so operators can identify which MCP call failed.
+                if exc.details.get("restore_exception") is not None:
+                    payload["restore_exception"] = exc.details["restore_exception"]
                 return CycleResult(
                     status="blocked",
                     reason="prophet_session_unavailable",

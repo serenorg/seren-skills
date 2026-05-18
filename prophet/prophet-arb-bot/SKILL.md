@@ -560,7 +560,15 @@ Per-entry blocking reasons surfaced in `ui_submission_results.reason`:
   false-negatives a fresh cached session. When this block does fire,
   the envelope now carries `payload.observable_check` with the
   post-restore state (planted state presence, URL, budget used) so
-  the operator can tell which signal failed. If the cached refresh
+  the operator can tell which signal failed. Since #662 the
+  warm-context restore path also fails closed when the session
+  restore call itself raises (MCP `add_init_script` rejected,
+  `navigate` timed out, gateway stdio dropped, etc.) — the envelope
+  carries `payload.restore_exception` with the raw exception type
+  and message, and `payload.auth_source` reads
+  `prophet_session_unavailable:restore_failed` so operators can
+  distinguish a restore-time failure from an OTP-side failure
+  without burning an email round-trip. If the cached refresh
   token has been revoked server-side, re-login at
   `app.prophetmarket.ai` once to regenerate.
 - `seren_desktop_playwright_mcp_unavailable` — no `playwright-stealth`

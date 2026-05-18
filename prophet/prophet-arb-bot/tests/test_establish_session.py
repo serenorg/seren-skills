@@ -208,6 +208,69 @@ def test_establish_skips_restore_when_cache_is_stale() -> None:
     assert getattr(result, "jwt", "") == "new_j"
 
 
+def test_establish_fails_closed_with_restore_exception_when_restore_raises() -> None:
+    """Issue #662: when `restore_privy_session` itself raises (MCP
+    `add_init_script` rejected, `navigate` timed out, gateway stdio
+    drop, etc.), the previous code silently swallowed the exception
+    and fell through to OTP cold-start — burning an email round-trip
+    and masquerading the real failure as `EmailPublisherUnavailable`.
+
+    The fix: when restore raises AND the cache was otherwise fresh,
+    raise `SessionEstablishmentFailed("prophet_session_unavailable:restore_failed")`
+    directly and attach the raw exception type+message under
+    `details['restore_exception']` so the operator can identify which
+    underlying call failed.
+    """
+    cache = _StubCache(
+        [_Entry(jwt="cached_j", refresh_token="cached_r", state="fresh", fresh=True)]
+    )
+    session = _Session(observable=False)  # never reached
+    acquirer_calls: list[dict[str, Any]] = []
+
+    class _BoomMcpError(RuntimeError):
+        pass
+
+    def restore(s: Any, *, jwt: str, refresh_token: str) -> None:
+        raise _BoomMcpError("playwright_add_init_script rejected: tool not found")
+
+    def acquirer(**kw: Any) -> None:
+        acquirer_calls.append(kw)
+
+    try:
+        establish_browser_session_for_create(
+            session=session,
+            email="e@example.com",
+            provider="gmail",
+            seren_user_id="",
+            bounty_id="",
+            config_gateway=object(),
+            transport=object(),
+            pw_gateway=None,
+            cache=cache,
+            acquirer=acquirer,
+            refresher=lambda **_: None,
+            restore=restore,
+        )
+    except SessionEstablishmentFailed as exc:
+        assert exc.reason == "prophet_session_unavailable:restore_failed", (
+            f"want restore_failed reason, got {exc.reason!r}"
+        )
+        rx = exc.details.get("restore_exception")
+        assert rx is not None, "restore_exception details must be attached"
+        assert rx["type"] == "_BoomMcpError"
+        assert "playwright_add_init_script rejected" in rx["message"]
+        # Critical: OTP must NOT have been invoked — that's the masquerade
+        # this fix is closing. The operator should not burn an OTP email
+        # for a problem the underlying MCP raised before observability
+        # even ran.
+        assert acquirer_calls == [], (
+            "OTP fallback must not fire when restore raises — got "
+            f"{len(acquirer_calls)} acquirer calls"
+        )
+    else:
+        raise AssertionError("expected SessionEstablishmentFailed")
+
+
 def test_establish_attaches_observable_check_when_fresh_cache_falls_through() -> None:
     """Issue #660 acceptance #2: when a fresh cache restores but the
     Privy signal stays absent AND the OTP fallback also fails, the

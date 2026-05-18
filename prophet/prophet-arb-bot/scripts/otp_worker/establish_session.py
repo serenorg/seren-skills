@@ -102,8 +102,23 @@ def establish_browser_session_for_create(
     if entry.is_fresh() and entry.jwt and entry.refresh_token:
         try:
             restore(session, jwt=entry.jwt, refresh_token=entry.refresh_token)
-        except Exception:
-            entry = cache.read()  # keep the cached state; fall through
+        except Exception as restore_exc:
+            # Issue #662: the previous `except Exception: pass` silently
+            # swallowed the failure and fell through to OTP cold-start,
+            # which then masqueraded the real issue as
+            # EmailPublisherUnavailable on operators with no email
+            # publisher connected. Fail closed with a dedicated reason
+            # and surface the underlying exception so the operator can
+            # identify which MCP call failed.
+            raise SessionEstablishmentFailed(
+                "prophet_session_unavailable:restore_failed",
+                details={
+                    "restore_exception": {
+                        "type": type(restore_exc).__name__,
+                        "message": str(restore_exc)[:200],
+                    }
+                },
+            ) from restore_exc
         else:
             if _privy_session_observable(session):
                 return entry
