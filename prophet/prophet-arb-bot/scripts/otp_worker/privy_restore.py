@@ -37,13 +37,20 @@ def restore_privy_session(session: Any, *, jwt: str, refresh_token: str) -> None
     """Plant Privy session state into the caller's browser, then navigate.
 
     Registers a `document_start` init script that writes the JSON-quoted
-    JWT + refresh token into `localStorage` on the Prophet origin, then
-    navigates once. The init script persists for the lifetime of the
-    browser context, so subsequent navigations (e.g. to `/create`) also
-    see the planted state — no re-navigate hack needed.
+    JWT (and optionally the refresh token) into `localStorage` on the
+    Prophet origin, then navigates once. The init script persists for
+    the lifetime of the browser context, so subsequent navigations
+    (e.g. to `/create`) also see the planted state — no re-navigate
+    hack needed.
+
+    Issue #666: Privy retired the localStorage refresh-token mechanism
+    server-side and the JWT alone is now the session. When the caller
+    hands us an empty ``refresh_token``, plant only ``privy:token`` and
+    skip the refresh-token write entirely — planting a stale or
+    sentinel value there causes the SDK to reject the session.
     """
-    if not jwt or not refresh_token:
-        raise ValueError("restore_privy_session requires both jwt and refresh_token")
+    if not jwt:
+        raise ValueError("restore_privy_session requires jwt")
 
     script = _build_init_script(jwt=jwt, refresh_token=refresh_token)
     session.add_init_script(script)
@@ -66,7 +73,19 @@ def _build_init_script(*, jwt: str, refresh_token: str) -> str:
     leak Privy tokens to those origins.
     """
     token_value = json.dumps(jwt)  # e.g. '"eyJ.j.w.t"'
-    refresh_value = json.dumps(refresh_token)
+    refresh_setter = ""
+    # Issue #666: only plant privy:refresh_token when we actually have
+    # one. Planting an empty string (or the "deprecated" sentinel) makes
+    # the SDK reject the planted session and clear privy:token.
+    if refresh_token:
+        refresh_value = json.dumps(refresh_token)
+        refresh_setter = (
+            "      window.localStorage.setItem("
+            + json.dumps(PRIVY_REFRESH_LOCAL_STORAGE_KEY)
+            + ", "
+            + json.dumps(refresh_value)
+            + ");"
+        )
     return (
         "(function () {"
         "  try {"
@@ -78,12 +97,8 @@ def _build_init_script(*, jwt: str, refresh_token: str) -> str:
         + ", "
         + json.dumps(token_value)
         + ");"
-        "      window.localStorage.setItem("
-        + json.dumps(PRIVY_REFRESH_LOCAL_STORAGE_KEY)
-        + ", "
-        + json.dumps(refresh_value)
-        + ");"
-        "    }"
+        + refresh_setter
+        + "    }"
         "  } catch (e) {}"
         "})();"
     )

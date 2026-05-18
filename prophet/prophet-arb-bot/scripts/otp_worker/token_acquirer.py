@@ -161,14 +161,13 @@ def acquire_token(
         )
 
     # Step 7: capture refresh material (#583: localStorage primary, cookie fallback).
+    # Issue #666: Privy retired the localStorage refresh-token mechanism
+    # server-side; the JWT alone is the session and ``capture_artifacts``
+    # now normalizes the ``"deprecated"`` marker to empty. We no longer
+    # fail closed on a missing refresh_token — the steady-state refresher
+    # is a no-op for JWT-only sessions and OTP cold-start kicks in when
+    # the JWT expires.
     artifacts = capture_artifacts(browser_session, jwt=jwt)
-    if not artifacts.refresh_token:
-        # Refresh token missing → steady-state refresher will not work.
-        # Fail closed rather than ship a session that needs an OTP every cycle.
-        raise PrivyAuthFailed(
-            "Privy refresh token not found "
-            "(checked localStorage privy:refresh_token + cookie privy-refresh-token)"
-        )
 
     # Step 8: bind participant identity (P0 — plan §11.1 step 10, §3 ADR).
     # Issue #493: direct-to-Prophet via ProphetDirectTransport.

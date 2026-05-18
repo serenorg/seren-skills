@@ -164,20 +164,58 @@ def fill_onboarding_form(session: BrowserSession, *, username: str) -> None:
     session.click(SEL_ONBOARDING_CONTINUE)
 
 
+_PRIVY_DEPRECATION_SENTINEL = "deprecated"
+
+
+def _is_privy_deprecation_marker(value: str | None) -> bool:
+    """True iff ``value`` is Privy's refresh-token retirement sentinel.
+
+    Issue #666: Privy now writes the literal ``"deprecated"`` into
+    ``privy:refresh_token`` post-login to signal the cookie/localStorage
+    refresh-token mechanism is retired. The bare form arrives after
+    ``_unwrap_jwt`` strips the JSON quotes; the wrapped form may also
+    turn up directly when the unwrap helper is bypassed.
+    """
+    if not value:
+        return False
+    return (
+        value == _PRIVY_DEPRECATION_SENTINEL
+        or value == f'"{_PRIVY_DEPRECATION_SENTINEL}"'
+    )
+
+
 def capture_artifacts(session: BrowserSession, *, jwt: str) -> PrivyAuthArtifacts:
     """Snapshot the JWT plus the refresh material needed for steady-state refresh.
 
-    Issue #583: Privy now writes the refresh token to localStorage
-    (`privy:refresh_token`) rather than an HttpOnly cookie. Read the
-    localStorage value first — JSON-unwrapped via `_unwrap_jwt`, same as
-    `privy:token` — and fall back to the legacy cookie so operators on older
-    Privy installs are not regressed.
+    Issue #583: Privy moved refresh from a cookie to localStorage
+    (``privy:refresh_token``). Read the localStorage value first —
+    JSON-unwrapped via ``_unwrap_jwt`` — and fall back to the legacy
+    cookie so operators on older Privy installs are not regressed.
+
+    Issue #666: Privy then retired refresh tokens entirely. The
+    server-side state is now a single long-lived JWT, and Privy writes
+    the literal sentinel ``"deprecated"`` into the localStorage key as
+    a migration marker. Capturing that marker verbatim caused the SDK
+    to reject the planted session on restore. Normalize the marker to
+    an empty string so downstream consumers see a clean "JWT-only
+    session" signal. The legacy cookie fallback is intentionally NOT
+    consulted when localStorage carries the marker — the cookie value
+    is from a prior Privy era and re-introducing it would just
+    resurrect the poison pill under a different name.
     """
-    refresh_token = (
-        _unwrap_jwt(session.get_local_storage(PRIVY_REFRESH_LOCAL_STORAGE_KEY))
-        or session.get_cookie(PRIVY_REFRESH_COOKIE)
-        or ""
+    unwrapped_local = _unwrap_jwt(
+        session.get_local_storage(PRIVY_REFRESH_LOCAL_STORAGE_KEY)
     )
+    if _is_privy_deprecation_marker(unwrapped_local):
+        refresh_token = ""
+    else:
+        refresh_token = (
+            unwrapped_local
+            or session.get_cookie(PRIVY_REFRESH_COOKIE)
+            or ""
+        )
+        if _is_privy_deprecation_marker(refresh_token):
+            refresh_token = ""
     return PrivyAuthArtifacts(
         jwt=jwt,
         refresh_token=refresh_token,

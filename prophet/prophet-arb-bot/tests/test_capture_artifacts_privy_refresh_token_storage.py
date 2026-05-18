@@ -75,6 +75,51 @@ def test_capture_artifacts_reads_refresh_token_from_localstorage_and_unwraps_jso
     assert PRIVY_REFRESH_COOKIE not in session.cookie_reads
 
 
+def test_capture_artifacts_treats_privy_deprecated_marker_as_empty_refresh_token() -> None:
+    """Issue #666: Privy now writes the literal string ``"deprecated"`` into
+    ``privy:refresh_token`` as a migration sentinel — they retired the
+    cookie/localStorage refresh mechanism server-side and a single
+    long-lived JWT is now the session. Our old code captured that marker
+    verbatim and replanted it on restore; the SDK then rejected the
+    session because the planted refresh_token was not a real Privy token.
+
+    The fix: normalize the marker to empty at capture time so we never
+    write a poison-pill cache. Downstream code already tolerates an
+    empty refresh_token (see ``restore_privy_session`` and the
+    cache-fresh guard in ``establish_browser_session_for_create``).
+
+    The unwrap order is preserved: the marker stays JSON-stringified in
+    localStorage as ``'"deprecated"'``, so the wrapped form must also
+    be recognized — not just the bare string.
+    """
+    session = _StubSession(
+        # Both the bare form and the JSON-wrapped form Privy actually
+        # writes must be recognized as the deprecation sentinel.
+        local_storage={PRIVY_REFRESH_LOCAL_STORAGE_KEY: '"deprecated"'},
+        cookies={PRIVY_REFRESH_COOKIE: "stale_legacy_cookie_value"},
+    )
+
+    artifacts = capture_artifacts(session, jwt="eyJ.j.w.t")
+
+    # The marker MUST be normalized to empty — not the literal
+    # "deprecated" string, not the JSON-quoted form. An empty
+    # refresh_token signals "JWT-only session" to every downstream
+    # consumer (cache, restore, establish), which is what Privy's
+    # actual server-side state is now.
+    assert artifacts.refresh_token == "", (
+        f'capture must normalize "deprecated" marker to empty refresh_token; '
+        f"got {artifacts.refresh_token!r}"
+    )
+    # The cookie fallback must NOT fire just because the marker was
+    # rejected — the cookie value is from a prior Privy era and is
+    # equally stale. Capturing it would just resurrect the poison pill
+    # under a different name.
+    assert PRIVY_REFRESH_COOKIE not in session.cookie_reads, (
+        "cookie fallback must not fire on deprecation marker — "
+        f"reads={session.cookie_reads}"
+    )
+
+
 def test_capture_artifacts_falls_back_to_cookie_when_localstorage_is_empty() -> None:
     session = _StubSession(
         local_storage={},
