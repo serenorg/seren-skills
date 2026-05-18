@@ -226,6 +226,7 @@ HEDGE_ERROR_CLASSES: tuple[str, ...] = (
     "allowance_revoked",
     "transient_clob_error",
     "book_moved",
+    "region_blocked",
     "unknown",
 )
 
@@ -273,6 +274,18 @@ _BOOK_MOVED_TOKENS = (
     "would_cross_book",
     "price_outside_book",
 )
+# #730: Polymarket geoblock 403 phrasing. Pinned verbatim against the
+# live CLOB message captured today; the docs URL substring is the most
+# stable signal (the human-readable prefix can shift). Tokens are
+# matched case-insensitively against the lower-cased exception body.
+_REGION_BLOCKED_TOKENS = (
+    "trading restricted",
+    "restricted in your region",
+    "geoblock",
+    "geo-block",
+    "available regions",
+    "clob/geoblock",  # the docs URL fragment — most schema-stable
+)
 _TRANSIENT_EXCEPTION_TYPES: tuple[type, ...] = (
     TimeoutError,
     ConnectionError,
@@ -314,6 +327,13 @@ def classify_hedge_failure(exc: BaseException) -> HedgeErrorClass:
             body = ""
     body_lc = body.lower()
 
+    # #730: region-blocked is checked before the generic 4xx/5xx routing
+    # below so a 403 carrying the geoblock phrasing routes to the
+    # operator-actionable `region_blocked` class instead of being swept
+    # into `unknown` (or, if the message also happens to contain a 5xx
+    # token, into transient retry).
+    if any(token in body_lc for token in _REGION_BLOCKED_TOKENS):
+        return "region_blocked"
     if any(token in body_lc for token in _INSUFFICIENT_FUNDS_TOKENS):
         return "insufficient_funds"
     if any(token in body_lc for token in _MARKET_UNAVAILABLE_TOKENS):

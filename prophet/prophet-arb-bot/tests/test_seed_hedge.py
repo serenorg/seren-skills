@@ -281,6 +281,21 @@ def test_seed_hedge_unwinds_polymarket_when_prophet_confirm_declines() -> None:
         (_FakePolyApiException(503, "service unavailable"), "transient_clob_error"),
         (TimeoutError("connection timed out"), "transient_clob_error"),
         (ConnectionResetError("reset by peer"), "transient_clob_error"),
+        # #730: live Polymarket geoblock 403, pinned verbatim against
+        # the message captured from a real cycle so future drift breaks
+        # the test, not production.
+        (
+            _FakePolyApiException(
+                403,
+                "Trading restricted in your region, please refer to "
+                "available regions - "
+                "https://docs.polymarket.com/developers/CLOB/geoblock",
+            ),
+            "region_blocked",
+        ),
+        # A bare 403 without a geoblock token must stay 'unknown' — status
+        # code alone is ambiguous (could be auth-side, not region).
+        (_FakePolyApiException(403, "auth failed"), "unknown"),
         # Anything else falls into the unknown bucket so the operator
         # still gets the structured payload but the bot won't auto-retry.
         (ValueError("something weird"), "unknown"),
