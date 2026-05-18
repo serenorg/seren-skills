@@ -295,7 +295,17 @@ def test_run_reuses_one_warm_playwright_context_for_pending_ui_batch(
 def test_run_reopens_warm_playwright_context_after_corruption(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #654: a corrupted warm context blocks one entry, then recovers."""
+    """Warm-context reopen still happens; inner sub.reason is preserved.
+
+    Issue #654 introduced the reopen-on-unhealthy behavior. Issue #672 then
+    fixed the reason-clobber: the inner driver's `sub` is preserved verbatim
+    (so a successful `pair_created` does NOT get rewritten to
+    `warm_context_corrupted` just because the post-entry health check observed
+    that the warm context went unhealthy). The reopen side effect is unchanged
+    — the gateway still enters twice — but the entry's reported reason now
+    reflects what the inner driver actually returned, with the warm-health
+    signal surfaced separately as `warm_unhealthy_post_entry`.
+    """
 
     class FlakyWarmGateway(_FakeWarmGateway):
         def is_session_healthy(self) -> bool:
@@ -335,10 +345,15 @@ def test_run_reopens_warm_playwright_context_after_corruption(
 
     ui_results = result.payload.get("ui_submission_results")
     assert [r["polymarket_condition_id"] for r in ui_results] == ["cond_bad", "cond_ok"]
-    assert ui_results[0]["status"] == "blocked"
-    assert ui_results[0]["reason"] == "warm_context_corrupted"
+    # #672: real sub.reason survives; the warm-health signal is supplemental.
+    assert ui_results[0]["status"] == "ok"
+    assert ui_results[0]["reason"] == "pair_created"
+    assert ui_results[0]["warm_unhealthy_post_entry"] is True
+    # Healthy second entry: pair_created stays clean, no warm flag.
     assert ui_results[1]["status"] == "ok"
     assert ui_results[1]["reason"] == "pair_created"
+    assert "warm_unhealthy_post_entry" not in ui_results[1]
+    # #654 reopen behavior is unchanged — gateway and browser cycle twice.
     assert _FakeWarmGateway.enter_count == 2
     assert _FakeBrowserSession.enter_count == 2
     assert _FakeBrowserSession.exit_count == 2

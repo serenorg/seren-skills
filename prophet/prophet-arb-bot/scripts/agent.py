@@ -261,6 +261,34 @@ class CycleResult:
         return {"status": self.status, "reason": self.reason, **self.payload}
 
 
+def _annotate_entry_result_with_warm_health(
+    sub: CycleResult, *, warm_unhealthy: bool
+) -> CycleResult:
+    """Preserve the inner driver's `sub` reason; annotate warm health separately.
+
+    Issue #672: the per-entry create-market loop used to overwrite `sub`
+    with a fresh `CycleResult(reason="warm_context_corrupted")` whenever
+    the post-entry health check observed that the warm Playwright context
+    had lost observable Prophet auth. That clobbered every real upstream
+    reason — success (`pair_created`), seed-calc rejection (`no_edge`),
+    schema regressions (`ocs_session_id_not_captured`), hedge-leg failures
+    (`hedge_failed_no_commit`), exception captures
+    (`create_market_via_ui_unexpected` carrying `payload.error`) — and
+    made `/create` failures undiagnosable.
+
+    Now the inner sub is preserved verbatim. When the warm context is
+    unhealthy we set `payload.warm_unhealthy_post_entry=True` as a
+    supplemental signal, so operators can still see when the reopen was
+    triggered — but the entry's primary `reason` is whatever the inner
+    driver actually reported.
+    """
+    if not warm_unhealthy:
+        return sub
+    new_payload: dict[str, Any] = dict(sub.payload or {})
+    new_payload["warm_unhealthy_post_entry"] = True
+    return CycleResult(status=sub.status, reason=sub.reason, payload=new_payload)
+
+
 def _resolve_target(config: AgentConfig) -> ResolvedTarget:
     return get_target(
         project_name=config.project_name,
@@ -1179,29 +1207,40 @@ def cmd_run(
                                 reason="create_market_via_ui_unexpected",
                                 payload=payload,
                             )
-                        if not warm.is_session_healthy():
-                            sub = CycleResult(
-                                status="blocked",
-                                reason="warm_context_corrupted",
-                                payload=payload,
-                            )
-                            if idx < total_entries:
-                                warm.reopen()
-                                progress.emit("prophet_session_restored", idx=idx + 1)
-                        elif idx < total_entries:
-                            try:
-                                warm.reset_for_next_entry()
-                            except Exception:
-                                warm.reopen()
-                                progress.emit("prophet_session_restored", idx=idx + 1)
-                        ui_submission_results.append(
-                            {
-                                "polymarket_condition_id": entry.get("polymarket_market_id", ""),
-                                "status": sub.status,
-                                "reason": sub.reason,
-                                "prophet_market_id": sub.payload.get("prophet_market_id", ""),
-                            }
+                        # Issue #672: do not clobber sub.reason. Preserve the
+                        # inner driver's result verbatim; surface the warm
+                        # health signal as supplemental payload context.
+                        warm_unhealthy = not warm.is_session_healthy()
+                        sub = _annotate_entry_result_with_warm_health(
+                            sub, warm_unhealthy=warm_unhealthy
                         )
+                        if idx < total_entries:
+                            if warm_unhealthy:
+                                warm.reopen()
+                                progress.emit(
+                                    "prophet_session_restored", idx=idx + 1
+                                )
+                            else:
+                                try:
+                                    warm.reset_for_next_entry()
+                                except Exception:
+                                    warm.reopen()
+                                    progress.emit(
+                                        "prophet_session_restored", idx=idx + 1
+                                    )
+                        ui_entry: dict[str, Any] = {
+                            "polymarket_condition_id": entry.get("polymarket_market_id", ""),
+                            "status": sub.status,
+                            "reason": sub.reason,
+                            "prophet_market_id": sub.payload.get("prophet_market_id", ""),
+                        }
+                        # Issue #672: surface the warm-health signal in the
+                        # final envelope, not just in payload, so operators
+                        # can see at a glance when the reopen was triggered
+                        # without spelunking through nested payload fields.
+                        if sub.payload.get("warm_unhealthy_post_entry"):
+                            ui_entry["warm_unhealthy_post_entry"] = True
+                        ui_submission_results.append(ui_entry)
                         if sub.status == "ok":
                             progress.emit(
                                 "pair_created",
