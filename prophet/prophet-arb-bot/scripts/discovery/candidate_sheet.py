@@ -15,6 +15,17 @@ from pathlib import Path
 from typing import Iterable
 
 from polymarket.discovery import PolymarketSource
+from state_paths import resolve_state_dir
+
+
+def _default_output_dir() -> Path:
+    """Canonical state dir for the candidate sheet (issue #693).
+
+    Both the run-progress emitter and this helper must agree on the
+    state dir, or operators tail the wrong run_progress.jsonl and see
+    silence while the bot is actually making progress.
+    """
+    return resolve_state_dir()
 
 
 SHEET_HEADERS = [
@@ -81,8 +92,7 @@ def write_candidate_sheet(
         return None
 
     if output_dir is None:
-        skill_root = Path(__file__).resolve().parent.parent.parent
-        output_dir = skill_root / "state"
+        output_dir = _default_output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     rows = [

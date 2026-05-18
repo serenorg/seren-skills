@@ -946,6 +946,19 @@ def cmd_run(
     # cycle — tests inject a stub if they want to assert on stages.
     if progress is None:
         progress = ProgressEmitter()
+        # Issue #693: print the resolved absolute path to stderr (bypasses
+        # the `--json-output` stdout buffer) so operators tail the right
+        # file. Without this, the SKILL.md "arm a Monitor on
+        # state/run_progress.jsonl" instruction is path-ambiguous and
+        # operators watch an empty file while events stream elsewhere.
+        try:
+            print(
+                f"progress stream: {progress.current_path}",
+                file=sys.stderr,
+                flush=True,
+            )
+        except Exception:
+            pass  # telemetry must never crash the cycle
     try:
         target = _resolve_target(config)
     except Exception as exc:
