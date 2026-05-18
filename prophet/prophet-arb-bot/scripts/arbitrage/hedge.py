@@ -189,6 +189,13 @@ class HedgeOutcome:
       - ``unwound_after_prophet_decline``: seed hedge filled first, then
         Prophet Confirm failed/declined, and the Polymarket leg was
         marketably reversed.
+
+    #722: ``failure`` carries the structured diagnostic on terminal
+    failure (None on success). Keys: ``error_class``, ``clob_http_status``,
+    ``clob_error_message``, ``exception_type``, ``exception_message``,
+    ``submitted_order``, ``attempts``. ``attempts`` is also lifted to the
+    top level so success rows can render the retry count without digging
+    into ``failure``.
     """
 
     hedge_status: str
@@ -196,6 +203,175 @@ class HedgeOutcome:
     polymarket_filled_qty: float
     polymarket_fill_price: float
     error: str | None = None
+    failure: dict[str, Any] | None = None
+    attempts: int = 1
+
+
+# ---------------------------------------------------------------------------
+# #722 — Hedge failure classifier
+#
+# Single source of truth for retry routing and operator-facing failure
+# messages. Pure function: takes an exception, returns one of the enum
+# strings. CLOB substrings drive class assignment because that is the
+# only durable signal Polymarket exposes — they do not publish stable
+# numeric error codes for the CLOB rejections.
+
+
+HedgeErrorClass = str  # one of the literals below
+
+HEDGE_ERROR_CLASSES: tuple[str, ...] = (
+    "insufficient_funds",
+    "market_unavailable",
+    "invalid_params",
+    "allowance_revoked",
+    "transient_clob_error",
+    "book_moved",
+    "unknown",
+)
+
+
+_INSUFFICIENT_FUNDS_TOKENS = (
+    "insufficient_balance",
+    "insufficient balance",
+    "insufficient_funds",
+    "not enough collateral",
+    "balance too low",
+)
+_MARKET_UNAVAILABLE_TOKENS = (
+    "market_not_open",
+    "market not open",
+    "market_closed",
+    "market closed",
+    "market_resolved",
+    "market resolved",
+    "market_paused",
+    "market paused",
+    "market not active",
+    "not_active",
+)
+_INVALID_PARAMS_TOKENS = (
+    "tick_size",
+    "tick size",
+    "invalid_order",
+    "invalid order",
+    "invalid_price",
+    "invalid price",
+    "invalid_size",
+    "invalid size",
+    "signature_invalid",
+    "invalid_signature",
+)
+_ALLOWANCE_TOKENS = (
+    "allowance",
+    "approve_spender",
+    "not_approved",
+    "not approved",
+)
+_BOOK_MOVED_TOKENS = (
+    "not_enough_marketable_liquidity",
+    "marketable_liquidity",
+    "would_cross_book",
+    "price_outside_book",
+)
+_TRANSIENT_EXCEPTION_TYPES: tuple[type, ...] = (
+    TimeoutError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
+)
+
+
+def classify_hedge_failure(exc: BaseException) -> HedgeErrorClass:
+    """Map a hedge submission exception into one of ``HEDGE_ERROR_CLASSES``.
+
+    Recognizes ``py-clob-client.exceptions.PolyApiException`` via its
+    ``status_code`` + ``error_msg`` attributes (duck-typed; we don't
+    import py-clob-client here so tests can supply a fake without the
+    library installed). Network/timeout exceptions are transient. Anything
+    that doesn't match a known token bucket falls into ``unknown`` so the
+    operator still gets the structured payload but the bot won't auto-retry.
+    """
+    status_code = getattr(exc, "status_code", None)
+    error_msg = getattr(exc, "error_msg", None)
+
+    # Normalize the body to a lower-case search string. Use the python
+    # exception's repr as a fallback because some clients raise
+    # ``RequestException("503: Service Unavailable")`` without setting
+    # ``error_msg`` directly.
+    body = ""
+    if isinstance(error_msg, str):
+        body = error_msg
+    elif error_msg is not None:
+        try:
+            body = str(error_msg)
+        except Exception:
+            body = ""
+    if not body:
+        try:
+            body = str(exc)
+        except Exception:
+            body = ""
+    body_lc = body.lower()
+
+    if any(token in body_lc for token in _INSUFFICIENT_FUNDS_TOKENS):
+        return "insufficient_funds"
+    if any(token in body_lc for token in _MARKET_UNAVAILABLE_TOKENS):
+        return "market_unavailable"
+    if any(token in body_lc for token in _ALLOWANCE_TOKENS):
+        return "allowance_revoked"
+    if any(token in body_lc for token in _BOOK_MOVED_TOKENS):
+        return "book_moved"
+    if any(token in body_lc for token in _INVALID_PARAMS_TOKENS):
+        return "invalid_params"
+
+    # 5xx + connection-level errors are transient regardless of body.
+    if isinstance(status_code, int) and 500 <= status_code < 600:
+        return "transient_clob_error"
+    if isinstance(exc, _TRANSIENT_EXCEPTION_TYPES):
+        return "transient_clob_error"
+    if "timed out" in body_lc or "timeout" in body_lc:
+        return "transient_clob_error"
+    if "service unavailable" in body_lc or "temporarily unavailable" in body_lc:
+        return "transient_clob_error"
+
+    return "unknown"
+
+
+def _build_failure_payload(
+    *,
+    exc: BaseException,
+    submitted_order: dict[str, Any],
+    attempts: int,
+) -> dict[str, Any]:
+    """Assemble the structured failure diagnostic that lands in
+    ``HedgeOutcome.failure`` and gets surfaced to the run envelope,
+    progress stream, and ``arb_orders`` row."""
+    error_class = classify_hedge_failure(exc)
+    status_code = getattr(exc, "status_code", None)
+    error_msg = getattr(exc, "error_msg", None)
+    try:
+        exception_message = str(exc)
+    except Exception:
+        exception_message = ""
+    return {
+        "error_class": error_class,
+        "clob_http_status": status_code if isinstance(status_code, int) else None,
+        "clob_error_message": error_msg if isinstance(error_msg, str) else None,
+        "exception_type": type(exc).__name__,
+        "exception_message": exception_message[:500],
+        "submitted_order": dict(submitted_order),
+        "attempts": attempts,
+    }
+
+
+# Retry policy: only ``transient_clob_error`` triggers auto-retry inside
+# the same submit attempt. Bounded at 3 total attempts (initial + 2
+# retries). Backoff is small and synchronous because the agent has not
+# yet clicked Prophet Confirm — no naked exposure exists during the
+# wait, just delay before either succeeding or surfacing the diagnostic.
+HEDGE_TRANSIENT_RETRY_BUDGET = 3
+HEDGE_TRANSIENT_RETRY_BACKOFF_SECONDS: tuple[float, ...] = (1.0, 2.0)
 
 
 class Hedger(Protocol):
@@ -338,6 +514,7 @@ def hedge_seed_bet(
     size_usdc: float,
     marketable_price: float,
     hedger: Hedger,
+    _sleep: Any = None,
 ) -> HedgeOutcome:
     """Submit the opposing Polymarket order for a Prophet Phase 15 seed.
 
@@ -354,35 +531,92 @@ def hedge_seed_bet(
     #631: ``polymarket_yes_token_id`` is the uint256-decimal YES outcome
     token_id the CLOB requires for ``create_order``; condition_id is the
     pair-identity used by the recorder and persistence.
-    """
-    hedge_side = _opposite_side(prophet_seed_side)
 
-    try:
-        result = hedger.submit_hedge(
-            token_id=polymarket_yes_token_id,
-            hedge_side=hedge_side,
-            size_usdc=float(size_usdc),
-            marketable_price=float(marketable_price),
+    #722: failures return a structured ``HedgeOutcome.failure`` payload
+    (CLOB status code + response body + submitted params + attempts).
+    Transient CLOB errors auto-retry up to ``HEDGE_TRANSIENT_RETRY_BUDGET``
+    times because the Prophet leg is still uncommitted — no naked
+    exposure can exist during the retry wait. All other classes fail
+    closed on the first rejection so the operator sees the actual cause.
+    """
+    import time as _time
+
+    sleep_fn = _sleep if _sleep is not None else _time.sleep
+
+    hedge_side = _opposite_side(prophet_seed_side)
+    submitted_order = {
+        "token_id": polymarket_yes_token_id,
+        "hedge_side": hedge_side,
+        "size_usdc": float(size_usdc),
+        "marketable_price": float(marketable_price),
+    }
+
+    last_exc: BaseException | None = None
+    attempts = 0
+    result: Any = None
+    for attempt_index in range(HEDGE_TRANSIENT_RETRY_BUDGET):
+        attempts = attempt_index + 1
+        try:
+            result = hedger.submit_hedge(
+                token_id=polymarket_yes_token_id,
+                hedge_side=hedge_side,
+                size_usdc=float(size_usdc),
+                marketable_price=float(marketable_price),
+            )
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            error_class = classify_hedge_failure(exc)
+            if error_class != "transient_clob_error":
+                # Fail closed immediately on non-transient classes —
+                # auto-retry would burn cycles and the next cron tick
+                # will reattempt naturally if the cause clears.
+                break
+            if attempt_index + 1 >= HEDGE_TRANSIENT_RETRY_BUDGET:
+                # Budget exhausted; surface the last transient failure.
+                break
+            backoff_idx = min(
+                attempt_index, len(HEDGE_TRANSIENT_RETRY_BACKOFF_SECONDS) - 1
+            )
+            sleep_fn(HEDGE_TRANSIENT_RETRY_BACKOFF_SECONDS[backoff_idx])
+
+    if last_exc is not None:
+        failure = _build_failure_payload(
+            exc=last_exc,
+            submitted_order=submitted_order,
+            attempts=attempts,
         )
-    except Exception as exc:
         return HedgeOutcome(
             hedge_status="hedge_failed_no_commit",
             polymarket_order_id=None,
             polymarket_filled_qty=0.0,
             polymarket_fill_price=0.0,
-            error=str(exc)[:200],
+            error=str(last_exc)[:200],
+            failure=failure,
+            attempts=attempts,
         )
 
     polymarket_order_id = (
         result.get("polymarket_order_id") if isinstance(result, dict) else None
     )
     if not polymarket_order_id:
+        # CLOB returned without an id — synthesize a failure payload so
+        # the operator sees the same structured shape as a raised error.
+        synthetic = RuntimeError("polymarket_submit_returned_no_order_id")
+        failure = _build_failure_payload(
+            exc=synthetic,
+            submitted_order=submitted_order,
+            attempts=attempts,
+        )
         return HedgeOutcome(
             hedge_status="hedge_failed_no_commit",
             polymarket_order_id=None,
             polymarket_filled_qty=0.0,
             polymarket_fill_price=0.0,
             error="polymarket_submit_returned_no_order_id",
+            failure=failure,
+            attempts=attempts,
         )
 
     return HedgeOutcome(
@@ -391,6 +625,8 @@ def hedge_seed_bet(
         polymarket_filled_qty=float(result.get("filled_qty", 0.0)),
         polymarket_fill_price=float(result.get("fill_price", 0.0)),
         error=None,
+        failure=None,
+        attempts=attempts,
     )
 
 

@@ -32,6 +32,7 @@ import pytest
 
 from arbitrage.hedge import (
     HedgeOutcome,
+    classify_hedge_failure,
     hedge_seed_bet,
     unwind_seed_hedge_after_prophet_decline,
 )
@@ -43,11 +44,18 @@ class _StubHedger:
         *,
         submit_response: dict | None = None,
         submit_error: Exception | None = None,
+        # #722: a per-attempt response list so we can simulate the
+        # transient-failure-then-succeed retry path. Items are either
+        # Exceptions (raise) or dicts (return). Falls back to the
+        # legacy single-shot args when None.
+        submit_responses: list = None,  # type: ignore[assignment]
     ) -> None:
         self.submit_calls: list[dict[str, Any]] = []
         self.unwind_calls: list[dict[str, Any]] = []
         self._submit_response = submit_response
         self._submit_error = submit_error
+        self._submit_responses = submit_responses
+        self._call_index = 0
 
     def submit_hedge(
         self,
@@ -68,6 +76,12 @@ class _StubHedger:
                 "marketable_price": marketable_price,
             }
         )
+        if self._submit_responses is not None:
+            item = self._submit_responses[self._call_index]
+            self._call_index += 1
+            if isinstance(item, Exception):
+                raise item
+            return item
         if self._submit_error is not None:
             raise self._submit_error
         return self._submit_response or {}
@@ -76,6 +90,21 @@ class _StubHedger:
         # Should NEVER be called by hedge_seed_bet — Prophet has no
         # post-creation cancel for the seed. Tests assert this directly.
         self.unwind_calls.append({"order_id": order_id})
+
+
+# ---------------------------------------------------------------------------
+# #722 — fake py-clob-client PolyApiException shape
+
+
+class _FakePolyApiException(Exception):
+    """Mirror of py_clob_client.exceptions.PolyApiException — has
+    ``status_code`` + ``error_msg`` attributes the classifier reads.
+    """
+
+    def __init__(self, status_code: int, error_msg: str) -> None:
+        super().__init__(f"{status_code}: {error_msg}")
+        self.status_code = status_code
+        self.error_msg = error_msg
 
 
 def test_seed_hedge_success_records_hedged_outcome() -> None:
@@ -220,3 +249,140 @@ def test_seed_hedge_unwinds_polymarket_when_prophet_confirm_declines() -> None:
             "marketable_price": 0.61,
         }
     ]
+
+
+# ---------------------------------------------------------------------------
+# #722 — structured hedge-failure diagnostics + bounded transient retry
+
+
+@pytest.mark.parametrize(
+    "exc,expected_class",
+    [
+        # Polymarket CLOB substrings drive class assignment. The first
+        # column simulates the exact shape py-clob-client raises today:
+        # PolyApiException(status_code, error_msg).
+        (
+            _FakePolyApiException(400, "INSUFFICIENT_BALANCE: free 12.30 < 15.00"),
+            "insufficient_funds",
+        ),
+        (
+            _FakePolyApiException(400, "MARKET_NOT_OPEN: market resolved"),
+            "market_unavailable",
+        ),
+        (
+            _FakePolyApiException(400, "TICK_SIZE_VIOLATION: price not on tick"),
+            "invalid_params",
+        ),
+        (
+            _FakePolyApiException(400, "ALLOWANCE_INSUFFICIENT: approve spender"),
+            "allowance_revoked",
+        ),
+        # 5xx + plain network errors are transient.
+        (_FakePolyApiException(503, "service unavailable"), "transient_clob_error"),
+        (TimeoutError("connection timed out"), "transient_clob_error"),
+        (ConnectionResetError("reset by peer"), "transient_clob_error"),
+        # Anything else falls into the unknown bucket so the operator
+        # still gets the structured payload but the bot won't auto-retry.
+        (ValueError("something weird"), "unknown"),
+    ],
+)
+def test_classify_hedge_failure_maps_known_clob_errors(
+    exc: Exception, expected_class: str
+) -> None:
+    """The classifier is the single source of truth for retry routing
+    and operator-facing failure messages. Pinning each known mapping
+    here so future schema drift breaks the test, not production."""
+    assert classify_hedge_failure(exc) == expected_class
+
+
+def test_seed_hedge_retries_transient_then_succeeds() -> None:
+    """A 503 from the Polymarket CLOB is transient — the bot retries
+    inside the same submission attempt and reports `hedged` with
+    `attempts=2`. No naked exposure exists because Prophet Confirm is
+    still pending."""
+    transient = _FakePolyApiException(503, "service unavailable")
+    success = {
+        "polymarket_order_id": "POLY-recovered",
+        "filled_qty": 1.0,
+        "fill_price": 0.42,
+    }
+    hedger = _StubHedger(submit_responses=[transient, success])
+
+    outcome = hedge_seed_bet(
+        prophet_market_id="PMI-retry",
+        polymarket_condition_id="0xCOND",
+        polymarket_yes_token_id="9000-YES-TOKEN",
+        prophet_seed_side="buy",
+        size_usdc=1.0,
+        marketable_price=0.001,
+        hedger=hedger,
+    )
+
+    assert outcome.hedge_status == "hedged"
+    assert outcome.polymarket_order_id == "POLY-recovered"
+    assert outcome.failure is None
+    assert outcome.attempts == 2
+    assert len(hedger.submit_calls) == 2
+
+
+def test_seed_hedge_does_not_retry_insufficient_funds() -> None:
+    """Insufficient funds is a fail-closed class — retrying would burn
+    cycles and the next cron tick reattempts naturally once the
+    operator tops up. The structured payload must surface the actual
+    CLOB cause."""
+    rejection = _FakePolyApiException(
+        400, "INSUFFICIENT_BALANCE: free 12.30 USDC < 15.00 requested"
+    )
+    hedger = _StubHedger(submit_error=rejection)
+
+    outcome = hedge_seed_bet(
+        prophet_market_id="PMI-funds",
+        polymarket_condition_id="0xCOND",
+        polymarket_yes_token_id="9001-YES-TOKEN",
+        prophet_seed_side="buy",
+        size_usdc=1.0,
+        marketable_price=0.001,
+        hedger=hedger,
+    )
+
+    assert outcome.hedge_status == "hedge_failed_no_commit"
+    assert outcome.attempts == 1
+    assert len(hedger.submit_calls) == 1
+    assert outcome.failure is not None
+    assert outcome.failure["error_class"] == "insufficient_funds"
+
+
+def test_seed_hedge_failure_payload_carries_structured_diagnostic() -> None:
+    """No more `str(exc)[:200]` — the operator needs to see the CLOB
+    status code, the response body, the exact order params we sent,
+    and the python exception type. This pins the contract end-to-end."""
+    rejection = _FakePolyApiException(
+        400, "MARKET_NOT_OPEN: market resolved at 2026-05-18T03:00:00Z"
+    )
+    hedger = _StubHedger(submit_error=rejection)
+
+    outcome = hedge_seed_bet(
+        prophet_market_id="PMI-diag",
+        polymarket_condition_id="0xCOND",
+        polymarket_yes_token_id="9002-YES-TOKEN",
+        prophet_seed_side="sell",
+        size_usdc=2.5,
+        marketable_price=0.997,
+        hedger=hedger,
+    )
+
+    assert outcome.hedge_status == "hedge_failed_no_commit"
+    assert outcome.failure is not None
+    f = outcome.failure
+    assert f["error_class"] == "market_unavailable"
+    assert f["clob_http_status"] == 400
+    assert "MARKET_NOT_OPEN" in f["clob_error_message"]
+    assert f["exception_type"] == "_FakePolyApiException"
+    assert "MARKET_NOT_OPEN" in f["exception_message"]
+    assert f["submitted_order"] == {
+        "token_id": "9002-YES-TOKEN",
+        "hedge_side": "buy",  # opposite of `sell` seed
+        "size_usdc": 2.5,
+        "marketable_price": 0.997,
+    }
+    assert f["attempts"] == 1

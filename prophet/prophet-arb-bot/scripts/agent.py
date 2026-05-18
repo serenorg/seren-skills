@@ -1239,7 +1239,19 @@ def cmd_run(
                         prophet_market_id=sub.payload.get("prophet_market_id", ""),
                     )
                 else:
-                    progress.emit("entry_blocked", idx=idx, reason=sub.reason)
+                    # #722: surface the hedge_failure.error_class inline
+                    # so the chat-side Monitor renders the actual CLOB
+                    # cause without parsing the run envelope.
+                    _hedge_failure = sub.payload.get("hedge_failure") if isinstance(sub.payload, dict) else None
+                    _error_class = (
+                        _hedge_failure.get("error_class")
+                        if isinstance(_hedge_failure, dict)
+                        else None
+                    )
+                    _emit_kwargs = {"idx": idx, "reason": sub.reason}
+                    if _error_class:
+                        _emit_kwargs["error_class"] = _error_class
+                    progress.emit("entry_blocked", **_emit_kwargs)
         else:
             try:
                 from otp_worker import create_market_ui as create_market_ui_module
@@ -1324,7 +1336,24 @@ def cmd_run(
                                 prophet_market_id=sub.payload.get("prophet_market_id", ""),
                             )
                         else:
-                            progress.emit("entry_blocked", idx=idx, reason=sub.reason)
+                            # #722: surface the hedge_failure.error_class
+                            # inline so the chat-side Monitor renders the
+                            # actual CLOB cause without parsing the run
+                            # envelope.
+                            _hedge_failure = (
+                                sub.payload.get("hedge_failure")
+                                if isinstance(sub.payload, dict)
+                                else None
+                            )
+                            _error_class = (
+                                _hedge_failure.get("error_class")
+                                if isinstance(_hedge_failure, dict)
+                                else None
+                            )
+                            _emit_kwargs = {"idx": idx, "reason": sub.reason}
+                            if _error_class:
+                                _emit_kwargs["error_class"] = _error_class
+                            progress.emit("entry_blocked", **_emit_kwargs)
             except PlaywrightMcpUnavailable:
                 return _finish(CycleResult(
                     status="blocked",
@@ -2218,8 +2247,14 @@ def cmd_record_created_market(
         payload["polymarket_order_id"] = outcome.polymarket_order_id
         payload["polymarket_filled_qty"] = outcome.polymarket_filled_qty
         payload["polymarket_fill_price"] = outcome.polymarket_fill_price
+        payload["hedge_attempts"] = outcome.attempts
         if outcome.error:
             payload["hedge_error"] = outcome.error
+        # #722: surface the structured failure payload so the operator
+        # can see the actual CLOB cause + retry count without parsing
+        # the legacy 200-char `hedge_error` string.
+        if outcome.failure is not None:
+            payload["hedge_failure"] = outcome.failure
         if outcome.hedge_status != "hedged":
             return CycleResult(
                 status="blocked",
@@ -2819,6 +2854,21 @@ def _run_create_market_via_ui_inner(
     )
     hedge_status = hedge_result.payload.get("hedge_status") or ""
     payload["hedge_status"] = hedge_status
+    # #722: forward the structured hedge_failure diagnostic + retry
+    # count up so the run envelope + progress stream carry the actual
+    # cause (insufficient_funds / market_unavailable / etc.) instead of
+    # the opaque ``hedge_failed_no_commit`` token. Forward unconditionally
+    # — these keys are absent on success rows.
+    for forward_key in (
+        "hedge_failure",
+        "hedge_attempts",
+        "hedge_error",
+        "polymarket_order_id",
+        "polymarket_filled_qty",
+        "polymarket_fill_price",
+    ):
+        if forward_key in hedge_result.payload:
+            payload[forward_key] = hedge_result.payload[forward_key]
     if hedge_status != "hedged":
         return CycleResult(
             status="blocked",
