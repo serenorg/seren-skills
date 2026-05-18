@@ -58,6 +58,7 @@ def restore_privy_session(
     privy_caid: str = "",
     privy_recent_login_method: str = "",
     privy_session_cookie: str = "",
+    privy_token_cookie: str = "",
 ) -> None:
     """Plant Privy session state into the caller's browser, then navigate.
 
@@ -94,8 +95,16 @@ def restore_privy_session(
     if not jwt:
         raise ValueError("restore_privy_session requires jwt")
 
+    cookies: list[dict[str, Any]] = []
     if privy_session_cookie:
-        session.add_cookies([_privy_session_cookie_payload(privy_session_cookie)])
+        cookies.append(_privy_session_cookie_payload(privy_session_cookie))
+    if privy_token_cookie:
+        # Issue #707: also plant the JWT-bearing `privy-token` cookie.
+        # Prophet's middleware checks BOTH cookies; #706 restored only
+        # privy-session and the page still landed on /?returnTo=/create.
+        cookies.append(_privy_token_cookie_payload(privy_token_cookie))
+    if cookies:
+        session.add_cookies(cookies)
 
     script = _build_init_script(
         jwt=jwt,
@@ -106,6 +115,24 @@ def restore_privy_session(
     )
     session.add_init_script(script)
     session.navigate(PROPHET_APP_URL)
+
+
+def _privy_token_cookie_payload(value: str) -> dict[str, Any]:
+    """Cookie payload for the ``privy-token`` cookie.
+
+    Issue #707: same attributes as ``privy-session`` (HttpOnly, Secure,
+    Lax, on the Prophet origin) — Privy SDK writes both cookies with
+    identical security flags at login time.
+    """
+    return {
+        "name": "privy-token",
+        "value": value,
+        "domain": "app.prophetmarket.ai",
+        "path": "/",
+        "httpOnly": True,
+        "secure": True,
+        "sameSite": "Lax",
+    }
 
 
 def _privy_session_cookie_payload(value: str) -> dict[str, Any]:

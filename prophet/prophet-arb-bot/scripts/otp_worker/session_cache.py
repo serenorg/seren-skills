@@ -27,6 +27,14 @@ class SessionCacheEntry:
     jwt_expires_at: str = ""
     refresh_token: str = ""
     privy_session_cookie: str = ""
+    # Issue #707: Privy SDK sets two cookies at login — `privy-token`
+    # (JWT-bearing) and `privy-session` (opaque session ID). PrivyAuthArtifacts
+    # captures both, but pre-#707 SessionCache only persisted the
+    # session one — `privy_token_cookie` was discarded after capture, so
+    # every cached cycle ran with only a partial cookie restore and
+    # Prophet's middleware still redirected /create to /?returnTo=/create.
+    # Persist both so the restore can plant both.
+    privy_token_cookie: str = ""
     last_refreshed_at: str = ""
     state: CacheState = "needs_otp"
     consecutive_refresh_failures: int = 0

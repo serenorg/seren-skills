@@ -142,6 +142,13 @@ def establish_browser_session_for_create(
                 privy_session_cookie=(
                     getattr(entry, "privy_session_cookie", "") or ""
                 ),
+                # Issue #707: also restore the JWT-bearing privy-token
+                # cookie. #706 restored only privy-session and the
+                # /create redirect persisted. Privy SDK writes both
+                # cookies at login; Prophet's middleware checks both.
+                privy_token_cookie=(
+                    getattr(entry, "privy_token_cookie", "") or ""
+                ),
             )
         except Exception as restore_exc:
             # Issue #662: the previous `except Exception: pass` silently
