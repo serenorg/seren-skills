@@ -177,6 +177,26 @@ _CAPTURE_SCRIPT = """
         else if (a0 && typeof a0.href === 'string') { url = a0.href; }
         else if (a0 != null) { try { url = String(a0); } catch (e) { url = ''; } }
         if (URL_RE.test(url)) {
+          // Issue #716: Apollo's stream consumer races our clone().text() —
+          // the body resolves empty before we can parse it, so the prior
+          // walker found no sessionId across 51 matched URLs in live diag.
+          // For OddsCalculationSession the sessionId is already in the URL
+          // (variables={"id":"<sessionId>"}); parse it synchronously and
+          // skip the body altogether. Body parse below is kept as the
+          // fallback for non-polling matched URLs and as belt-and-suspenders
+          // diagnostic for the matched buffer.
+          if (/operationName=OddsCalculationSession/.test(url)) {
+            try {
+              const m = url.match(/[?&]variables=([^&]+)/);
+              if (m) {
+                const v = JSON.parse(decodeURIComponent(m[1]));
+                if (v && v.id && !window.__seren_capture__.startOddsCalculation) {
+                  window.__seren_capture__.startOddsCalculation = v.id;
+                  record(url, true, 'OddsCalculationSession');
+                }
+              }
+            } catch (e) { /* URL is malformed, fall through to body parse */ }
+          }
           const clone = resp.clone();
           clone.text().then((txt) => {
             try {
@@ -377,6 +397,46 @@ def poll_for_ocs_id(
         sleep(interval_s)
 
 
+# Issue #716: Prophet's `/create` preview-mode dialog ("GOT IT!" button)
+# appears on the first load of every fresh BrowserContext. It traps
+# clicks on the form behind it. My manual MCP walkthrough dismissed it
+# before clicking Validate Question; the bot's pre-#716 flow did not.
+# When the modal was up, the Validate click landed on the modal backdrop,
+# the form never advanced, and `StartOddsCalculation` was never fired —
+# producing `ocs_session_id_not_captured` blockers indistinguishable from
+# the Apollo-clone race that #716 also fixes. This helper is best-effort:
+# no-op when the dialog isn't present, never raises.
+_DISMISS_GOT_IT_DIALOG_SCRIPT = """
+(() => {
+  // Find a visible "got it" button and click it. Issue #716 dismissal.
+  try {
+    const btns = Array.from(document.querySelectorAll('button'));
+    const got = btns.find((b) => {
+      if (!b.offsetParent) { return false; }
+      return /got\\s*it/i.test((b.textContent || '').trim());
+    });
+    if (got) { got.click(); return true; }
+  } catch (e) { /* swallow */ }
+  return false;
+})()
+"""
+
+
+def dismiss_preview_dialog(session: Any) -> None:
+    """Click Prophet's preview-mode 'GOT IT!' modal if it's visible.
+
+    Best-effort. Stubs without ``evaluate`` are tolerated. Any exception
+    is swallowed — the caller proceeds to fill/click regardless.
+    """
+    evaluate = getattr(session, "evaluate", None)
+    if not callable(evaluate):
+        return
+    try:
+        evaluate(_DISMISS_GOT_IT_DIALOG_SCRIPT)
+    except Exception:
+        pass
+
+
 def open_create_form(session: Any, *, question: str) -> None:
     # Issue #655: install the capture wrapper at `document_start` BEFORE
     # navigating to `/create`, so it's in place for every fetch/XHR that
@@ -387,6 +447,10 @@ def open_create_form(session: Any, *, question: str) -> None:
     session.navigate(PROPHET_CREATE_URL)
     session.wait_for(SEL_QUESTION_INPUT, timeout_ms=30_000)
     install_fetch_capture(session)
+    # Issue #716: dismiss the first-load preview modal BEFORE filling +
+    # clicking, or Validate Question lands on the modal backdrop and the
+    # form never advances to Create Market.
+    dismiss_preview_dialog(session)
     session.fill(SEL_QUESTION_INPUT, question)
     session.click(SEL_VALIDATE_QUESTION_BUTTON)
     session.click(SEL_CREATE_MARKET_BUTTON)
