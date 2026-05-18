@@ -425,14 +425,18 @@ _DISMISS_GOT_IT_DIALOG_SCRIPT = """
 def dismiss_preview_dialog(session: Any) -> None:
     """Click Prophet's preview-mode 'GOT IT!' modal if it's visible.
 
-    Best-effort. Stubs without ``evaluate`` are tolerated. Any exception
-    is swallowed — the caller proceeds to fill/click regardless.
+    Best-effort. Routes through ``_evaluate`` so both test stubs (which
+    expose ``def evaluate``) AND the production ``RealBrowserSession``
+    (which routes via ``_call('/evaluate', ...)`` and exposes no public
+    ``evaluate`` attribute) reach the dismiss script. The pre-#718
+    helper used a bare ``getattr(session, 'evaluate', None)`` lookup and
+    silently no-op'd against ``RealBrowserSession``, so the dialog stayed
+    up in every production cycle and the form click landed on the modal
+    backdrop. Any exception is swallowed — the caller proceeds to
+    fill/click regardless.
     """
-    evaluate = getattr(session, "evaluate", None)
-    if not callable(evaluate):
-        return
     try:
-        evaluate(_DISMISS_GOT_IT_DIALOG_SCRIPT)
+        _evaluate(session, _DISMISS_GOT_IT_DIALOG_SCRIPT)
     except Exception:
         pass
 

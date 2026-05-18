@@ -322,6 +322,49 @@ def test_capture_script_extracts_session_id_from_polling_url() -> None:
     )
 
 
+def test_dismiss_preview_dialog_works_against_call_based_session() -> None:
+    """Issue #718: ``RealBrowserSession`` (the production class) does not
+    expose a public ``evaluate`` method — it routes JS evaluation through
+    ``self._call('/evaluate', {'script': ...})``. The pre-#718 dismiss
+    helper only checked ``getattr(session, 'evaluate', None)`` and
+    silently no-op'd when that attribute was absent. Tests passed because
+    ``_RecordingSession`` defines ``def evaluate``; production failed
+    because ``RealBrowserSession`` does not.
+
+    Pin the contract: a session stub that mimics ``RealBrowserSession``
+    (no ``evaluate`` attr, only ``_call``) must still receive the dismiss
+    script via the ``/evaluate`` MCP endpoint.
+    """
+    from otp_worker.create_market_ui import dismiss_preview_dialog
+
+    class _CallOnlySession:
+        """Mimics ``RealBrowserSession`` — no ``evaluate``, only ``_call``."""
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def _call(self, path: str, body: dict) -> object:
+            self.calls.append((path, body))
+            return {"value": False}
+
+    session = _CallOnlySession()
+    # MUST NOT raise — best-effort helper.
+    dismiss_preview_dialog(session)
+
+    # Production routing: at least one /evaluate call must have fired,
+    # carrying the Got-it dismiss script.
+    evaluate_calls = [c for c in session.calls if c[0] == "/evaluate"]
+    assert evaluate_calls, (
+        f"dismiss_preview_dialog must route through _call('/evaluate', ...) "
+        f"when the session lacks a public ``evaluate`` attr (the real "
+        f"RealBrowserSession case); calls were: {session.calls}"
+    )
+    script = evaluate_calls[0][1].get("script", "")
+    assert "got" in script.lower() and "it" in script.lower(), (
+        f"the dispatched script must be the Got-it dismiss JS; got: {script[:200]}"
+    )
+
+
 def test_open_create_form_dismisses_got_it_dialog() -> None:
     """Issue #716 bug 2: Prophet's `/create` page shows a preview-mode
     "GOT IT!" beta dialog on every fresh browser context. My manual MCP
