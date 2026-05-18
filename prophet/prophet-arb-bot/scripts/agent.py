@@ -972,6 +972,12 @@ def _build_ui_submission_entry(
             "capture_total_fetch_calls_error",
             "capture_unmatched_sample",
             "capture_unmatched_sample_error",
+            # Issue #703: surface the page URL the bot landed on. If
+            # the auth-flow redirect lands somewhere other than /create
+            # and the selector match was on an unrelated textarea, this
+            # is the single field that makes it visible.
+            "page_url",
+            "page_url_error",
         ):
             if key in sub.payload:
                 entry[key] = sub.payload[key]
@@ -2728,6 +2734,22 @@ def _run_create_market_via_ui_inner(
                 payload["capture_unmatched_sample"] = []
         else:
             payload["capture_unmatched_sample"] = []
+        # Issue #703: surface the current page URL so the operator can
+        # tell whether the bot is actually on /create vs a different
+        # page that just happens to have a question textarea (e.g.
+        # auth-flow redirect landed on /markets quick-create form).
+        # Best-effort; fall back to "" if the read raises.
+        try:
+            get_url = getattr(session, "get_url", None)
+            if callable(get_url):
+                payload["page_url"] = get_url()
+            else:
+                payload["page_url"] = ""
+        except Exception as exc:
+            payload["page_url_error"] = (
+                f"{type(exc).__name__}:{str(exc)[:200]}"
+            )
+            payload["page_url"] = ""
         return CycleResult(
             status="blocked",
             reason="ocs_session_id_not_captured",

@@ -88,12 +88,14 @@ _CAPTURE_SCRIPT = """
   }
 
   function recordUnmatched(url) {
-    // Issue #701: keep a small sample of URLs the page issued but the
-    // URL_RE filter rejected. 10 is enough to spot a pattern (e.g.
-    // /api/seed-calc, /api/inference) without bloating the envelope.
+    // Issue #701/#703: sample of URLs the page issued but URL_RE
+    // rejected. #701 capped at 10 — too tight: /create issues ~79
+    // fetches per cycle (mostly Next.js RSC prefetches) and any early
+    // /api/* request got pushed out before we could see it. #703 bumps
+    // to 50 so the OCS-request window survives the prefetch noise.
     try {
       const um = window.__seren_capture__.unmatched_sample;
-      if (um.length >= 10) { um.shift(); }
+      if (um.length >= 50) { um.shift(); }
       um.push(String(url || '').slice(0, 200));
     } catch (e) { /* swallow */ }
   }

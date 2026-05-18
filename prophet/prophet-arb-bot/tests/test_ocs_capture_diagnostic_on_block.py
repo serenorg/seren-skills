@@ -62,13 +62,19 @@ def _stub_establish_session(**_kwargs: Any) -> _FreshCacheEntry:
     return _FreshCacheEntry()
 
 
+_FAKE_PAGE_URL = "https://app.prophetmarket.ai/markets"
+
+
 class _StubSession:
     def navigate(self, url: str) -> None: ...
     def click(self, selector: str) -> None: ...
     def fill(self, selector: str, value: str) -> None: ...
     def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None: ...
     def get_url(self) -> str:
-        return ""
+        # Issue #703: stub returns a NON-empty URL so the page_url
+        # blocked-envelope test can pin that get_url's value is lifted
+        # all the way into the payload rather than being silently dropped.
+        return _FAKE_PAGE_URL
     def evaluate(self, script: str) -> Any:
         return ""
 
@@ -186,3 +192,42 @@ def test_ocs_capture_miss_surfaces_diagnostic_ring_buffer_in_payload() -> None:
         f"saw payload keys {sorted(result.payload.keys())}"
     )
     assert result.payload["capture_error"] == _FAKE_CAPTURE_ERROR
+
+
+def test_ocs_capture_miss_surfaces_page_url_in_payload() -> None:
+    """Issue #703: when 79 fetches happen on the wrapped page but none
+    match URL_RE, the operator can't tell whether the bot is on
+    /create (where AI calc should fire) or on a different page that
+    just happens to have a question textarea (auth-flow redirect to
+    /markets quick-create form). Surfacing `session.get_url()` at the
+    OCS-poll-timeout disambiguates.
+    """
+    ui = _CaptureMissUI()
+
+    result = cmd_create_market_via_ui(
+        config=_config(),
+        gateway=object(),
+        transport=object(),
+        polymarket_condition_id="0xCID_ETH_2000",
+        question="Will the price of Ethereum be above $2,000 on May 19?",
+        initial_bet_usdc=1.0,
+        open_session_factory=lambda: _SessionScope(_StubSession()),
+        establish_session=_stub_establish_session,
+        create_market_ui=ui,
+        compute_seed_intent=_seed_intent_unused,
+        record_created_market=_record_unused,
+    )
+
+    assert result.status == "blocked"
+    assert result.reason == "ocs_session_id_not_captured"
+
+    # `page_url` MUST be lifted from session.get_url() into the payload.
+    # Empty payload[page_url] is acceptable on hosts where get_url
+    # raises, but missing the key entirely means the envelope assembler
+    # didn't even attempt the read.
+    assert "page_url" in result.payload, (
+        "blocked envelope must surface session.get_url() so the operator "
+        "can tell which page the OCS poll timed out on; saw payload keys "
+        f"{sorted(result.payload.keys())}"
+    )
+    assert result.payload["page_url"] == _FAKE_PAGE_URL

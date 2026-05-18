@@ -189,7 +189,14 @@ def test_capture_script_records_total_fetch_calls_and_unmatched_sample() -> None
     # Unmatched-URL ring buffer is declared and capped.
     assert "unmatched_sample: []" in script, "unmatched_sample init missing"
     assert "function recordUnmatched(" in script, "recordUnmatched helper missing"
-    assert "um.length >= 10" in script, "unmatched_sample cap missing"
+    # Issue #703: cap bumped from 10 to 50 — Prophet's /create page
+    # issues ~79 fetches per cycle (mostly RSC prefetches); a 10-entry
+    # buffer never preserves the early-window fetches where the OCS
+    # request would have fired.
+    assert "um.length >= 50" in script, (
+        "unmatched_sample cap should be 50 (#703 bumped from 10) so the "
+        "OCS-request fetch window survives the prefetch noise"
+    )
     # The fetch wrapper invokes recordUnmatched in the else branch.
     assert "recordUnmatched(url)" in script, (
         "recordUnmatched not invoked on URL_RE-miss path"
