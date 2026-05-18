@@ -50,11 +50,13 @@ from otp_worker import playwright_mcp_gateway as pmg
 # unset) is what Privy is actually tested against; headed Chrome times
 # out at 30s on Privy embedded-wallet provisioning. See
 # tests/test_privy_env_headless_default_issue687.py.
+# Issue #689 dropped both SEREN_PLAYWRIGHT_STEALTH_EVASIONS_DISABLE and
+# SEREN_PLAYWRIGHT_DISABLE_PAGE_INIT_PATCH: Desktop #1957's README guidance
+# was inverted. Connected-MCP walk-through with full default stealth +
+# page-init patch ON populates privy:connections in 251ms; previous
+# profile timed out at 30s in three cycles. See
+# tests/test_privy_env_full_stealth_issue689.py.
 EXPECTED_PRIVY_PROFILE_KEYS = {
-    "SEREN_PLAYWRIGHT_STEALTH_EVASIONS_DISABLE": (
-        "iframe.contentWindow,navigator.permissions"
-    ),
-    "SEREN_PLAYWRIGHT_DISABLE_PAGE_INIT_PATCH": "1",
     "BROWSER_TYPE": "chrome",
 }
 
