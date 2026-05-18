@@ -15,6 +15,12 @@ automation for publisher definitions: it verifies what exists, researches only
 official API surfaces, and deploys validated publishers using the live Asana
 publisher as the commercial template.
 
+This skill follows the Seren SkillForge file layout. The executable runtime is
+the generic parameterized factory at `scripts/agent.py`. Do not add
+vendor-specific scripts such as `run_calendly_probe.py`; the same runner must
+handle any company, calendar app, SaaS API, competitor set, or adjacent category
+leader through inputs.
+
 ## When to Use
 
 - create a publisher for a company
@@ -50,6 +56,32 @@ Ask for missing inputs only when needed:
 - target company or product category
 - whether existing publishers may be updated
 - preferred naming convention if the operator has one
+
+## Executable Commands
+
+Run the generic factory probe with a target:
+
+```bash
+python3 scripts/agent.py --target "Calendly"
+```
+
+Run from config:
+
+```bash
+python3 scripts/agent.py --config config.json
+```
+
+The runtime emits the standard grouped report:
+
+- `deployed`
+- `existing`
+- `updated`
+- `skipped`
+- `blocked`
+
+The default mode is dry-run. Use the runtime to validate the live catalog,
+exact publisher lookup, Asana template load, organization resolution, and OAuth
+provider/user-token gates before creating or updating publishers.
 
 Default discovery scope:
 

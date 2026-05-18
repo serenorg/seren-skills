@@ -1,0 +1,9 @@
+{
+  "data": [
+    {
+      "id": "org_personal",
+      "name": "Personal",
+      "is_personal": true
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "publishers": [
+    {
+      "slug": "polymarket-data",
+      "name": "Polymarket Data",
+      "description": "Prediction market data",
+      "categories": ["predictions"]
+    },
+    {
+      "slug": "google-calendar",
+      "name": "Google Calendar",
+      "description": "Calendar and scheduling integration",
+      "categories": ["calendar", "scheduling"]
+    }
+  ],
+  "search": [
+    {
+      "slug": "google-calendar",
+      "name": "Google Calendar",
+      "description": "Calendar and scheduling integration",
+      "categories": ["calendar", "scheduling"]
+    }
+  ]
+}

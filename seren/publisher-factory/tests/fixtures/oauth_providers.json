@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "slug": "asana",
+      "name": "Asana",
+      "is_active": true
+    },
+    {
+      "slug": "google",
+      "name": "Google",
+      "is_active": true
+    }
+  ]
+}

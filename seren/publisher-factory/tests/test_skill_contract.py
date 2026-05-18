@@ -5,6 +5,7 @@ import re
 
 
 SKILL_PATH = Path(__file__).resolve().parents[1] / "SKILL.md"
+SKILL_ROOT = SKILL_PATH.parent
 
 
 def _skill_text() -> str:
@@ -61,3 +62,27 @@ def test_publisher_contract_and_report_groups() -> None:
 
     for group in ["deployed", "existing", "updated", "skipped", "blocked"]:
         assert re.search(rf"`?{group}`?", lower), f"missing report group: {group}"
+
+
+def test_skillforge_runtime_file_surface_and_generic_factory_contract() -> None:
+    expected_paths = [
+        "skill.spec.yaml",
+        "scripts/agent.py",
+        ".env.example",
+        "config.example.json",
+        "requirements.txt",
+        "tests/fixtures/calendly_fuzzy_catalog.json",
+    ]
+    for relative_path in expected_paths:
+        assert (SKILL_ROOT / relative_path).exists(), f"missing {relative_path}"
+
+    spec = (SKILL_ROOT / "skill.spec.yaml").read_text(encoding="utf-8")
+    assert "skill: publisher-factory" in spec
+    assert "entrypoint: scripts/agent.py" in spec
+    assert "target:" in spec
+    assert "publisher_catalog:" in spec
+    assert "asana_template:" in spec
+    assert "oauth_providers:" in spec
+
+    script_names = {path.name for path in (SKILL_ROOT / "scripts").glob("*.py")}
+    assert script_names == {"agent.py"}
