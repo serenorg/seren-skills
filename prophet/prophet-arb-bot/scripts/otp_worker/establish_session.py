@@ -112,7 +112,14 @@ def establish_browser_session_for_create(
     }
 
     observable_diag: dict[str, Any] | None = None
-    if entry.is_fresh() and entry.jwt and entry.refresh_token:
+    # Issue #666: Privy retired the localStorage refresh-token mechanism
+    # server-side; the JWT alone is now the session. Drop the
+    # ``entry.refresh_token`` term from this conjunction so JWT-only
+    # entries enter the cache-fresh branch instead of being silently
+    # bypassed (which would force an unnecessary OTP cold-start every
+    # cycle). ``restore_privy_session`` plants only the JWT when the
+    # refresh token is empty.
+    if entry.is_fresh() and entry.jwt:
         try:
             restore(session, jwt=entry.jwt, refresh_token=entry.refresh_token)
         except Exception as restore_exc:

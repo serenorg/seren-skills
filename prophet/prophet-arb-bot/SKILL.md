@@ -575,9 +575,16 @@ Per-entry blocking reasons surfaced in `ui_submission_results.reason`:
   so operators can tell whether the guard rejected the cache (one
   of those fields was False) or whether it accepted the cache and
   the failure was downstream (in which case `observable_check` or
-  `restore_exception` will also be present). If the cached refresh
-  token has been revoked server-side, re-login at
-  `app.prophetmarket.ai` once to regenerate.
+  `restore_exception` will also be present). Since #666 the
+  warm-context establish path is also tolerant of JWT-only sessions:
+  Prophet's auth provider retired its localStorage refresh-token
+  mechanism server-side, and the bot now treats the JWT alone as the
+  session. Capture, cache read, and the cache-fresh guard all
+  normalize the legacy refresh-token slot to empty, and the session
+  restore step plants only the JWT when no refresh token is
+  available. Existing operators with a stale cached refresh token
+  recover automatically on the next cycle — no manual cache wipe
+  required.
 - `seren_desktop_playwright_mcp_unavailable` — no `playwright-stealth`
   MCP command resolvable. Run on Seren Desktop or set
   `SEREN_PLAYWRIGHT_MCP_COMMAND`.

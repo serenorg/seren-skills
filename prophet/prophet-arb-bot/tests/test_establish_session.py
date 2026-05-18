@@ -323,6 +323,68 @@ def test_establish_attaches_observable_check_when_fresh_cache_falls_through() ->
         raise AssertionError("expected SessionEstablishmentFailed")
 
 
+def test_establish_enters_cache_fresh_branch_with_jwt_only_session() -> None:
+    """Issue #666: Privy retired the localStorage refresh_token mechanism
+    server-side and writes the literal sentinel ``"deprecated"`` into
+    ``privy:refresh_token`` post-login. After #666's capture-time
+    normalization, every freshly-bootstrapped cache will carry
+    ``refresh_token=""`` and the JWT alone IS the session.
+
+    The cache-fresh guard at ``establish_browser_session_for_create``
+    must therefore accept JWT-only entries — dropping the
+    ``entry.refresh_token`` term from the conjunction. Otherwise the
+    guard rejects every post-#666 cache and the warm context bypasses
+    the restore-then-observe sub-tree, forcing an OTP cold-start on
+    every cycle even when the cached JWT is valid for 59 more minutes.
+
+    The acceptance is:
+    1. The cache-fresh branch IS entered (restore is called with the
+       empty refresh_token, not skipped).
+    2. The acquirer is NEVER called — no OTP email burned on a session
+       that does not need refreshing.
+    3. The function returns the cache entry as-is.
+    """
+    cache = _StubCache(
+        [_Entry(jwt="cached_jwt", refresh_token="", state="fresh", fresh=True)]
+    )
+    session = _Session(observable=True)
+
+    restore_calls: list[dict[str, Any]] = []
+    acquirer_calls: list[dict[str, Any]] = []
+
+    def restore(s: Any, *, jwt: str, refresh_token: str) -> None:
+        restore_calls.append({"jwt": jwt, "refresh_token": refresh_token})
+
+    def acquirer(**kw: Any) -> None:
+        acquirer_calls.append(kw)
+
+    result = establish_browser_session_for_create(
+        session=session,
+        email="e@example.com",
+        provider="gmail",
+        seren_user_id="",
+        bounty_id="",
+        config_gateway=object(),
+        transport=object(),
+        pw_gateway=None,
+        cache=cache,
+        acquirer=acquirer,
+        refresher=lambda **_: None,
+        restore=restore,
+    )
+
+    assert restore_calls == [{"jwt": "cached_jwt", "refresh_token": ""}], (
+        "JWT-only cache must enter the cache-fresh branch and call restore "
+        f"with refresh_token=''; got {restore_calls!r}"
+    )
+    assert acquirer_calls == [], (
+        "JWT-only cache must not fall through to OTP cold-start; "
+        f"acquirer was called {len(acquirer_calls)} time(s)"
+    )
+    assert getattr(result, "jwt", "") == "cached_jwt"
+    assert getattr(result, "refresh_token", "") == ""
+
+
 def test_establish_attaches_cache_check_when_guard_bypassed_and_otp_fails() -> None:
     """Issue #664: when the cache-fresh guard at the top of
     `establish_browser_session_for_create` evaluates False, the function

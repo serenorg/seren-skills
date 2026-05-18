@@ -73,6 +73,13 @@ class SessionCache:
         # Drop unknown keys so old/forward-compat schemas don't crash construction.
         known = {f.name for f in SessionCacheEntry.__dataclass_fields__.values()}
         clean = {k: v for k, v in payload.items() if k in known}
+        # Issue #666: self-heal legacy on-disk caches that captured Privy's
+        # "deprecated" migration marker as a real refresh_token. Normalize
+        # to empty so existing operators recover on the next read without
+        # manually wiping state/privy_session.json. Downstream code already
+        # tolerates an empty refresh_token (JWT-only session).
+        if clean.get("refresh_token") == "deprecated":
+            clean["refresh_token"] = ""
         try:
             return SessionCacheEntry(**clean)
         except TypeError:
