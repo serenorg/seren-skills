@@ -2340,8 +2340,22 @@ class DirectClobTrader:
         neg_risk: bool,
         fee_rate_bps: int,
     ) -> Any:
-        del tick_size, neg_risk, fee_rate_bps
-        from py_clob_client.clob_types import OrderArgs, OrderType
+        # Albania E2E (2026-05-18): every hedge submission returned
+        # PolyApiException[status_code=400, error_message={'error':
+        # 'order_version_mismatch'}]. Root cause: this method previously
+        # discarded `tick_size`, `neg_risk`, and `fee_rate_bps` and called
+        # `self._client.create_order(order_args)` with no options. The CLOB
+        # then signs neg-risk markets against the standard exchange
+        # `0x4bFb…` and rejects them. The sister `PolymarketPublisherTrader`
+        # in this file forwards `CreateOrderOptions(tick_size, neg_risk)`
+        # explicitly — that is the proven-working pattern across the other
+        # Polymarket skills. Match it here so the caller's `/book`-sourced
+        # `neg_risk` flag actually reaches py-clob-client.
+        from py_clob_client.clob_types import (
+            CreateOrderOptions,
+            OrderArgs,
+            OrderType,
+        )
         from py_clob_client.order_builder.constants import BUY, SELL
 
         clob_side = BUY if side.upper() == "BUY" else SELL
@@ -2350,8 +2364,15 @@ class DirectClobTrader:
             size=size,
             side=clob_side,
             token_id=token_id,
+            fee_rate_bps=fee_rate_bps,
         )
-        signed_order = self._client.create_order(order_args)
+        signed_order = self._client.create_order(
+            order_args,
+            CreateOrderOptions(
+                tick_size=tick_size,
+                neg_risk=neg_risk,
+            ),
+        )
         return self._client.post_order(signed_order, OrderType.GTC)
 
     def cancel_all(self) -> Any:
