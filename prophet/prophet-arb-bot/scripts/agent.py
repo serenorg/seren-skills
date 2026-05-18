@@ -981,6 +981,23 @@ def _build_ui_submission_entry(
         ):
             if key in sub.payload:
                 entry[key] = sub.payload[key]
+    # Issue #726: surface the #722 structured hedge_failure payload (and
+    # the convenience top-level fields the chat-side renderer reads
+    # without descending into the dict) so operators can identify the
+    # actual CLOB cause from the run envelope without re-driving the
+    # cycle. Reason-scoped so envelope rows stay lean per failure mode.
+    elif sub.reason == "hedge_failed_no_commit":
+        for key in (
+            "hedge_failure",
+            "hedge_status",
+            "hedge_attempts",
+            "hedge_error",
+            "polymarket_order_id",
+            "polymarket_filled_qty",
+            "polymarket_fill_price",
+        ):
+            if key in sub.payload:
+                entry[key] = sub.payload[key]
     return entry
 
 
