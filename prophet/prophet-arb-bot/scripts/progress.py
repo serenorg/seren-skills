@@ -23,16 +23,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from state_paths import resolve_state_dir
+
 
 CURRENT_FILE_NAME = "run_progress.jsonl"
 PREV_FILE_NAME = "run_progress.prev.jsonl"
 
 
 def _default_state_dir() -> Path:
-    override = os.environ.get("PROPHET_ARB_STATE_DIR") or ""
-    if override:
-        return Path(override).expanduser()
-    return Path.home() / ".config" / "seren" / "skills" / "prophet-arb-bot" / "state"
+    # Thin wrapper routed through the canonical resolver so progress.py
+    # and discovery/candidate_sheet.py always agree on the state dir
+    # (issue #693).
+    return resolve_state_dir()
 
 
 def _utc_now_iso() -> str:

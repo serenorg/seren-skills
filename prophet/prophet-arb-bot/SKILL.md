@@ -32,7 +32,9 @@ Seren Desktop bundles Python on Windows and prepends the bundled runtime to chil
 
 Every `--command run` cycle writes one JSON event per stage transition to `state/run_progress.jsonl` (append-only, flushed per write so a crash mid-cycle preserves every line on disk). The prior cycle is rotated to `state/run_progress.prev.jsonl` for one-tick history. This is a side channel — the `--json-output` envelope on stdout is byte-identical to today's output.
 
-**Before invoking `--command run --yes-live`, arm a `Monitor` on `state/run_progress.jsonl`** so per-entry progress streams into chat as the bot drives Prophet `/create` for each pending market. Without this, an 18-entry queue spends ~30 minutes of silence in the AI seed-calc dead zone.
+**Before invoking `--command run --yes-live`, arm a `Monitor` on the resolved progress file** so per-entry progress streams into chat as the bot drives Prophet `/create` for each pending market. Without this, an 18-entry queue spends ~30 minutes of silence in the AI seed-calc dead zone.
+
+The canonical path is `~/.config/seren/skills/prophet-arb-bot/state/run_progress.jsonl` (or `$PROPHET_ARB_STATE_DIR/run_progress.jsonl` if the env override is set). Per #693, `scripts/agent.py` prints `progress stream: <absolute-path>` to stderr the first time it constructs the emitter — copy that exact path into your `Monitor`. Do **not** tail a path relative to your current working directory; state-dir resolution is centralized in `scripts/state_paths.py` and the source tree's `state/` directory is no longer written to.
 
 Stage → human-readable rendering for the chat-side renderer:
 
