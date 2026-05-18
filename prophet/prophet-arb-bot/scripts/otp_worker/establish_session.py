@@ -134,6 +134,14 @@ def establish_browser_session_for_create(
                 privy_recent_login_method=(
                     getattr(entry, "privy_recent_login_method", "") or ""
                 ),
+                # Issue #705: restore the privy-session cookie too.
+                # Prophet's middleware checks the HttpOnly cookie to
+                # decide /create vs /?returnTo=/create; without this
+                # the warm context is server-side unauthenticated even
+                # when localStorage planting looks correct.
+                privy_session_cookie=(
+                    getattr(entry, "privy_session_cookie", "") or ""
+                ),
             )
         except Exception as restore_exc:
             # Issue #662: the previous `except Exception: pass` silently

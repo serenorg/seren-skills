@@ -57,6 +57,7 @@ def restore_privy_session(
     privy_connections: str = "",
     privy_caid: str = "",
     privy_recent_login_method: str = "",
+    privy_session_cookie: str = "",
 ) -> None:
     """Plant Privy session state into the caller's browser, then navigate.
 
@@ -76,9 +77,25 @@ def restore_privy_session(
     empty ``refresh_token`` (the post-#666 cache shape) is fine; we
     just skip that setter rather than planting an empty string that
     the SDK would treat as a corruption marker.
+
+    Issue #705: also plant the ``privy-session`` HTTP cookie when the
+    cache carries it. localStorage planting alone is enough for the
+    Privy *client* SDK to recognize a session, but Prophet's server-
+    side middleware checks the HttpOnly ``privy-session`` cookie when
+    deciding whether to serve ``/create`` vs redirect to
+    ``/?returnTo=/create``. Without the cookie restore, the warm
+    context was effectively unauthenticated server-side every cycle
+    — the bot would land on the homepage, the homepage's quick-create
+    textarea would satisfy ``wait_for(question_input)``, and the
+    Create Market click would never fire the AI calc. Verified by the
+    #704 page_url diagnostic: ``page_url`` came back as
+    ``/?returnTo=%2Fcreate`` on every blocked entry.
     """
     if not jwt:
         raise ValueError("restore_privy_session requires jwt")
+
+    if privy_session_cookie:
+        session.add_cookies([_privy_session_cookie_payload(privy_session_cookie)])
 
     script = _build_init_script(
         jwt=jwt,
@@ -89,6 +106,25 @@ def restore_privy_session(
     )
     session.add_init_script(script)
     session.navigate(PROPHET_APP_URL)
+
+
+def _privy_session_cookie_payload(value: str) -> dict[str, Any]:
+    """Cookie payload Playwright's ``BrowserContext.addCookies`` expects.
+
+    Issue #705: the captured cookie is HttpOnly+Secure and bound to the
+    Prophet origin. Lowercased ``samesite`` ('lax') matches what Privy
+    set at login time (verified via ``session.get_cookie`` in the
+    capture path). Path '/' is the Privy convention.
+    """
+    return {
+        "name": "privy-session",
+        "value": value,
+        "domain": "app.prophetmarket.ai",
+        "path": "/",
+        "httpOnly": True,
+        "secure": True,
+        "sameSite": "Lax",
+    }
 
 
 def _setter_js_string(key: str, value: str) -> str:

@@ -27,9 +27,23 @@ class _StubSession:
         self.init_scripts: list[str] = []
         self.navigations: list[str] = []
         self.evaluations: list[str] = []
+        self.cookies_added: list[list[dict[str, Any]]] = []
 
     def add_init_script(self, script: str) -> None:
         self.init_scripts.append(script)
+
+    def add_cookies(self, cookies: list[dict[str, Any]]) -> None:
+        # Issue #705: capture the cookie payload + a snapshot of the
+        # init-script count and navigation count at the moment of the
+        # add_cookies call. The cookie must land BEFORE the navigate
+        # so Prophet's middleware sees it on the first /create request.
+        self.cookies_added.append(
+            {
+                "cookies": list(cookies),
+                "init_scripts_at_call": len(self.init_scripts),
+                "navigations_at_call": len(self.navigations),
+            }
+        )
 
     def navigate(self, url: str) -> None:
         self.navigations.append(url)
@@ -83,3 +97,68 @@ def test_privy_restore_init_script_wraps_tokens_in_balanced_quotes() -> None:
     # (c) Origin guard present so the planted state cannot leak to
     # about:blank or any subframe of a non-Prophet origin.
     assert "app.prophetmarket.ai" in script, script
+
+
+def test_privy_restore_plants_session_cookie_before_navigate() -> None:
+    """Issue #705: when the cache carries a `privy_session_cookie`,
+    `restore_privy_session` MUST plant it via `session.add_cookies(...)`
+    BEFORE the navigate so Prophet's server-side middleware sees the
+    HttpOnly cookie on its first `/create` request. Without this, every
+    cycle lands on `/?returnTo=%2Fcreate` (the unauth redirect target).
+
+    Pin the exact cookie attributes (name, value, domain, security
+    flags) — any future refactor that ships an unguarded cookie payload
+    must explicitly update this contract.
+    """
+    session = _StubSession()
+
+    restore_privy_session(
+        session,
+        jwt="eyJ.j.w.t",
+        refresh_token="rt_abc123",
+        privy_session_cookie="sess_xyz_789",
+    )
+
+    # add_cookies fires exactly once with one cookie.
+    assert len(session.cookies_added) == 1, session.cookies_added
+    call = session.cookies_added[0]
+    assert len(call["cookies"]) == 1
+    cookie = call["cookies"][0]
+
+    assert cookie["name"] == "privy-session"
+    assert cookie["value"] == "sess_xyz_789"
+    assert cookie["domain"] == "app.prophetmarket.ai"
+    assert cookie["path"] == "/"
+    # Privy sets the cookie HttpOnly+Secure at login; the restored
+    # cookie MUST match so middleware accepts it.
+    assert cookie["httpOnly"] is True
+    assert cookie["secure"] is True
+    assert cookie["sameSite"] == "Lax"
+
+    # Ordering: cookie planting MUST precede the navigate. The
+    # snapshots prove the add_cookies call happened when zero
+    # navigations had been issued yet.
+    assert call["navigations_at_call"] == 0, (
+        "add_cookies must precede navigate so Prophet's middleware sees "
+        "the cookie on the very first request to /create"
+    )
+
+
+def test_privy_restore_skips_cookie_when_cache_has_no_value() -> None:
+    """Issue #705: an empty `privy_session_cookie` (legacy cache, or a
+    capture path that hasn't been wired yet) MUST NOT trigger an
+    add_cookies call with an empty value — that would clear the cookie
+    domain-wide and make the situation worse, not better.
+    """
+    session = _StubSession()
+
+    restore_privy_session(
+        session,
+        jwt="eyJ.j.w.t",
+        refresh_token="rt_abc123",
+        # privy_session_cookie omitted — exercises the empty default
+    )
+
+    assert session.cookies_added == [], (
+        "no cookie payload should be planted when the cache field is empty"
+    )
