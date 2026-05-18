@@ -497,6 +497,91 @@ def test_establish_falls_through_to_otp_when_sdk_redirects_create_to_returnto() 
     assert getattr(result, "jwt", "") == "post_otp_j"
 
 
+def test_establish_routes_acquirer_to_http_gateway_not_playwright_gateway() -> None:
+    """Issue #714 follow-up: when the cache-fresh branch falls through to
+    in-context OTP, the ``acquirer`` call must receive the publisher
+    HttpGateway as ``gateway``, NOT the Playwright MCP gateway.
+
+    ``acquire_token`` uses its ``gateway`` argument to build a Gmail/Outlook
+    InboxReader (`otp_worker/inbox_reader.py:make_inbox_reader`), which
+    calls ``gateway.call(publisher=...)`` against the publisher gateway.
+    The Playwright MCP gateway has no such method — passing it would
+    raise ``EmailPublisherUnavailable`` from inside the inbox reader the
+    moment OTP fired.
+
+    Pre-#714, the cache-fresh branch's ``_privy_session_observable``
+    check false-positived on the homepage so the fall-through never ran
+    in production. #714's probe-/create makes the fall-through reachable
+    and exposes the wrong gateway wiring. Pin the contract: regardless
+    of whether ``pw_gateway`` is non-None, the acquirer receives
+    ``config_gateway``.
+    """
+    cache = _StubCache(
+        [
+            _Entry(jwt="cached_j", refresh_token="", state="fresh", fresh=True),
+            _Entry(jwt="post_otp_j", refresh_token="", state="fresh", fresh=True),
+        ]
+    )
+
+    class _SessionRejectedAtCreate:
+        def __init__(self) -> None:
+            self._url = "https://app.prophetmarket.ai/"
+            self.navigated_to: list[str] = []
+
+        def navigate(self, url: str) -> None:
+            self.navigated_to.append(url)
+            self._url = "https://app.prophetmarket.ai/?returnTo=%2Fcreate"
+
+        def get_url(self) -> str:
+            return self._url
+
+        def get_local_storage(self, key: str) -> str | None:
+            return None
+
+        def wait_for(self, selector: str, *, timeout_ms: int = 30_000) -> None:
+            return None
+
+    session = _SessionRejectedAtCreate()
+
+    config_gateway = object()  # the HttpGateway (publisher routing)
+    pw_gateway = object()      # the Playwright MCP gateway (NOT for publishers)
+
+    captured: dict[str, Any] = {}
+
+    def acquirer(**kw: Any) -> None:
+        captured.update(kw)
+
+    establish_browser_session_for_create(
+        session=session,
+        email="e@example.com",
+        provider="gmail",
+        seren_user_id="",
+        bounty_id="",
+        config_gateway=config_gateway,
+        transport=object(),
+        pw_gateway=pw_gateway,
+        cache=cache,
+        acquirer=acquirer,
+        refresher=lambda **_: None,
+        restore=lambda *a, **kw: None,
+    )
+
+    # The probe ran (#714) and detected rejection → acquirer fired.
+    assert captured, "acquirer must be called after SDK rejection detected"
+
+    # The gateway routed to acquirer MUST be the HttpGateway, not the
+    # Playwright MCP gateway. This is the bug #714's fix uncovered.
+    assert captured["gateway"] is config_gateway, (
+        f"acquirer.gateway must be config_gateway (HttpGateway); "
+        f"got pw_gateway={captured['gateway'] is pw_gateway}, "
+        f"config_gateway={captured['gateway'] is config_gateway}"
+    )
+
+    # browser_session is a separate argument — that one IS the warm
+    # Playwright-driven session.
+    assert captured["browser_session"] is session
+
+
 def test_establish_attaches_cache_check_when_guard_bypassed_and_otp_fails() -> None:
     """Issue #664: when the cache-fresh guard at the top of
     `establish_browser_session_for_create` evaluates False, the function

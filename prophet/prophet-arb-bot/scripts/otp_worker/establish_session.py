@@ -206,6 +206,21 @@ def establish_browser_session_for_create(
 
     # Silent restore failed / cache stale → drive OTP cold-start on the
     # same session so the authenticated browser is the one we hand back.
+    #
+    # Issue #714 follow-up: ``acquirer``'s ``gateway`` argument is used to
+    # construct the Gmail/Outlook InboxReader (see
+    # ``otp_worker/inbox_reader.py:make_inbox_reader``) which calls
+    # ``gateway.call(publisher=...)`` — that is the HttpGateway publisher
+    # path, NOT the Playwright MCP gateway. The pre-#714 wiring passed
+    # ``pw_gateway`` when present, which would have raised
+    # ``EmailPublisherUnavailable`` from inside the inbox reader the moment
+    # the warm-context OTP fall-through fired. The pre-#714 observability
+    # check on the homepage false-positived 100% of the time, so this code
+    # path was never actually exercised in production — #714's probe-
+    # /create check makes it reachable, exposing the latent bug. Always
+    # pass ``config_gateway`` here; ``pw_gateway`` is the wrong type for
+    # publisher routing. ``browser_session`` separately carries the
+    # Playwright handle the acquirer uses for the in-browser OTP dance.
     try:
         acquirer(
             email=email,
@@ -213,7 +228,7 @@ def establish_browser_session_for_create(
             seren_user_id=seren_user_id,
             bounty_id=bounty_id,
             browser_session=session,
-            gateway=pw_gateway if pw_gateway is not None else config_gateway,
+            gateway=config_gateway,
             transport=transport,
             cache=cache,
         )
