@@ -99,6 +99,60 @@ def test_privy_restore_init_script_wraps_tokens_in_balanced_quotes() -> None:
     assert "app.prophetmarket.ai" in script, script
 
 
+def test_privy_restore_plants_deprecated_sentinel_when_refresh_token_empty() -> None:
+    """Issue #710: when the cached ``refresh_token`` is empty (the post-#666
+    cache shape — Privy SDK writes the literal ``"deprecated"`` sentinel
+    into ``privy:refresh_token`` post-OTP, and capture/cache normalize it
+    to empty for on-disk hygiene), the restore init script MUST plant the
+    sentinel back into localStorage rather than skip the key entirely.
+
+    Skipping the key was the pre-#710 behavior: the boot-time Privy SDK
+    then read ``null`` from ``privy:refresh_token``, treated the session
+    as corrupt, called ``destroyLocalState``, and tore down the JWT and
+    connections we'd just planted. Prophet middleware then redirected
+    ``/create`` to ``/?returnTo=%2Fcreate`` on every restored cycle.
+
+    Pin the contract: empty refresh_token in → the literal
+    JSON-stringified ``"deprecated"`` planted out. The SDK strips the
+    JSON wrapping via ``localStorage.getItem(k).slice(1, -1)`` and reads
+    the bare string ``deprecated``.
+    """
+    session = _StubSession()
+
+    restore_privy_session(session, jwt="eyJ.j.w.t", refresh_token="")
+
+    assert len(session.init_scripts) == 1, session.init_scripts
+    script = session.init_scripts[0]
+
+    # The refresh-token localStorage key MUST be referenced — not skipped.
+    assert PRIVY_REFRESH_LOCAL_STORAGE_KEY in script, script
+
+    # The planted value MUST be the JSON-stringified `"deprecated"`
+    # sentinel, embedded as a JS string literal. JSON-stringifying the
+    # Python string `deprecated` gives `"deprecated"`; embedding that
+    # as a JS string literal escapes the surrounding quotes as `\"`.
+    assert '"\\"deprecated\\""' in script, script
+
+
+def test_privy_restore_plants_real_refresh_token_when_cache_has_one() -> None:
+    """Issue #710 forward-compat: if the cache somehow carries a real
+    (non-empty, non-sentinel) refresh_token — for example an operator
+    on an older Privy install that still issues refresh tokens, or a
+    future Privy migration that brings them back — restore plants the
+    real value, not the sentinel.
+    """
+    session = _StubSession()
+
+    restore_privy_session(session, jwt="eyJ.j.w.t", refresh_token="rt_real")
+
+    script = session.init_scripts[0]
+
+    assert '"\\"rt_real\\""' in script, script
+    # And specifically NOT the sentinel value — pre-empts a future
+    # refactor that accidentally always plants "deprecated".
+    assert '"\\"deprecated\\""' not in script, script
+
+
 def test_privy_restore_plants_session_cookie_before_navigate() -> None:
     """Issue #705: when the cache carries a `privy_session_cookie`,
     `restore_privy_session` MUST plant it via `session.add_cookies(...)`

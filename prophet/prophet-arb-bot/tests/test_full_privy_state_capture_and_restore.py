@@ -153,8 +153,11 @@ def test_full_privy_state_round_trips_capture_cache_restore(tmp_path: Path) -> N
     # Rollback assertion: the script must NOT reference the dead keys.
     assert "privy:pat" not in script
     assert "privy:id_token" not in script
-    # And refresh_token does NOT — empty values are skipped per #666.
-    assert "privy:refresh_token" not in script
+    # Issue #710: refresh_token IS planted, with the literal
+    # "deprecated" sentinel filling in for the empty cache value.
+    # See _build_init_script docstring for why skipping the key tore
+    # down the planted session.
+    assert 'localStorage.setItem("privy:refresh_token", "\\"deprecated\\"")' in script
 
 
 def test_build_init_script_skips_empty_new_keys() -> None:
@@ -163,6 +166,11 @@ def test_build_init_script_skips_empty_new_keys() -> None:
     # they re-OTP. Restore must skip those setters rather than plant
     # empty strings (the SDK reads an empty plant as corruption, same
     # failure mode #666 and #674 documented).
+    #
+    # Issue #710: privy:refresh_token is the exception — Privy plants
+    # the literal "deprecated" sentinel itself at login post-migration,
+    # so restore plants it too rather than skipping (skipping = SDK
+    # reads null = session torn down).
     script = _build_init_script(
         jwt="jwt_value",
         refresh_token="",
@@ -174,7 +182,8 @@ def test_build_init_script_skips_empty_new_keys() -> None:
     assert "privy:connections" not in script
     assert "privy:caid" not in script
     assert "recent-login-method" not in script
-    assert "privy:refresh_token" not in script
+    # Issue #710: refresh_token IS planted with the sentinel value.
+    assert 'localStorage.setItem("privy:refresh_token", "\\"deprecated\\"")' in script
     # Rollback: the dropped keys stay absent even in the empty case.
     assert "privy:pat" not in script
     assert "privy:id_token" not in script

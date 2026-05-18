@@ -204,15 +204,31 @@ def _build_init_script(
     for ``about:blank`` and any subframes too, and there is no reason
     to leak Privy tokens to those origins.
 
-    Each Privy key is planted only when we have a non-empty value for
-    it. Per the #666/#674 diagnostics, planting an empty value (or the
-    legacy ``"deprecated"`` sentinel for ``refresh_token``, per #666)
-    is treated by the SDK as a corruption marker and triggers
-    ``destroyLocalState`` regardless of which OTHER keys are present.
+    Issue #710: ``privy:refresh_token`` is always planted, with the
+    literal ``"deprecated"`` sentinel when the cached refresh_token is
+    empty. Post-migration the Privy SDK itself writes that exact
+    sentinel into ``privy:refresh_token`` at login, and reads it on
+    every boot as the "post-migration JWT-only session" marker. The
+    pre-#710 restore skipped the key when refresh_token was empty;
+    Privy then read ``null`` from localStorage, decided the session
+    was corrupt, called ``destroyLocalState``, and tore down the JWT
+    and connections we'd just planted — which is why every restored
+    cycle landed on ``/?returnTo=%2Fcreate``. Capture and cache still
+    normalize ``"deprecated"`` to empty so the on-disk JSON stays
+    clean (#666); restore here is what reverses the normalization so
+    the planted state matches what the live SDK writes.
+
+    The remaining Privy keys (``privy:connections``, ``privy:caid``,
+    ``privy:<app_id>:recent-login-method``) are still planted only
+    when we have a non-empty value for them. Per the #674 diagnostics,
+    planting an empty ``privy:connections`` triggers a different
+    corruption path, so those gates stay in place.
     """
     body = _setter_js_string(PRIVY_TOKEN_LOCAL_STORAGE_KEY, jwt)
-    if refresh_token:
-        body += _setter_js_string(PRIVY_REFRESH_LOCAL_STORAGE_KEY, refresh_token)
+    body += _setter_js_string(
+        PRIVY_REFRESH_LOCAL_STORAGE_KEY,
+        refresh_token or "deprecated",
+    )
     if privy_connections:
         body += _setter_js_raw_json(
             PRIVY_CONNECTIONS_LOCAL_STORAGE_KEY, privy_connections
