@@ -38,6 +38,7 @@ from .playwright_client import (
     PrivyAuthArtifacts,
     at_onboarding_screen,
     capture_artifacts,
+    wait_for_privy_connections,
     fill_onboarding_form,
     open_privy_modal,
     submit_email,
@@ -167,6 +168,15 @@ def acquire_token(
     # fail closed on a missing refresh_token — the steady-state refresher
     # is a no-op for JWT-only sessions and OTP cold-start kicks in when
     # the JWT expires.
+    #
+    # Issue #678: ``privy:token`` lands the instant OTP verifies, but the
+    # Privy SDK provisions the embedded wallet asynchronously, so
+    # ``privy:connections`` (the wallet metadata Prophet's ``/create``
+    # signing path needs) lands a few seconds later. Wait for it before
+    # capturing — otherwise capture races and writes an empty wallet
+    # value, the next cycle's warm-context restore plants no signer, and
+    # ``/create`` entries block with ``ocs_session_id_not_captured``.
+    wait_for_privy_connections(browser_session)
     artifacts = capture_artifacts(browser_session, jwt=jwt)
 
     # Step 8: bind participant identity (P0 — plan §11.1 step 10, §3 ADR).
