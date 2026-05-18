@@ -153,6 +153,45 @@ def wait_for_jwt(
     )
 
 
+def wait_for_privy_connections(
+    session: BrowserSession,
+    *,
+    poll_seconds: float = 1.0,
+    timeout_seconds: float = 30.0,
+) -> str:
+    """Poll localStorage for ``privy:connections`` until it appears non-empty.
+
+    Issue #678: ``privy:token`` lands the moment OTP verifies, but the
+    Privy SDK provisions the embedded wallet *after* the JWT — so
+    ``privy:connections`` (which carries the wallet metadata that
+    Prophet's ``/create`` signing flow uses) lands seconds later. If
+    ``capture_artifacts`` reads it immediately after ``wait_for_jwt``
+    returns, capture races and writes an empty value to the cache.
+
+    This helper closes the race: callers run it between
+    ``wait_for_jwt`` and ``capture_artifacts``. The empty-string
+    fail-closed branch matches the policy spelled out in #678 — an
+    empty ``privy:connections`` in the cache is the failure mode this
+    function exists to prevent, so we raise ``OtpEmailTimeout`` rather
+    than silently let capture proceed.
+
+    Unlike the JWT, ``privy:connections`` is a JSON-stringified ARRAY
+    (no outer string wrapping). Bare ``getItem`` is the right read —
+    no ``_unwrap_jwt`` indirection.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        raw = session.get_local_storage(PRIVY_CONNECTIONS_LOCAL_STORAGE_KEY)
+        if raw and raw.strip() and raw.strip() not in ("[]", '""'):
+            return raw
+        time.sleep(poll_seconds)
+    raise OtpEmailTimeout(
+        f"privy:connections did not appear in localStorage within "
+        f"{timeout_seconds:.0f}s — embedded wallet failed to provision; "
+        f"refusing to capture an empty wallet value (#678)"
+    )
+
+
 def at_onboarding_screen(session: BrowserSession) -> bool:
     """True iff the browser is sitting on Prophet's first-time onboarding form.
 
