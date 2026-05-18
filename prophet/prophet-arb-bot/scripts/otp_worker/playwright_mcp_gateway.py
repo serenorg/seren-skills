@@ -428,7 +428,16 @@ def _extract_tool_body(result: dict[str, Any]) -> Any:
             try:
                 parsed = json.loads(text)
             except json.JSONDecodeError:
-                continue
+                # Issue #668: the bundled playwright-stealth MCP serializes
+                # tool results as `typeof result === "string" ? result :
+                # JSON.stringify(result)`, so bare-string returns
+                # (window.location.href, localStorage.getItem on most keys)
+                # land here as text that does NOT parse as JSON. The prior
+                # `continue` skipped them silently — every downstream string
+                # consumer (`get_url()`, `get_local_storage()`) then read
+                # None, which masqueraded as a missing Privy SDK session.
+                # Preserve the raw text for these callers.
+                return text
             if isinstance(parsed, dict):
                 body = parsed.get("body")
                 if isinstance(body, (dict, list)):
