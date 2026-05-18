@@ -12,6 +12,7 @@ these break, fix them in this file only.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -367,7 +368,21 @@ class RealBrowserSession:
         )
         result = self._call("/evaluate", {"script": script})
         unwrapped = _coerce_evaluate_result(result)
-        return unwrapped if isinstance(unwrapped, str) else None
+        if isinstance(unwrapped, str):
+            return unwrapped
+        # Issue #691: the bundled playwright-stealth MCP sends localStorage
+        # values verbatim as text. For values that happen to be valid JSON
+        # — privy:connections is a JSON array, the canonical case — the
+        # gateway's `_extract_tool_body` runs `json.loads` on the text and
+        # returns a Python list/dict. Re-serialize to the original string
+        # form so callers (#678's wait_for_privy_connections, capture, etc.)
+        # see what the page actually wrote. Without this, valid-JSON
+        # localStorage values silently came back as None and Privy
+        # provisioning appeared to hang at 30s when it had actually
+        # completed in <1s.
+        if isinstance(unwrapped, (list, dict)):
+            return json.dumps(unwrapped, separators=(",", ":"))
+        return None
 
     def dump_local_storage_keys(self) -> dict[str, str]:
         """Diagnostic enumeration; gated on PROPHET_BOUNTY_DEBUG_LOCAL_STORAGE.
