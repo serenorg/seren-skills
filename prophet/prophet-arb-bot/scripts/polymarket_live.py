@@ -2224,13 +2224,21 @@ def _resolve_v2_funder(
 
     Resolution order (each step is a strict fallback to the next):
 
-      1. `POLY_FUNDER` env override — when set, use it verbatim with
-         `signature_type=2` (POLY_GNOSIS_SAFE). Operator escape hatch
-         for offline runs or non-default funders.
-      2. CREATE2-derive the proxy via `fetch_proxy_address_for_eoa(eoa)`
+      1. `POLY_DEPOSIT_WALLET` env override — when set, use it verbatim
+         with `signature_type=3` (POLY_1271 / ERC-7739). This is the
+         only path that works against Polymarket CLOB v2 (post
+         2026-04-28); every sig_type=2 path is rejected with
+         `maker address not allowed, please use the deposit wallet flow`.
+         Wins over `POLY_FUNDER` because a stale POLY_FUNDER from a
+         pre-#745 install would silently route to sig_type=2 and
+         dump the user back into the v2-rejection error.
+      2. `POLY_FUNDER` env override — when set, use it verbatim with
+         `signature_type=2` (POLY_GNOSIS_SAFE). Legacy v1 path; kept
+         for back-compat and offline runs.
+      3. CREATE2-derive the proxy via `fetch_proxy_address_for_eoa(eoa)`
          AND confirm it's deployed via `fetch_eth_get_code(proxy) != "0x"`.
          If both pass, route to `(proxy, 2)`.
-      3. Otherwise return `(None, None)` so py-clob-client keeps the
+      4. Otherwise return `(None, None)` so py-clob-client keeps the
          EOA path. Preserves V1 wallets and fresh V2 wallets that have
          not yet completed onboarding.
 
@@ -2239,6 +2247,9 @@ def _resolve_v2_funder(
     harmlessly returns 0 for un-onboarded V2 (already the steady-state
     symptom the operator sees pre-onboarding).
     """
+    deposit_wallet = safe_str(os.getenv("POLY_DEPOSIT_WALLET"), "").strip()
+    if deposit_wallet:
+        return deposit_wallet, 3
     explicit = safe_str(os.getenv("POLY_FUNDER"), "").strip()
     if explicit:
         return explicit, 2
