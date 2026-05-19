@@ -30,18 +30,47 @@ from __future__ import annotations
 
 from typing import Any
 
+from poly_eip712_structs import EIP712Struct, make_domain
 from py_clob_client.clob_types import CreateOrderOptions, MarketOrderArgs, OrderArgs
 from py_clob_client.order_builder.builder import ROUNDING_CONFIG, OrderBuilder
-from py_order_utils.builders import OrderBuilder as UtilsOrderBuilder
+from py_order_utils.builders import OrderBuilder as _UpstreamUtilsOrderBuilder
 from py_order_utils.model import OrderData, SignedOrder
 from py_order_utils.signer import Signer as UtilsSigner
 
 POLYMARKET_V2_EXCHANGE_STANDARD: str = "0xE111180000d2663C0091e4f400237545B87B996B"
 POLYMARKET_V2_EXCHANGE_NEG_RISK: str = "0xe2222d279d744050d28e00520010520000310F59"
+POLYMARKET_V2_EIP712_DOMAIN_VERSION: str = "2"
 
 
 def _v2_exchange_address(neg_risk: bool) -> str:
     return POLYMARKET_V2_EXCHANGE_NEG_RISK if neg_risk else POLYMARKET_V2_EXCHANGE_STANDARD
+
+
+class _V2UtilsOrderBuilder(_UpstreamUtilsOrderBuilder):
+    """py_order_utils OrderBuilder with the EIP-712 domain version pinned to "2".
+
+    #740: The upstream `BaseBuilder._get_domain_separator` hardcodes
+    `version="1"`, but the v2 Polymarket CTF Exchange contracts both
+    advertise `version="2"` via `eip712Domain()` (verified on-chain
+    2026-05-19). Signing against `version="1"` produces a struct hash
+    the v2 validator rejects with `order_version_mismatch`, even when
+    the verifyingContract is the correct v2 address.
+    """
+
+    def _get_domain_separator(
+        self, chain_id: int, verifying_contract: str
+    ) -> EIP712Struct:
+        return make_domain(
+            name="Polymarket CTF Exchange",
+            version=POLYMARKET_V2_EIP712_DOMAIN_VERSION,
+            chainId=str(chain_id),
+            verifyingContract=verifying_contract,
+        )
+
+
+# Module-level alias kept so tests can monkeypatch one symbol and so
+# downstream code that wants the V2 utils builder has a stable handle.
+UtilsOrderBuilder = _V2UtilsOrderBuilder
 
 
 class V2OrderBuilder(OrderBuilder):
