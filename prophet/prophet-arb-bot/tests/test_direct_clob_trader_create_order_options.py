@@ -72,6 +72,13 @@ def test_create_order_passes_create_order_options_with_neg_risk_and_tick_size(
     class _FakeClobClient:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self._kwargs = kwargs
+            # #738: DirectClobTrader now swaps `self._client.builder` for
+            # V2OrderBuilder, which reads `self._client.signer`. Real
+            # ClobClient always constructs `.signer` from the key arg.
+            from py_clob_client.signer import Signer as ClobSigner
+
+            self.signer = ClobSigner(private_key=private_key, chain_id=137)
+            self.builder = None
 
         def get_address(self) -> str:
             return "0x" + "aa" * 20

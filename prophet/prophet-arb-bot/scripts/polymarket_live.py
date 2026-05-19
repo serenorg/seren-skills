@@ -2311,6 +2311,17 @@ class DirectClobTrader:
             funder=funder,
             signature_type=signature_type,
         )
+        # #738: py-clob-client 0.34.6 signs orders against the v1 exchange
+        # addresses; Polymarket's live CLOB validator now expects v2 and
+        # rejects v1-signed orders with `order_version_mismatch`. Swap the
+        # bundled OrderBuilder for V2OrderBuilder, which preserves signer,
+        # sig_type, and funder and only rotates the EIP-712 verifyingContract.
+        from polymarket_v2_order_builder import V2OrderBuilder
+        self._client.builder = V2OrderBuilder(
+            self._client.signer,
+            sig_type=signature_type,
+            funder=funder,
+        )
         self.address = safe_str(self._client.get_address(), "").lower()
         self._neg_risk_checked = False
         self._neg_risk_approval_status: dict[str, Any] | None = None
