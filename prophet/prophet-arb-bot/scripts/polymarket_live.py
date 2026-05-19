@@ -145,26 +145,38 @@ def assert_pinned_spenders_match_py_clob_client(*, chain_id: int = 137) -> froze
     Returns the verified subset (lowercased) for caller logging.
     """
     try:
-        from py_clob_client.config import get_contract_config
+        from py_clob_client_v2.config import get_contract_config
     except ImportError as exc:
         raise RuntimeError(
-            "py-clob-client is required for the Polymarket spender drift "
+            "py-clob-client-v2 is required for the Polymarket spender drift "
             "guard. Install via `pip install -r requirements.txt`."
         ) from exc
 
+    # #743: py_clob_client_v2.get_contract_config(chain_id) returns a
+    # ContractConfig with both v1 and v2 addresses on the same object
+    # (`.exchange`, `.neg_risk_exchange`, `.exchange_v2`,
+    # `.neg_risk_exchange_v2`). The pinned spender set in this skill's
+    # SKILL.md covers all four, so we cross-check all four here — if any
+    # one of them drifts away from what the SDK is shipping we want to
+    # fail closed before broadcasting any approve() transactions.
+    config = get_contract_config(chain_id)
+    addresses_to_verify = [
+        ("exchange (v1 standard)", config.exchange),
+        ("neg_risk_exchange (v1)", config.neg_risk_exchange),
+        ("exchange_v2 (standard)", config.exchange_v2),
+        ("neg_risk_exchange_v2", config.neg_risk_exchange_v2),
+    ]
     verified: set[str] = set()
-    for neg_risk in (False, True):
-        config = get_contract_config(chain_id, neg_risk=neg_risk)
-        exchange = config.exchange.lower()
-        if exchange not in _PINNED_POLYMARKET_SPENDERS:
+    for label, address in addresses_to_verify:
+        lowered = address.lower()
+        if lowered not in _PINNED_POLYMARKET_SPENDERS:
             raise RuntimeError(
-                f"py-clob-client `get_contract_config(chain_id={chain_id}, "
-                f"neg_risk={neg_risk})` returned exchange {exchange!r}, which is "
-                "not in the pinned Polymarket spender set. py-clob-client may have "
-                "shipped new addresses — investigate before auto-submitting any "
-                "approve() transactions."
+                f"py-clob-client-v2 `get_contract_config(chain_id={chain_id})` "
+                f"reported {label}={lowered!r}, which is not in the pinned "
+                "Polymarket spender set. The SDK may have shipped new addresses "
+                "— investigate before auto-submitting any approve() transactions."
             )
-        verified.add(exchange)
+        verified.add(lowered)
     return frozenset(verified)
 
 
@@ -2261,11 +2273,11 @@ class DirectClobTrader:
         self.timeout_seconds = timeout_seconds
 
         try:
-            from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import ApiCreds
+            from py_clob_client_v2 import ClobClient
+            from py_clob_client_v2.clob_types import ApiCreds
         except ImportError as exc:
             raise RuntimeError(
-                "Direct CLOB trading requires `py-clob-client`. "
+                "Direct CLOB trading requires `py-clob-client-v2`. "
                 "Create and activate a virtual environment first, then run "
                 "`python -m pip install -r requirements.txt`."
             ) from exc
@@ -2303,6 +2315,17 @@ class DirectClobTrader:
         from eth_account import Account
         eoa_address = Account.from_key(private_key).address
         funder, signature_type = _resolve_v2_funder(eoa_address=eoa_address)
+        # #743: py-clob-client 0.34.x signs the v1 Order EIP-712 struct,
+        # but Polymarket migrated CLOB to v2 on 2026-04-28. The v2 struct
+        # drops taker/expiration/nonce/feeRateBps and adds
+        # timestamp/metadata/builder, so any v1-signed order is rejected
+        # at submission with `order_version_mismatch`. py-clob-client-v2
+        # is Polymarket's official SDK for the v2 wire format: it ships
+        # the v2 OrderBuilder, resolves the v2 verifyingContract per
+        # neg-risk flag, defaults timestamp/metadata/builder correctly,
+        # and keeps the same constructor + (create_order, post_order)
+        # shape. The previous V2OrderBuilder subclass (#738/#740) was a
+        # narrow patch on the v1 SDK; the v2 SDK replaces it entirely.
         self._client = ClobClient(
             host="https://clob.polymarket.com",
             key=private_key,
@@ -2310,17 +2333,6 @@ class DirectClobTrader:
             creds=creds,
             funder=funder,
             signature_type=signature_type,
-        )
-        # #738: py-clob-client 0.34.6 signs orders against the v1 exchange
-        # addresses; Polymarket's live CLOB validator now expects v2 and
-        # rejects v1-signed orders with `order_version_mismatch`. Swap the
-        # bundled OrderBuilder for V2OrderBuilder, which preserves signer,
-        # sig_type, and funder and only rotates the EIP-712 verifyingContract.
-        from polymarket_v2_order_builder import V2OrderBuilder
-        self._client.builder = V2OrderBuilder(
-            self._client.signer,
-            sig_type=signature_type,
-            funder=funder,
         )
         self.address = safe_str(self._client.get_address(), "").lower()
         self._neg_risk_checked = False
@@ -2349,25 +2361,22 @@ class DirectClobTrader:
         size: float,
         tick_size: str,
         neg_risk: bool,
-        fee_rate_bps: int,
+        fee_rate_bps: int = 0,
     ) -> Any:
-        # Albania E2E (2026-05-18): every hedge submission returned
-        # PolyApiException[status_code=400, error_message={'error':
-        # 'order_version_mismatch'}]. Root cause: this method previously
-        # discarded `tick_size`, `neg_risk`, and `fee_rate_bps` and called
-        # `self._client.create_order(order_args)` with no options. The CLOB
-        # then signs neg-risk markets against the standard exchange
-        # `0x4bFb…` and rejects them. The sister `PolymarketPublisherTrader`
-        # in this file forwards `CreateOrderOptions(tick_size, neg_risk)`
-        # explicitly — that is the proven-working pattern across the other
-        # Polymarket skills. Match it here so the caller's `/book`-sourced
-        # `neg_risk` flag actually reaches py-clob-client.
-        from py_clob_client.clob_types import (
-            CreateOrderOptions,
+        # #743: py-clob-client-v2 uses the v2 Order EIP-712 struct, which
+        # no longer carries `fee_rate_bps` (fees are handled out-of-band
+        # by the v2 exchange). The kwarg is kept in the signature so
+        # existing callers in scoring/hedge paths don't break — it is
+        # accepted and ignored. `CreateOrderOptions(tick_size, neg_risk)`
+        # is still the canonical way to tell the v2 OrderBuilder which
+        # exchange to sign against (standard v2 vs neg-risk v2).
+        del fee_rate_bps  # explicit no-op for the deprecated kwarg
+        from py_clob_client_v2.clob_types import (
             OrderArgs,
             OrderType,
+            PartialCreateOrderOptions,
         )
-        from py_clob_client.order_builder.constants import BUY, SELL
+        from py_clob_client_v2.order_builder.constants import BUY, SELL
 
         clob_side = BUY if side.upper() == "BUY" else SELL
         order_args = OrderArgs(
@@ -2375,11 +2384,10 @@ class DirectClobTrader:
             size=size,
             side=clob_side,
             token_id=token_id,
-            fee_rate_bps=fee_rate_bps,
         )
         signed_order = self._client.create_order(
             order_args,
-            CreateOrderOptions(
+            PartialCreateOrderOptions(
                 tick_size=tick_size,
                 neg_risk=neg_risk,
             ),
@@ -2414,11 +2422,15 @@ class DirectClobTrader:
             return []
 
     def cancel_order(self, order_id: str) -> Any:
-        return self._client.cancel(order_id=order_id)
+        # #743: py_clob_client_v2 replaced `cancel(order_id=...)` with
+        # `cancel_order(OrderPayload(orderID=...))`. Same wire effect.
+        from py_clob_client_v2.clob_types import OrderPayload
+
+        return self._client.cancel_order(OrderPayload(orderID=order_id))
 
     def get_cash_balance(self) -> float:
         try:
-            from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+            from py_clob_client_v2.clob_types import AssetType, BalanceAllowanceParams
 
             payload = self._client.get_balance_allowance(
                 BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
