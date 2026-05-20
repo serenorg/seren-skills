@@ -60,22 +60,23 @@ PROPHET_STABLE_URL = "https://app.prophetmarket.ai/markets"
 
 # Privy-compatible env profile for the bundled `playwright-stealth` MCP.
 #
-# Final shape after the #680 → #689 saga: just BROWSER_TYPE=chrome. The
-# bundled MCP's full default stealth + page-init patch is what the
-# connected MCP runs, and what Privy is tested against. Empirical proof
-# (#689 walk-through, 2026-05-18): truly cold OTP login through the
-# connected MCP populates privy:connections in **251 ms** with full
-# default stealth; the same path under the previous evasion-disabling
+# Final shape after the #680 → #748 saga: BROWSER_TYPE=chrome to route
+# the bundled MCP at real Chrome, and SEREN_PLAYWRIGHT_HEADLESS=1 to
+# match the connected MCP's headless launch flags. The bundled MCP's
+# full default stealth + page-init patch is what the connected MCP
+# runs, and what Privy is tested against. Empirical proof (#689 walk-
+# through, 2026-05-18): truly cold OTP login through the connected MCP
+# populates privy:connections in **251 ms** with full default stealth
+# in headless mode; the same path under the previous evasion-disabling
 # profile (#681/#682) timed out at the 30s OtpEmailTimeout guard in
 # three consecutive cycles on the same machine.
 #
 # History of the false starts that led here (do not re-add these):
-#   - SEREN_PLAYWRIGHT_HEADLESS=0 (added #681/#682, removed #687/#688)
+#   - SEREN_PLAYWRIGHT_HEADLESS=0 (added #681/#682)
 #       Set on Desktop #1957's README warning about headless Chromium
 #       iframe regressions (microsoft/playwright#31896, #33674). That
-#       regression is Chromium-specific; real Chrome handles headless
-#       fine. The connected MCP runs headless and provisions Privy in
-#       <300ms.
+#       regression is Chromium-specific; once #685/#686 routed to real
+#       Chrome the warning no longer applied.
 #   - SEREN_PLAYWRIGHT_STEALTH_EVASIONS_DISABLE=iframe.contentWindow,
 #       navigator.permissions (added #681/#682, removed #689)
 #       Set on the theory that Privy probes those surfaces and the
@@ -88,6 +89,16 @@ PROPHET_STABLE_URL = "https://app.prophetmarket.ai/markets"
 #       the stealth plugin. Same direction error: the bundled MCP's
 #       hand-rolled patch is part of what Privy expects.
 #
+# Headed-mode regression (issue #748, fixed below):
+#   PR #688 (issue #687) removed SEREN_PLAYWRIGHT_HEADLESS=0 believing
+#   the bundled MCP defaulted to headless when the var was unset. The
+#   actual ship logic in browser.ts:509 and the compiled browser.js:315
+#   is `return env[PLAYWRIGHT_HEADLESS_ENV] === "1"` — unset defaults
+#   to headed. The fix #687 intended is to set "1" explicitly, which
+#   is what the connected MCP does to provision Privy in ~5s on real
+#   Chrome. The companion test deleted in #748 had the inverted-logic
+#   docstring that seeded the original confusion.
+#
 # What stays:
 #   BROWSER_TYPE=chrome (issue #685)
 #       Forces the bundled MCP to use real Google Chrome (installed-
@@ -96,8 +107,15 @@ PROPHET_STABLE_URL = "https://app.prophetmarket.ai/markets"
 #       provisioning needs Chrome-specific surfaces (Widevine CDM, GAIA
 #       identity, WebAuthn platform authenticator) that vanilla Chromium
 #       does not ship.
+#   SEREN_PLAYWRIGHT_HEADLESS=1 (issue #748)
+#       Forces headless launch. Matches the connected MCP's argv
+#       (--headless --hide-scrollbars --mute-audio ...) which is the
+#       only path empirically known to provision Privy quickly. Real
+#       Chrome handles headless cleanly; the Desktop #1957 README
+#       warning was Chromium-specific.
 PRIVY_COMPATIBLE_ENV: dict[str, str] = {
     "BROWSER_TYPE": "chrome",
+    "SEREN_PLAYWRIGHT_HEADLESS": "1",
 }
 _RESET_ENTRY_CAPTURE_SCRIPT = """
 (() => {
