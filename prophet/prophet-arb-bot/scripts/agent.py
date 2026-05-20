@@ -2575,11 +2575,14 @@ class _WarmCreateMarketUiContext:
             return False
 
     def _open(self) -> None:
-        # Issue #681: spawn the cycle-scoped `/create` MCP child with the
-        # Privy-compatible env profile (HEADLESS=0, two stealth evasions
-        # dropped, page-init patch off). Older Desktop builds ignore these
-        # vars and the child launches stealth-on; the skill still fails
-        # closed downstream on `prophet_session_unavailable` in that case.
+        # Spawn the cycle-scoped `/create` MCP child with the Privy-
+        # compatible env profile defined in playwright_mcp_gateway.py.
+        # Post #748: BROWSER_TYPE=chrome routes to real Chrome, and
+        # SEREN_PLAYWRIGHT_HEADLESS=1 forces the headless launch flags
+        # the connected MCP uses to provision Privy in ~5s. Older
+        # Desktop builds that ignore these vars launch headed /
+        # stealth-on; the skill still fails closed downstream on
+        # `prophet_session_unavailable` in that case.
         pw_gateway = PlaywrightStealthGateway(
             env_overrides=PRIVY_COMPATIBLE_ENV,
         ).__enter__()

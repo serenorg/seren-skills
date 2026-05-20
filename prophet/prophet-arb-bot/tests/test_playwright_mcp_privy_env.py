@@ -45,19 +45,21 @@ from otp_worker import playwright_mcp_gateway as pmg
 # Chrome instead of bundled Chromium (Privy's embedded wallet needs
 # Chrome-specific surfaces). See tests/test_privy_env_browser_type_chrome_issue685.py
 # for the dedicated rationale test.
-# Issue #687 dropped SEREN_PLAYWRIGHT_HEADLESS=0: with BROWSER_TYPE=chrome
-# in place, headless Chrome (the bundled MCP's default when the var is
-# unset) is what Privy is actually tested against; headed Chrome times
-# out at 30s on Privy embedded-wallet provisioning. See
-# tests/test_privy_env_headless_default_issue687.py.
 # Issue #689 dropped both SEREN_PLAYWRIGHT_STEALTH_EVASIONS_DISABLE and
 # SEREN_PLAYWRIGHT_DISABLE_PAGE_INIT_PATCH: Desktop #1957's README guidance
 # was inverted. Connected-MCP walk-through with full default stealth +
 # page-init patch ON populates privy:connections in 251ms; previous
 # profile timed out at 30s in three cycles. See
 # tests/test_privy_env_full_stealth_issue689.py.
+# Issue #748 set SEREN_PLAYWRIGHT_HEADLESS=1 explicitly. PR #688 (issue
+# #687) dropped the prior "=0" believing the bundled MCP defaulted to
+# headless when the var was unset. The ship logic in browser.ts:509 and
+# the compiled browser.js:315 is `return env[...] === "1"`, so unset
+# means headed. Setting "1" is what actually enables headless — the
+# mode the connected MCP uses to provision Privy in ~5s on real Chrome.
 EXPECTED_PRIVY_PROFILE_KEYS = {
     "BROWSER_TYPE": "chrome",
+    "SEREN_PLAYWRIGHT_HEADLESS": "1",
 }
 
 
