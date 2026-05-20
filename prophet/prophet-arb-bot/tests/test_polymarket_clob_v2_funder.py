@@ -25,6 +25,7 @@ def _clear_poly_funder(monkeypatch) -> None:
     would mask the auto-resolution branches under test."""
     monkeypatch.delenv("POLY_FUNDER", raising=False)
     monkeypatch.delenv("POLY_DEPOSIT_WALLET", raising=False)
+    monkeypatch.delenv("POLY_SIGNATURE_TYPE", raising=False)
 
 
 EOA = "0x000000000000000000000000000000000000000A"

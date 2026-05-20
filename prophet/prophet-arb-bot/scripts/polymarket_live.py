@@ -9,12 +9,13 @@ import select
 import shlex
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import pstdev
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -2227,17 +2228,31 @@ def _resolve_v2_funder(
       1. `POLY_DEPOSIT_WALLET` env override — when set, use it verbatim
          with `signature_type=3` (POLY_1271 / ERC-7739). This is the
          only path that works against Polymarket CLOB v2 (post
-         2026-04-28); every sig_type=2 path is rejected with
+         2026-04-28) for new deposit-wallet users; every sig_type=2
+         path against a non-Safe contract is rejected with
          `maker address not allowed, please use the deposit wallet flow`.
          Wins over `POLY_FUNDER` because a stale POLY_FUNDER from a
          pre-#745 install would silently route to sig_type=2 and
-         dump the user back into the v2-rejection error.
-      2. `POLY_FUNDER` env override — when set, use it verbatim with
-         `signature_type=2` (POLY_GNOSIS_SAFE). Legacy v1 path; kept
-         for back-compat and offline runs.
+         dump the user back into the v2-rejection error. The pairing
+         with sig_type=3 is semantic — `POLY_SIGNATURE_TYPE` is
+         ignored here on purpose; honoring it would let an operator
+         submit orders with a signature scheme that does not match
+         the deposit-wallet contract.
+      2. `POLY_FUNDER` env override — when set, use it verbatim. The
+         signature type is taken from `POLY_SIGNATURE_TYPE` when that
+         env var parses as a positive int, otherwise defaults to
+         sig_type=2 (POLY_GNOSIS_SAFE). The override exists because
+         existing POLY_PROXY (sig_type=1) accounts on Polymarket
+         hold non-zero collateral and have full v2 spender allowances,
+         but the CLOB rejects orders signed under sig_type=2 against
+         a POLY_PROXY contract — the operator needs a way to force
+         sig_type=1 without code changes.
       3. CREATE2-derive the proxy via `fetch_proxy_address_for_eoa(eoa)`
          AND confirm it's deployed via `fetch_eth_get_code(proxy) != "0x"`.
-         If both pass, route to `(proxy, 2)`.
+         If both pass, route to `(proxy, 2)`. `POLY_SIGNATURE_TYPE`
+         applies here too for the same POLY_PROXY case — when both
+         the env override AND auto-derive land on the same proxy
+         address, the operator's explicit sig_type still wins.
       4. Otherwise return `(None, None)` so py-clob-client keeps the
          EOA path. Preserves V1 wallets and fresh V2 wallets that have
          not yet completed onboarding.
@@ -2249,10 +2264,15 @@ def _resolve_v2_funder(
     """
     deposit_wallet = safe_str(os.getenv("POLY_DEPOSIT_WALLET"), "").strip()
     if deposit_wallet:
+        # POLY_DEPOSIT_WALLET is semantically tied to POLY_1271 — do
+        # NOT honor POLY_SIGNATURE_TYPE here. See docstring branch 1.
         return deposit_wallet, 3
+    sig_type_override = _parse_signature_type_override(
+        os.getenv("POLY_SIGNATURE_TYPE")
+    )
     explicit = safe_str(os.getenv("POLY_FUNDER"), "").strip()
     if explicit:
-        return explicit, 2
+        return explicit, sig_type_override if sig_type_override is not None else 2
     try:
         from polymarket_v2_broadcast import (
             fetch_eth_get_code,
@@ -2266,7 +2286,69 @@ def _resolve_v2_funder(
     code = fetch_eth_get_code(proxy)
     if not code or code == "0x":
         return None, None
-    return proxy, 2
+    return proxy, sig_type_override if sig_type_override is not None else 2
+
+
+def _parse_signature_type_override(raw: str | None) -> int | None:
+    """Parse `POLY_SIGNATURE_TYPE` into a py-clob-client SignatureType
+    enum value (0=EOA, 1=POLY_PROXY, 2=POLY_GNOSIS_SAFE, 3=POLY_1271).
+    Returns None for unset/empty/invalid values so the resolver falls
+    back to the per-branch default rather than silently misrouting on
+    a typo."""
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        return None
+    if value < 0 or value > 3:
+        return None
+    return value
+
+
+def _autodetect_signature_type(
+    *,
+    funder: str,
+    probe_balance: Callable[..., int],
+    candidates: tuple[int, ...] = (1, 2, 3),
+) -> int | None:
+    """Probe `/balance-allowance` under candidate sig_types and return
+    the first sig_type whose collateral balance is positive.
+
+    Polymarket lets a single signer EOA control multiple account-type
+    identities (POLY_PROXY, POLY_GNOSIS_SAFE, POLY_1271 deposit wallet),
+    each at the same funder address but distinguished by signature type
+    at order-placement time. The v2 CLOB rejects orders whose sig_type
+    does not match the contract type at the funder address, with
+    `maker address not allowed, please use the deposit wallet flow`.
+    `_resolve_v2_funder` cannot tell which sig_type matches the contract
+    without making a network call, so this helper does the probe.
+
+    `probe_balance(funder=, signature_type=) -> int` is injected so the
+    composition layer (DirectClobTrader.__init__) can pass a real
+    `ClobClient.get_balance_allowance` call and the tests can pass a
+    fake. Returns the first sig_type with positive balance, or None
+    when every candidate returns zero or every candidate raises.
+
+    Short-circuits on first positive hit to keep startup latency at a
+    single CLOB round trip when the operator's account is the most
+    common legacy POLY_PROXY shape (sig_type=1).
+    """
+    for sig_type in candidates:
+        try:
+            balance = probe_balance(funder=funder, signature_type=sig_type)
+        except Exception:
+            # Probe failure is per-candidate — keep iterating rather
+            # than blow up startup. If every candidate raises (CLOB
+            # API down), the all-None fallback below kicks in and
+            # the caller uses the resolver's default sig_type.
+            continue
+        if balance and int(balance) > 0:
+            return sig_type
+    return None
 
 
 class DirectClobTrader:
@@ -2326,6 +2408,59 @@ class DirectClobTrader:
         from eth_account import Account
         eoa_address = Account.from_key(private_key).address
         funder, signature_type = _resolve_v2_funder(eoa_address=eoa_address)
+        # Autodetect sig_type when the operator did not set
+        # POLY_SIGNATURE_TYPE and the resolver landed on a funder via
+        # the default sig_type=2 path. Existing POLY_PROXY (sig_type=1)
+        # accounts hold non-zero collateral at the same funder address
+        # but reject /order under sig_type=2 with
+        # `maker address not allowed, please use the deposit wallet flow`.
+        # Probing /balance-allowance for each candidate is the only way
+        # to know which contract type lives at the funder address
+        # without an on-chain bytecode classifier. Skipped when:
+        #   - funder is None (EOA path — nothing to probe)
+        #   - sig_type=3 (POLY_DEPOSIT_WALLET is semantically tied to
+        #     POLY_1271 and the resolver does not allow overrides)
+        #   - POLY_SIGNATURE_TYPE was set (operator's explicit choice
+        #     wins; the resolver already honored it)
+        if (
+            funder is not None
+            and signature_type == 2
+            and not safe_str(os.getenv("POLY_SIGNATURE_TYPE"), "").strip()
+        ):
+            def _probe_balance(*, funder: str, signature_type: int) -> int:
+                from py_clob_client_v2.clob_types import (
+                    AssetType,
+                    BalanceAllowanceParams,
+                )
+
+                probe_client = ClobClient(
+                    host="https://clob.polymarket.com",
+                    key=private_key,
+                    chain_id=chain_id,
+                    creds=creds,
+                    funder=funder,
+                    signature_type=signature_type,
+                )
+                result = probe_client.get_balance_allowance(
+                    BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+                )
+                return int(result.get("balance", "0") or 0)
+
+            detected = _autodetect_signature_type(
+                funder=funder,
+                probe_balance=_probe_balance,
+            )
+            if detected is not None and detected != signature_type:
+                # Stamp the change to stderr so operators can see the
+                # autodetect path fired and which sig_type was picked —
+                # the alternative is silent magic that's invisible when
+                # debugging "maker address not allowed" recurrences.
+                sys.stderr.write(
+                    f"[polymarket_live] autodetected signature_type={detected} "
+                    f"for funder={funder} (resolver default was {signature_type})\n"
+                )
+                sys.stderr.flush()
+                signature_type = detected
         # #743: py-clob-client 0.34.x signs the v1 Order EIP-712 struct,
         # but Polymarket migrated CLOB to v2 on 2026-04-28. The v2 struct
         # drops taker/expiration/nonce/feeRateBps and adds

@@ -687,6 +687,12 @@ Seed hedge statuses:
 
 - The arb-bot already has an open order at this outcome+side. By design — the bot does not double-quote.
 
+**Polymarket `/order` rejects every hedge with `maker address not allowed, please use the deposit wallet flow`.**
+
+- The hedge signer EOA has a registered Polymarket account, but the v2 CLOB is rejecting the order because the signature type does not match the contract type at the funder address. Polymarket recognizes three legacy account contract types (sig_type=1 POLY_PROXY, sig_type=2 POLY_GNOSIS_SAFE, sig_type=3 POLY_1271 deposit wallet); the resolver picks one and the CLOB rejects everything else.
+- The runner now autodetects the right sig_type at startup by probing `/balance-allowance` under each candidate and picking the one with non-zero collateral. The autodetect fires only when `POLY_SIGNATURE_TYPE` is **not** set and the resolver landed on a funder via the default sig_type=2 path. Watch the runner's stderr for `[polymarket_live] autodetected signature_type=N for funder=...` — that line confirms the override was applied.
+- Manual escape hatch: set `POLY_SIGNATURE_TYPE=1` (or `2` / `3`) alongside `POLY_FUNDER` in `<skill-root>/.env`. The resolver returns `(POLY_FUNDER, POLY_SIGNATURE_TYPE)` verbatim, skipping the autodetect probe. Use this when you already know your account type or when the autodetect probe cannot reach the CLOB at startup. `POLY_DEPOSIT_WALLET` ignores `POLY_SIGNATURE_TYPE` because the deposit-wallet flow is semantically tied to sig_type=3.
+
 **`create_market_via_ui_unexpected` with `TimeoutError: Timed out waiting for response from playwright-stealth MCP` in `payload.error` (#647).**
 
 - Peer `playwright-stealth` MCP children from other Claude Code / Codex sessions are competing for the host Playwright runtime. Every `--command run --yes-live` cycle now reclaims stale peer children automatically before spawning its own — no manual intervention is needed under normal conditions.
