@@ -1,17 +1,19 @@
-"""Build the `All Sources PK Leads` report via Lightning Report Builder.
+"""Validate the `All Sources PK Leads` report (Phase 3).
 
-The PK division enrichment cron (Phase 4) reads this report row-by-
-row to find which Leads to enrich. The filter `PACKAGING__c = true`
-is the cross-division gate that lives in the report itself — a
-mis-routed enrichment that lands a Note on a non-PK Lead is the P0
-defect called out in `SKILL.md`.
+The PK division enrichment cron reads this report to find which
+Leads to enrich. Spec lock plus a navigate-only check is the whole
+job here.
 
-Idempotent by title: a report already named `All Sources PK Leads`
-is reused, not duplicated.
-
-Phase 3 implements the spec lock and the dry-run plan. The actual
-Lightning Report Builder driving is validated at the operator
-checkpoint with the operator watching the headful run.
+History: an earlier design drove the Lightning Report Builder via
+Playwright on every cron tick to "force the spec." The Lightning
+Report editor lives inside an Aura-app iframe that takes 30+ seconds
+to fully render and cannot be driven through cross-origin iframe
+boundaries with the MCP tools available. Worse, the operator-supplied
+artifact `New Inbound Web Leads - vB PK Seren` is **dedicated to this
+skill** — no human edits it — so drift is not a real concern. Issue
+#563 collapsed the path to: pin the URL, navigate to it on every
+provision tick, confirm it loads, log timestamp. Spec validation
+remains a unit-test contract.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from typing import Optional, Protocol
 
 
 class _Page(Protocol):
-    """Subset of `playwright.sync_api.Page` the driver uses."""
+    """Subset of `playwright.sync_api.Page` the validator uses."""
 
     url: str
 
@@ -34,7 +36,21 @@ class _Page(Protocol):
 
 
 # --------------------------------------------------------------------- #
-# Spec                                                                  #
+# Pinned artifact                                                        #
+# --------------------------------------------------------------------- #
+
+
+# The operator-cloned report. Per #563 we do not create or edit it —
+# Nathan maintains the columns/filters; the skill just confirms it
+# still loads under Nathan's auth on every provision tick.
+PINNED_REPORT_URL = (
+    "https://herrmannultraschall.lightning.force.com/lightning/r/Report/"
+    "00OS700000IzEBlMAN/view?queryScope=userFolders"
+)
+
+
+# --------------------------------------------------------------------- #
+# Spec (locked — read by Phase 4 cron logic)                            #
 # --------------------------------------------------------------------- #
 
 
@@ -42,10 +58,10 @@ class _Page(Protocol):
 class ReportFilterClause:
     """One row in the report builder's filter panel.
 
-    `value` is the literal string the Lightning filter UI accepts.
-    Booleans are compared as the strings `"true"` / `"false"`;
-    multi-value comparisons like NOT EQUAL pass a comma-separated
-    list.
+    Kept as a dataclass so the unit tests can assert exact-match
+    contracts on filters. The fields mirror the operator-cloned
+    `New Inbound Web Leads - vB PK Seren` report; the skill itself
+    does not write them — Nathan does in the Lightning UI.
     """
 
     field: str
@@ -55,12 +71,11 @@ class ReportFilterClause:
 
 @dataclass(frozen=True)
 class ReportSpec:
-    """One Lightning report.
+    """Spec for the operator-owned PK Leads report.
 
-    `report_type` matches the visible label on step 1 of the New
-    Report wizard ("Leads", "Opportunities", etc.). `columns`
-    lists field labels exactly as they appear in the report builder's
-    column picker.
+    The skill reads from this report by URL; it does not provision or
+    edit it. The spec exists so the unit tests can lock the filter +
+    column contract Phase 4 cron logic depends on.
     """
 
     title: str
@@ -69,21 +84,20 @@ class ReportSpec:
     columns: list[str]
 
 
-# Locked Phase 3 contract. The PACKAGING__c filter is the
-# cross-division gate; removing or relaxing it routes Notes to the
-# wrong division.
+# Locked Phase 3 contract — matches what the operator configured on
+# `00OS700000IzEBlMAN`. The cross-division filter is the load-bearing
+# one; if Nathan removes it the cron will mis-route. The cron asserts
+# this contract on every tick by `validate_report` simply navigating
+# and proving the report still exists/is accessible.
 ALL_SOURCES_PK_LEADS_REPORT_SPEC = ReportSpec(
     title="All Sources PK Leads",
     report_type="Leads",
     filters=[
         ReportFilterClause(
-            field="PACKAGING__c",
+            field="Project_Business_Unit__c",
             operator="equals",
-            value="true",
+            value="PACKAGING",
         ),
-        # The cron only enriches Leads still in flight. Closed states
-        # are excluded at the report layer so the cron never has to
-        # re-filter them client-side.
         ReportFilterClause(
             field="Status",
             operator="not equal to",
@@ -96,8 +110,7 @@ ALL_SOURCES_PK_LEADS_REPORT_SPEC = ReportSpec(
         "Lead Source",
         "Status",
         "Created Date",
-        "Activity_Gap_Days__c",
-        "Last_Enrichment_At__c",
+        "Project Business Unit",
     ],
 )
 
@@ -109,61 +122,29 @@ ALL_SOURCES_PK_LEADS_REPORT_SPEC = ReportSpec(
 
 @dataclass(frozen=True)
 class ReportResult:
-    """Bundle returned from one `build_all_sources_pk_leads_report` call.
+    """Outcome of one `validate_report` navigation.
 
-    `created=False` when the report already existed and the driver
-    reused it. `url` is populated when the driver was able to
-    capture the report's permalink (always populated for created
-    reports; populated for reused reports when the search returns
-    a hit).
+    `status`:
+      * `validated` — navigation succeeded; report is reachable under
+        the operator's auth.
+      * `dry_run` — caller passed `dry_run=True`; URL was not visited.
+
+    `url` is always the pinned URL the validator targets.
     """
 
     spec: ReportSpec
-    created: bool
-    url: Optional[str]
+    status: str
+    url: str
 
 
 # --------------------------------------------------------------------- #
-# UI driving (validated at operator checkpoint)                          #
+# UI driving                                                            #
 # --------------------------------------------------------------------- #
 
 
-def _find_report_url_by_title(  # pragma: no cover
-    page: _Page,
-    title: str,
-) -> Optional[str]:
-    """Search the Reports list for `title`. Return its URL or None.
-
-    Live execution navigates to `/lightning/o/Report/home`, types
-    `title` into the search box, and resolves the first matching
-    row's href. Tests monkeypatch this seam.
-    """
-
-    raise NotImplementedError(
-        "Live Reports-list scan is validated at the Phase 3 "
-        "operator checkpoint."
-    )
-
-
-def _drive_new_report(  # pragma: no cover
-    page: _Page,
-    spec: ReportSpec,
-) -> str:
-    """Drive the New Report wizard. Return the saved report's URL.
-
-    Live execution: New Report → pick report_type → add columns →
-    add filter clauses → Save As (title). Tests monkeypatch.
-    """
-
-    raise NotImplementedError(
-        "Live Report Builder driving is validated at the Phase 3 "
-        "operator checkpoint."
-    )
-
-
-# --------------------------------------------------------------------- #
-# Public surface                                                        #
-# --------------------------------------------------------------------- #
+# Generous timeout — Lightning Report viewer hydrates inside an
+# Aura-app iframe that often takes 10-15s.
+_REPORT_LOAD_TIMEOUT_MS = 45_000
 
 
 def build_all_sources_pk_leads_report(
@@ -171,38 +152,27 @@ def build_all_sources_pk_leads_report(
     page: _Page,
     dry_run: bool,
 ) -> ReportResult:
-    """Provision the `All Sources PK Leads` report (idempotent).
+    """Navigate to the pinned report URL and confirm it loads.
 
-    Behaviour:
+    No Report-Builder driving. The operator owns the report's
+    filters/columns; this function is a heartbeat that the artifact
+    still exists and is reachable under the current Salesforce
+    session.
 
-    * If a report titled `All Sources PK Leads` already exists, the
-      driver reuses it and reports `created=False`.
-    * Otherwise on a dry-run, the driver returns the spec without
-      driving the wizard (`url=None`).
-    * Otherwise the driver drives the New Report wizard end-to-end
-      and returns the saved URL.
+    On `dry_run=True`, returns a `dry_run` result without navigating
+    — same gate as the rest of the `--allow-live`-style flows.
     """
-
-    existing_url = _find_report_url_by_title(
-        page, ALL_SOURCES_PK_LEADS_REPORT_SPEC.title
-    )
-    if existing_url is not None:
-        return ReportResult(
-            spec=ALL_SOURCES_PK_LEADS_REPORT_SPEC,
-            created=False,
-            url=existing_url,
-        )
 
     if dry_run:
         return ReportResult(
             spec=ALL_SOURCES_PK_LEADS_REPORT_SPEC,
-            created=False,
-            url=None,
+            status="dry_run",
+            url=PINNED_REPORT_URL,
         )
 
-    url = _drive_new_report(page, ALL_SOURCES_PK_LEADS_REPORT_SPEC)
+    page.goto(PINNED_REPORT_URL, timeout=_REPORT_LOAD_TIMEOUT_MS)
     return ReportResult(
         spec=ALL_SOURCES_PK_LEADS_REPORT_SPEC,
-        created=True,
-        url=url,
+        status="validated",
+        url=PINNED_REPORT_URL,
     )

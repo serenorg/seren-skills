@@ -1,9 +1,11 @@
 """Salesforce Lightning Playwright client.
 
-Thin wrapper around an authenticated Playwright Page. In Phase 1 the
-only read this client supports is `fetch_first_lead` — the dry-run
-target. Phase 2+ adds Lead-list filtering, Lead-detail navigation,
-Note write, and dashboard read on top of this same surface.
+Thin wrapper around an authenticated Playwright Page. Two surfaces:
+
+* `fetch_first_lead` — list-view read for the dry-run probe.
+* `read_project_business_unit` / `populate_is_packaging` — per-Lead
+  detail-page read of the `Project Business Unit` field, which is
+  the cross-division gate the Phase 4 Note-write path enforces.
 
 The whole skill is constrained to Lightning UI automation; this
 module is the choke point that enforces it. There is no REST/SOQL/
@@ -13,8 +15,8 @@ Apex path here and there must never be — see the SKILL.md privacy
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, replace
+from typing import Optional, Protocol
 
 from scripts.sf import selectors
 
@@ -56,25 +58,32 @@ class _Page(Protocol):
 
 @dataclass(frozen=True)
 class LeadRow:
-    """One Lead row as scraped from a Lightning list view.
+    """One Lead row.
 
-    `record_id` is the 15/18-char Salesforce id pulled out of the
-    `href` on the Name link. We surface both so downstream callers
-    have a stable handle (id) and a human-readable label (name).
+    `record_id` is the 15/18-char Salesforce id. We surface it plus
+    a human-readable name so downstream callers have a stable handle
+    and a label.
 
-    `is_packaging` mirrors the `PACKAGING__c` custom field
-    provisioned in Phase 3. Defaults to False so the
-    `enrich_lead.is_packaging_lead` cross-division gate fails
-    closed on any LeadRow whose source did not populate the flag.
-    Phase 4 populates it via `dataclasses.replace(lead,
-    is_packaging=True)` after reading the column from the All
-    Sources PK Leads report or the Lead detail page.
+    `is_packaging` is a tri-state:
+      * `None` — not yet read from the Lead detail page (default
+        for list-view rows).
+      * `True` — Project Business Unit == "PACKAGING".
+      * `False` — Project Business Unit was anything else (PL / MD /
+        NW / blank).
+
+    The cross-division gate (`enrich_lead.is_packaging_lead`) reads
+    this via `getattr` with a False default, so a `None` value (not
+    yet read) fails closed — exactly the desired P0 mis-routing
+    defense.
+
+    Populate via `populate_is_packaging(page, lead, org_url)` before
+    invoking the Phase 4 Note-write path.
     """
 
     record_id: str
     name: str
     source_url: str
-    is_packaging: bool = False
+    is_packaging: Optional[bool] = None
 
 
 # --------------------------------------------------------------------- #
@@ -85,6 +94,11 @@ class LeadRow:
 # Generous timeout — Lightning list views are infamous for taking
 # 5–10s to hydrate even when the rest of the app is responsive.
 _LIST_LOAD_TIMEOUT_MS = 30_000
+
+# Lead detail pages hydrate slightly faster than list views because
+# they render a single record, but the Details tab still pulls down
+# the highlights/key-fields panel asynchronously.
+_DETAIL_LOAD_TIMEOUT_MS = 30_000
 
 
 def _record_id_from_href(href: str) -> str:
@@ -127,6 +141,14 @@ def _build_lead_list_url(salesforce_org_url: str) -> str:
     return f"{base}{selectors.SF_LEAD_LIST_PATH}"
 
 
+def _build_lead_detail_url(salesforce_org_url: str, record_id: str) -> str:
+    """Compose the absolute Lead detail URL for one record id."""
+
+    base = salesforce_org_url.rstrip("/")
+    path = selectors.SF_LEAD_DETAIL_PATH_TEMPLATE.format(record_id=record_id)
+    return f"{base}{path}"
+
+
 # --------------------------------------------------------------------- #
 # Public surface                                                        #
 # --------------------------------------------------------------------- #
@@ -139,15 +161,10 @@ def fetch_first_lead(
 ) -> LeadRow:
     """Navigate to the Lead list and return the first visible row.
 
-    Phase 1 dry-run target. No filtering by `PACKAGING__c` yet — that
-    arrives in Phase 3 when the All Sources report exists. This is
-    intentionally "the first row that loads", which is enough to
-    prove the SSO + Lightning navigation path end-to-end.
-
-    Returns a `LeadRow`. Raises if the list view fails to load, the
-    first row never appears, or the row's name link is missing — all
-    of those are surfaced to the operator as-is, since each one
-    points at a different selector-rotation or auth failure.
+    Used by the dry-run probe. Returns a `LeadRow` whose
+    `is_packaging` is None — the list view does not surface the
+    Project Business Unit column, so callers must invoke
+    `populate_is_packaging` before any live-write decision.
     """
 
     list_url = _build_lead_list_url(salesforce_org_url)
@@ -185,3 +202,68 @@ def fetch_first_lead(
         name=name,
         source_url=list_url,
     )
+
+
+def read_project_business_unit(
+    *,
+    page: _Page,
+    record_id: str,
+    salesforce_org_url: str,
+) -> Optional[str]:
+    """Navigate to the Lead detail page and read the field value.
+
+    Returns the inner text of the Project Business Unit value cell,
+    stripped. Returns `None` when the field is present on the page
+    but its value cell is empty (a Lead that has not yet been
+    classified) — the caller treats `None` as "not PK".
+
+    Raises `RuntimeError` when the detail page never renders the
+    field at all — that points at either a permissions issue or a
+    selector rotation, both of which need operator attention rather
+    than silent fail-closed behavior.
+    """
+
+    detail_url = _build_lead_detail_url(salesforce_org_url, record_id)
+    page.goto(detail_url, timeout=_DETAIL_LOAD_TIMEOUT_MS)
+
+    # Wait for the Details tab's value span to render. The selector
+    # is scoped to the Project Business Unit label, so if it never
+    # appears the operator has a real problem to investigate (likely
+    # a custom Lead layout that hides the field).
+    page.wait_for_selector(
+        selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_VALUE,
+        timeout=_DETAIL_LOAD_TIMEOUT_MS,
+    )
+
+    value_locator = page.locator(
+        selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_VALUE
+    ).first
+    text = value_locator.inner_text().strip()
+    return text or None
+
+
+def populate_is_packaging(
+    *,
+    page: _Page,
+    lead: LeadRow,
+    salesforce_org_url: str,
+) -> LeadRow:
+    """Return a copy of `lead` with `is_packaging` set from the DOM.
+
+    Drives the Lead detail page once, reads Project Business Unit,
+    and returns a new LeadRow with `is_packaging` set to
+    `True` iff the value matches `SF_PROJECT_BUSINESS_UNIT_PK_VALUE`
+    exactly. Any other value (including `None`/blank) sets
+    `is_packaging=False`.
+
+    Idempotent — calling twice produces the same result; the
+    Salesforce session is the only side effect.
+    """
+
+    value = read_project_business_unit(
+        page=page,
+        record_id=lead.record_id,
+        salesforce_org_url=salesforce_org_url,
+    )
+    is_pk = value == selectors.SF_PROJECT_BUSINESS_UNIT_PK_VALUE
+    return replace(lead, is_packaging=is_pk)
