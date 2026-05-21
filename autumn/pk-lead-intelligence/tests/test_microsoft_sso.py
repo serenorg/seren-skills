@@ -46,6 +46,12 @@ class FakePage:
     # Successive `url` values applied each time `wait_for_url` is
     # called, so a test can simulate the redirect to Microsoft.
     wait_for_url_returns: list[str] = field(default_factory=list)
+    # Parallel queue of selector sets that become visible after each
+    # `wait_for_url`. Lets tests model network-driven state transitions
+    # — e.g. Microsoft silently bouncing the session back to Lightning
+    # so the sentinel renders without ever exposing the email form.
+    # See #759 (SSO session-resume race).
+    wait_for_url_visibility_after: list[set[str]] = field(default_factory=list)
 
     def goto(self, url, *, timeout: int = 0):
         self.call_log.append(("goto", (url,), {"timeout": timeout}))
@@ -61,6 +67,8 @@ class FakePage:
         self.call_log.append(("wait_for_url", (url,), {"timeout": timeout}))
         if self.wait_for_url_returns:
             self.url = self.wait_for_url_returns.pop(0)
+        if self.wait_for_url_visibility_after:
+            self.visible_selectors |= self.wait_for_url_visibility_after.pop(0)
 
     def wait_for_selector(self, selector, *, timeout: int = 0):
         self.call_log.append(
@@ -351,3 +359,59 @@ def test_fresh_login_raises_when_no_salesforce_sid_cookie(
 
     # Critical: we MUST NOT persist a sessionless storage_state.
     assert context.storage_state_calls == []
+
+
+# --------------------------------------------------------------------- #
+# SSO session-resume race (#759)                                        #
+# --------------------------------------------------------------------- #
+
+
+def test_fresh_login_returns_early_when_microsoft_silently_resumes_to_lightning(
+    creds, storage_path, discovery_path
+):
+    """Regression for #759 SSO session-resume race.
+
+    When the Microsoft IdP cookie is still valid, clicking the SF SSO
+    button transits microsoftonline.com briefly and then bounces back
+    to Lightning without ever rendering the email form. Previously the
+    driver waited 15s for `MS_EMAIL_INPUT`, timed out, and crashed.
+
+    The fix races the email input against the Lightning sentinel and
+    returns early on the sentinel. This test models the bounce by
+    making the Lightning sentinel visible after the Microsoft URL
+    transit settles, and asserts that no credential fills happen.
+    """
+
+    sentinel = selectors.SF_LIGHTNING_AUTHENTICATED_SENTINEL
+    page = FakePage(
+        # Microsoft URL transits, then immediate bounce-back: the
+        # Lightning sentinel becomes visible. Email form never shows.
+        wait_for_url_returns=[
+            "https://login.microsoftonline.com/tenant/oauth2/authorize",
+        ],
+        wait_for_url_visibility_after=[{sentinel}],
+    )
+    context = FakeContext(page=page)
+
+    result = microsoft_sso.authenticate(
+        context=context,
+        salesforce_org_url="https://acme.lightning.force.com",
+        creds=creds,
+        storage_path=storage_path,
+        discovery_path=discovery_path,
+    )
+
+    # No credential fills happened — we bypassed the Microsoft flow.
+    assert not any(call[0] == "fill" for call in page.call_log), (
+        "silent-resume path must not fill email/password/TOTP"
+    )
+
+    # The microsoft_tenant_url is still captured (it transited
+    # microsoftonline.com) so the discovery file is informative.
+    assert result.microsoft_tenant_url is not None
+    assert "microsoftonline.com" in result.microsoft_tenant_url
+
+    # storage_state IS persisted — we landed on Lightning with a
+    # valid session and want the next run to reuse it.
+    assert context.storage_state_calls == [str(storage_path)]
+    assert result.reused_storage is False
