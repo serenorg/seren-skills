@@ -212,12 +212,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--headless",
-        action="store_true",
+        "--headful",
+        dest="headless",
+        action="store_false",
+        default=True,
         help=(
-            "Run Chromium headless. Default is headful so the operator "
-            "can watch the first SSO dance and patch selectors if "
-            "Microsoft has rotated the UI."
+            "Run Chromium with a visible window. Default is headless — "
+            "use this only when debugging an SSO cold-start or a "
+            "Microsoft / Salesforce selector that has rotated."
         ),
     )
     return parser
