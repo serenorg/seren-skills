@@ -276,6 +276,42 @@ def test_fetch_first_lead_raises_with_diagnostic_counts_when_no_valid_row():
 
 
 # --------------------------------------------------------------------- #
+# fetch_open_leads non-Lead filter (issue #774)                          #
+# --------------------------------------------------------------------- #
+
+
+def test_fetch_open_leads_filters_non_lead_record_ids():
+    """User-linked anchors (`005…`) must not surface as Leads.
+
+    The combined `LIST_FIRST_ROW + ROW_NAME_LINK` selector matches every
+    record-linked anchor in each row, including the Lead Owner avatar
+    (a User reference, prefix `005`). Pre-PR #773 the single-lead path
+    always returned the first match — the Lead.Name anchor — so the bug
+    was latent. Batch iteration walks past row 1 and exposes it.
+
+    `00Q` is the stable Salesforce ObjectPrefix for the Lead object —
+    documented invariant across orgs, sandboxes, and releases.
+    """
+
+    page = _make_page_with_rows(
+        [
+            ("/lightning/r/Lead/00Q5g00000XYZAbc/view", "Acme GmbH"),
+            ("/lightning/r/005S700000ClEZ3IAN/view", "ASp"),
+            ("/lightning/r/Lead/00Q5g00000ABCdef/view", "Beta Corp"),
+            ("/lightning/r/005S700000ClEWzIAN/view", "DWr"),
+        ]
+    )
+
+    rows = sf_client.fetch_open_leads(
+        page=page,
+        salesforce_org_url="https://acme.lightning.force.com",
+        limit=10,
+    )
+
+    assert [r.record_id for r in rows] == ["00Q5g00000XYZAbc", "00Q5g00000ABCdef"]
+
+
+# --------------------------------------------------------------------- #
 # read_project_business_unit                                            #
 # --------------------------------------------------------------------- #
 

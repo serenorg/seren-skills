@@ -522,6 +522,63 @@ def test_batch_continues_after_per_lead_enrichment_failure(
     assert "00Q000000000002" in captured.err
 
 
+def test_batch_renders_failed_leads_block_on_stdout_for_non_technical_operator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    """Per-lead failures must be visible in the operator's terminal.
+
+    Issue #774: a non-technical operator running the skill in a Seren
+    Desktop terminal cannot grep stderr. The summary line on stdout says
+    `leads_failed=N` but says nothing about which leads or why. Failures
+    must render in a structured block on stdout right before the summary
+    so the same output stream the operator is already reading carries
+    everything they need to act on.
+    """
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {"inputs": {"salesforce_org_url": "https://acme.lightning.force.com"}}
+        )
+    )
+
+    leads = [
+        _fake_lead("00Q000000000001", "Lead One"),
+        _fake_lead("00Q000000000002", "Lead Two"),
+        _fake_lead("00Q000000000003", "Lead Three"),
+    ]
+    monkeypatch.setattr(agent, "_run_batch_fetch", lambda **k: leads)
+
+    def flaky_enrichment(**kwargs):
+        if kwargs["lead"].record_id == "00Q000000000002":
+            raise RuntimeError("simulated Perplexity 500")
+        return _fake_enrichment(tmp_path)
+
+    monkeypatch.setattr(agent, "_run_enrichment", flaky_enrichment)
+
+    agent.main(
+        [
+            "--command", "run", "--dry-run",
+            "--batch", "--max-leads", "10",
+            "--config", str(cfg),
+        ]
+    )
+
+    out = capsys.readouterr().out
+    # Operator-facing header includes the failure count.
+    assert "FAILED LEADS (1):" in out
+    # Each failure block names the lead and the exception.
+    assert "00Q000000000002" in out
+    assert "Lead Two" in out
+    assert "RuntimeError" in out
+    assert "simulated Perplexity 500" in out
+    # Block appears BEFORE the cron-parseable summary line so the
+    # operator reads context before result.
+    failed_idx = out.index("FAILED LEADS")
+    summary_idx = out.index("pk-lead-intelligence run:")
+    assert failed_idx < summary_idx
+
+
 # --------------------------------------------------------------------- #
 # Headless-by-default contract                                           #
 # --------------------------------------------------------------------- #

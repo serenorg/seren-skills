@@ -225,6 +225,7 @@ def fetch_open_leads(
     placeholder_rows = 0
     missing_href = 0
     blank_text = 0
+    non_lead_rows = 0
     for link in links:
         if len(rows) >= limit:
             break
@@ -239,9 +240,18 @@ def fetch_open_leads(
         if _LIGHTNING_NO_VALUE_PATTERN.match(name):
             placeholder_rows += 1
             continue
+        record_id = _record_id_from_href(href)
+        # The combined `LIST_FIRST_ROW + ROW_NAME_LINK` selector also
+        # matches the Lead Owner avatar anchor (a User reference, prefix
+        # `005`). Filter to the Lead ObjectPrefix `00Q` — a documented
+        # Salesforce invariant — so batch mode doesn't pipe User
+        # profiles into the Perplexity / Claude pipeline. Issue #774.
+        if not record_id.startswith("00Q"):
+            non_lead_rows += 1
+            continue
         rows.append(
             LeadRow(
-                record_id=_record_id_from_href(href),
+                record_id=record_id,
                 name=name,
                 source_url=list_url,
             )
@@ -253,7 +263,8 @@ def fetch_open_leads(
             f"(rows scanned={len(links)}, "
             f"missing href={missing_href}, "
             f"blank text={blank_text}, "
-            f"Lightning placeholder `[[…]]`={placeholder_rows}). "
+            f"Lightning placeholder `[[…]]`={placeholder_rows}, "
+            f"non-Lead record (`005`/etc.)={non_lead_rows}). "
             "If placeholder count is non-zero, the running SSO user likely "
             "lacks field-level read access to Lead.Name or the source data "
             "contains placeholder values — escalate to the Salesforce admin."
