@@ -21,6 +21,91 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def test_detect_trading_honors_false_classification_override(tmp_path) -> None:
+    """The override lever short-circuits the lexical heuristic.
+
+    `classification_overrides` is the only mechanism that can exclude a
+    skill whose runtime legitimately uses `--allow-live` / `dry_run`
+    semantics for a non-trading purpose (e.g. a CRM lead-enrichment
+    skill that gates Salesforce Note writes with the same flags). The
+    heuristic alone cannot distinguish "live SF write" from "live
+    order", so the override path must be honored verbatim — regardless
+    of how many trading-shaped lexical signals the skill emits.
+
+    Regression guard for #753 (and the unblock of #752).
+    """
+
+    skill_dir = tmp_path / "autumn" / "pk-lead-intelligence"
+    _write(
+        skill_dir / "SKILL.md",
+        """---
+name: pk-lead-intelligence
+description: Enrich Salesforce Leads with research and write a Note.
+---
+
+# pk-lead-intelligence
+
+Drives Microsoft SSO, navigates to a Lead, runs enrichment, writes a
+Note. `--allow-live` gates the live Note write; `--dry-run` produces a
+local .docx for review. Live execution requires both the flag and
+`live_mode=true` in config.
+""",
+    )
+    _write(
+        skill_dir / "scripts" / "agent.py",
+        """import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--allow-live", action="store_true")
+parser.add_argument("--dry-run", action="store_true")
+
+# Lexical surface that would otherwise trip the trading heuristic:
+# the runtime exposes live/dry-run modes plus execution primitives
+# (place, cancel, order, position) in the wrong domain context.
+LIVE_MODE = False
+def place_note():
+    raise RuntimeError("SEREN_API_KEY is required")
+""",
+    )
+
+    context = MODULE.build_context(skill_dir, [], {})
+    overrides = {
+        "autumn/pk-lead-intelligence": {
+            "trading": False,
+            "reason": "Salesforce CRM lead enrichment, not exchange trading.",
+        },
+    }
+
+    is_trading, reasons = MODULE.detect_trading(context, overrides)
+
+    assert is_trading is False
+    assert reasons == ["Salesforce CRM lead enrichment, not exchange trading."]
+
+
+def test_real_waivers_file_excludes_pk_lead_intelligence(tmp_path) -> None:
+    """The shipped waivers JSON parses cleanly and the pk-lead-intelligence
+    override is present with `trading: false`.
+
+    This is the load-bearing config we ship in `.github/`. It must
+    survive future edits to the waivers file. Catches: JSON shape
+    regressions, accidental removal of the override, key drift between
+    `autumn/pk-lead-intelligence` and any rename.
+    """
+
+    classification_overrides, _ = MODULE.load_waivers(MODULE.WAIVER_PATH)
+
+    override = classification_overrides.get("autumn/pk-lead-intelligence")
+    assert override is not None, (
+        "autumn/pk-lead-intelligence classification override missing from "
+        ".github/trading-skill-safety-waivers.json"
+    )
+    assert override["trading"] is False
+    assert str(override.get("reason", "")).strip(), (
+        "override must carry a non-empty reason — load_waivers enforces "
+        "this, but pin it here so a future edit cannot drop it silently"
+    )
+
+
 def test_detect_trading_requires_execution_signal(tmp_path) -> None:
     skill_dir = tmp_path / "seren" / "job-helper"
     _write(
