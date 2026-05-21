@@ -15,10 +15,22 @@ Apex path here and there must never be — see the SKILL.md privacy
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from typing import Optional, Protocol
 
 from scripts.sf import selectors
+
+
+# Lightning renders `[[…]]` as a placeholder when the visible text of a
+# field cannot be resolved — most commonly because the running user lacks
+# field-level read access, but also when an upstream import inserted a
+# literal placeholder into the field. Either way, the value is not a real
+# Lead identifier and downstream enrichment cannot use it. We skip rows
+# whose Name link renders this pattern. Verified live on
+# herrmannultraschall.lightning.force.com 2026-05-21 against Lead
+# 00QS700000L7ELYMA3, which surfaced as `[[Unknown]]`.
+_LIGHTNING_NO_VALUE_PATTERN = re.compile(r"^\[\[.*\]\]$")
 
 
 # --------------------------------------------------------------------- #
@@ -29,13 +41,15 @@ from scripts.sf import selectors
 class _Locator(Protocol):
     """Subset of `playwright.sync_api.Locator` that this module uses."""
 
-    # `.first` returns a Locator resolved to the first DOM match. We
-    # need it because the row+anchor combined selector legitimately
-    # matches many elements (multiple rows × multiple record anchors
-    # per row) and Playwright's strict mode raises on get_attribute
-    # against a multi-match locator.
+    # `.first` returns a Locator resolved to the first DOM match. Used
+    # by `read_project_business_unit` for single-row label/value reads.
     @property
     def first(self) -> "_Locator": ...
+
+    # `.all()` resolves the locator to one Locator per DOM match. The
+    # Lead list iteration uses this so we can skip rows whose Name
+    # column renders Lightning's `[[…]]` placeholder.
+    def all(self) -> list["_Locator"]: ...
 
     def get_attribute(self, name: str) -> str | None: ...
     def inner_text(self) -> str: ...
@@ -175,32 +189,46 @@ def fetch_first_lead(
     )
 
     # The combined selector matches every row × every record-linked
-    # anchor in the list, so resolve to the first match in document
-    # order. The first DOM anchor that meets the predicate is the
-    # Name cell of the first data row — exactly what we want.
-    link = page.locator(
+    # anchor in the list. We iterate in DOM order and return the first
+    # anchor that points to a real Lead with a readable name — skipping
+    # any anchor whose visible text is Lightning's `[[…]]` placeholder
+    # (field-level access gap or imported placeholder data), which
+    # previously surfaced as `lead.name='[[Unknown]]'` and produced
+    # `__Unknown__.docx` outputs that confused operator review.
+    links = page.locator(
         f"{selectors.SF_LEAD_LIST_FIRST_ROW} {selectors.SF_LEAD_ROW_NAME_LINK}"
-    ).first
+    ).all()
 
-    href = link.get_attribute("href")
-    if not href:
-        raise RuntimeError(
-            "Lead name link missing href — selector "
-            f"{selectors.SF_LEAD_ROW_NAME_LINK!r} matched but the href "
-            "attribute was empty"
+    placeholder_rows = 0
+    missing_href = 0
+    blank_text = 0
+    for link in links:
+        href = link.get_attribute("href")
+        if not href:
+            missing_href += 1
+            continue
+        name = link.inner_text().strip()
+        if not name:
+            blank_text += 1
+            continue
+        if _LIGHTNING_NO_VALUE_PATTERN.match(name):
+            placeholder_rows += 1
+            continue
+        return LeadRow(
+            record_id=_record_id_from_href(href),
+            name=name,
+            source_url=list_url,
         )
 
-    name = link.inner_text().strip()
-    if not name:
-        raise RuntimeError(
-            "Lead name link rendered without text — selector matched "
-            "but the cell is empty"
-        )
-
-    return LeadRow(
-        record_id=_record_id_from_href(href),
-        name=name,
-        source_url=list_url,
+    raise RuntimeError(
+        "No Lead row with a readable name found in the list view "
+        f"(rows scanned={len(links)}, "
+        f"missing href={missing_href}, "
+        f"blank text={blank_text}, "
+        f"Lightning placeholder `[[…]]`={placeholder_rows}). "
+        "If placeholder count is non-zero, the running SSO user likely "
+        "lacks field-level read access to Lead.Name or the source data "
+        "contains placeholder values — escalate to the Salesforce admin."
     )
 
 
