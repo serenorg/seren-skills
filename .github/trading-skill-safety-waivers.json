@@ -1,5 +1,10 @@
 {
-  "classification_overrides": {},
+  "classification_overrides": {
+    "autumn/pk-lead-intelligence": {
+      "trading": false,
+      "reason": "Salesforce CRM lead enrichment skill. `--allow-live` and `--dry-run` gate Salesforce Note writes to a CRM record, not orders on an exchange. The runtime has no exchange, no inventory, no order book, no money. The lexical heuristic flags the skill because it shares the `live_mode` / `dry_run` runtime pattern with sibling trading skills, but the trading-domain guardrails (`Trade Execution Contract`, `Pre-Trade Checklist`, marketable-exit rules, etc.) have nothing to validate here. Issue #753 documents the misclassification; the override is the minimum-change unblock for PR #752."
+    }
+  },
   "waivers": {
     "prophet/prophet-polymarket-edge": {
       "rules": [
