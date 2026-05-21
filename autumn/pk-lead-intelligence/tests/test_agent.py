@@ -383,6 +383,30 @@ def test_main_dry_run_prints_first_lead_and_enrichment(
 
 
 # --------------------------------------------------------------------- #
+# Headless-by-default contract                                           #
+# --------------------------------------------------------------------- #
+
+
+def test_headless_default_is_true_unless_headful_passed():
+    """Default is headless; --headful flips it for SSO debugging.
+
+    Issue: an autonomous batch run shouldn't pop a Chromium window over
+    the operator's work every cycle. The first-run SSO-debug case is
+    now opt-in via --headful, not opt-out via --headless.
+    """
+
+    parser = agent._build_parser()
+
+    default_args = parser.parse_args(["--command", "run", "--dry-run"])
+    assert default_args.headless is True
+
+    headful_args = parser.parse_args(
+        ["--command", "run", "--dry-run", "--headful"]
+    )
+    assert headful_args.headless is False
+
+
+# --------------------------------------------------------------------- #
 # Direct-script invocation (issue #541)                                  #
 # --------------------------------------------------------------------- #
 
