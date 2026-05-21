@@ -200,10 +200,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("output"),
+        default=Path.home() / "Documents" / "pk-lead-intelligence" / "output",
         help=(
-            "Directory for dry-run .docx Notes. Defaults to ./output "
-            "(gitignored)."
+            "Directory for dry-run .docx Notes. Defaults to "
+            "~/Documents/pk-lead-intelligence/output — kept OUTSIDE the "
+            "repo because rendered Notes can contain Salesforce PII "
+            "(names, emails, business unit) and this skill ships in a "
+            "public repo. The repo's `output/` is gitignored as a "
+            "second line of defense, but the default keeps generated "
+            "PII off the working tree entirely."
         ),
     )
     parser.add_argument(

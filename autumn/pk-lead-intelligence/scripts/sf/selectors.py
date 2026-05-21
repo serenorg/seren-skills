@@ -32,25 +32,32 @@ SF_LOGIN_MICROSOFT_SSO_BUTTON = "text=/Microsoft|Azure|Single Sign-On/i"
 # name Microsoft has used since the AAD/Entra rebrand.
 MS_EMAIL_INPUT = 'input[name="loginfmt"]'
 
-# Next/Submit on the email screen. The button is `input[type=submit]`
-# with id `idSIButton9` — both selectors target the same element; we
-# prefer the type selector so a label rotation does not break us.
-MS_EMAIL_SUBMIT = 'input[type="submit"]'
+# Next/Submit on the email screen. Microsoft uses the same id
+# `idSIButton9` for "Next" and "Sign in" across the email, password,
+# and KMSI screens — pinning to the id avoids matching unrelated
+# submit inputs (hidden form posts, layered modals).
+MS_EMAIL_SUBMIT = 'input#idSIButton9'
 
 # Password field. `passwd` is the stable form-field name.
 MS_PASSWORD_INPUT = 'input[name="passwd"]'
-MS_PASSWORD_SUBMIT = 'input[type="submit"]'
+MS_PASSWORD_SUBMIT = 'input#idSIButton9'
 
 # TOTP code field for "Authenticator app or hardware token" flow.
-# Microsoft renders this as a single 6-digit input with name `otc`.
+# Microsoft renders this as a single 6-digit input with name `otc`
+# and the verify button as `idSubmit_SAOTCC_Continue` (distinct from
+# the password/email `idSIButton9`).
 MS_TOTP_INPUT = 'input[name="otc"]'
-MS_TOTP_SUBMIT = 'input[type="submit"]'
+MS_TOTP_SUBMIT = 'input#idSubmit_SAOTCC_Continue'
 
-# The "Stay signed in?" interstitial that Microsoft shows after a
-# successful sign-in. Clicking "No" keeps the session ephemeral; "Yes"
-# extends it. We click "No" to keep Playwright storage_state as the
-# single source of truth for session persistence.
-MS_STAY_SIGNED_IN_NO = 'input[id="idBtn_Back"]'
+# The "Stay signed in?" (KMSI) interstitial Microsoft shows after a
+# successful sign-in. Body says "Stay signed in?"; "Yes" is
+# `idSIButton9`, "No" is `idBtn_Back`. We click "No" to keep
+# Playwright storage_state as the single source of truth for session
+# persistence. The page must be WAITED FOR (not just probed for
+# visibility) — Microsoft renders it on a redirect after the TOTP
+# submit, not synchronously.
+MS_STAY_SIGNED_IN_NO = 'input#idBtn_Back'
+MS_STAY_SIGNED_IN_YES = 'input#idSIButton9'
 
 
 # --------------------------------------------------------------------- #
@@ -58,11 +65,18 @@ MS_STAY_SIGNED_IN_NO = 'input[id="idBtn_Back"]'
 # --------------------------------------------------------------------- #
 
 # Sentinel that indicates we have landed in Lightning after SSO.
-# `[role="main"]` is rendered by Lightning on every authenticated
-# page before the per-app chrome shows up — earlier than the App
-# Launcher button, which in HU's org is only present on certain
-# layouts. Live audit (2026-05-14) confirmed this in HU's Lightning.
-SF_LIGHTNING_AUTHENTICATED_SENTINEL = '[role="main"]'
+# The previous `[role="main"]` selector was a P0 false-positive —
+# every well-formed page (including Microsoft's sign-in interstitials)
+# has a `[role="main"]` landmark, so the driver declared SSO success
+# while still stuck on `login.microsoftonline.com` and never minted a
+# Salesforce `sid` cookie.
+#
+# The correct sentinel must be Lightning-specific. `one-appnav` is
+# the Aura custom element Lightning renders for the top navigation
+# bar; it appears on every authenticated Lightning page and on no
+# Microsoft page. Pair this with a URL-host check in the auth driver
+# so we fail loudly if we're still on microsoftonline.com.
+SF_LIGHTNING_AUTHENTICATED_SENTINEL = 'one-appnav'
 
 # The Lead list view. `/lightning/o/Lead/list` is the stock relative
 # URL; we append it to the configured org URL at runtime. The

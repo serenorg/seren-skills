@@ -74,16 +74,31 @@ class FakePage:
 
 @dataclass
 class FakeContext:
-    """Returns a single pre-built FakePage and records storage_state."""
+    """Returns a single pre-built FakePage and records storage_state.
+
+    `cookies_to_return` is exposed because the SSO driver verifies a
+    Salesforce `sid` cookie exists in the jar before persisting
+    storage_state — see the post-login check in `authenticate`. The
+    default fixture provides a valid SF sid so the happy-path tests
+    stay green; the no-sid failure path has its own test.
+    """
 
     page: FakePage
     storage_state_calls: list[str] = field(default_factory=list)
+    cookies_to_return: list[dict] = field(
+        default_factory=lambda: [
+            {"name": "sid", "domain": "acme.my.salesforce.com", "value": "x"}
+        ]
+    )
 
     def new_page(self) -> FakePage:
         return self.page
 
     def storage_state(self, *, path: str):
         self.storage_state_calls.append(path)
+
+    def cookies(self) -> list[dict]:
+        return list(self.cookies_to_return)
 
 
 # --------------------------------------------------------------------- #
@@ -290,3 +305,49 @@ def test_fresh_login_skips_stay_signed_in_when_absent(
 
     clicks = [call[1][0] for call in page.call_log if call[0] == "click"]
     assert selectors.MS_STAY_SIGNED_IN_NO not in clicks
+
+
+def test_fresh_login_raises_when_no_salesforce_sid_cookie(
+    creds, storage_path, discovery_path
+):
+    """If SSO completes but no `sid` cookie is in the jar, fail loud.
+
+    Regression guard for the silent-failure mode where Microsoft
+    keeps the browser on its own domain (KMSI variant, unhandled MFA
+    challenge) but the Lightning DOM sentinel still matches by
+    accident. Without this check, the driver would persist a
+    sessionless storage_state and every downstream Lightning
+    navigation would 302-redirect to the login page — a useless
+    selector timeout instead of an honest auth failure here.
+
+    See also: probe_sso_cookies.py and probe_ms_interstitial.py.
+    """
+
+    page = FakePage(
+        wait_for_url_returns=[
+            "https://login.microsoftonline.com/tenant/oauth2/authorize"
+        ],
+    )
+    # Simulate the cookie-jar state we actually observed in the
+    # silent-failure run: Microsoft cookies present, but no
+    # Salesforce sid.
+    context = FakeContext(
+        page=page,
+        cookies_to_return=[
+            {"name": "ESTSAUTH", "domain": ".login.microsoftonline.com",
+             "value": "ms-session"},
+            {"name": "BrowserId", "domain": ".salesforce.com", "value": "z"},
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="no Salesforce `sid` cookie"):
+        microsoft_sso.authenticate(
+            context=context,
+            salesforce_org_url="https://acme.lightning.force.com",
+            creds=creds,
+            storage_path=storage_path,
+            discovery_path=discovery_path,
+        )
+
+    # Critical: we MUST NOT persist a sessionless storage_state.
+    assert context.storage_state_calls == []

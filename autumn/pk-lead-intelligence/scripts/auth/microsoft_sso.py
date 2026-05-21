@@ -71,6 +71,7 @@ class _Context(Protocol):
 
     def new_page(self) -> _Page: ...
     def storage_state(self, *, path: str) -> object: ...
+    def cookies(self) -> list[dict]: ...
 
 
 # --------------------------------------------------------------------- #
@@ -193,12 +194,38 @@ def _drive_fresh_login(
     page.fill(selectors.MS_TOTP_INPUT, creds.totp_code)
     page.click(selectors.MS_TOTP_SUBMIT)
 
-    # Step 6. "Stay signed in?" interstitial. Click "No" so the
-    # Playwright storage_state stays the only session anchor.
+    # Step 6. "Stay signed in?" (KMSI) interstitial. Microsoft
+    # renders this on a redirect AFTER the TOTP POST settles, so we
+    # have to wait for it — a bare `is_visible` check races the
+    # network and silently no-ops. We click "No" to keep Playwright
+    # storage_state as the single session anchor.
+    #
+    # The KMSI page is not guaranteed: some tenants suppress it for
+    # corporate-managed devices, in which case we redirect straight
+    # back to Salesforce. We race both possibilities with a single
+    # wait_for_url.
+    page.wait_for_url(
+        lambda url: (
+            "/kmsi" in str(url).lower()
+            or "ProcessAuth" in str(url)
+            or "salesforce.com" in str(url)
+            or "force.com" in str(url)
+        ),
+        timeout=DEFAULT_NAVIGATION_TIMEOUT_MS,
+    )
     if page.is_visible(selectors.MS_STAY_SIGNED_IN_NO):
         page.click(selectors.MS_STAY_SIGNED_IN_NO)
 
-    # Step 7. Wait for the round-trip back to Salesforce Lightning.
+    # Step 7. Wait for the round-trip back to Salesforce. The host
+    # leaving microsoftonline.com is the load-bearing signal — only
+    # then can `sid` be issued. The DOM sentinel is belt-and-suspenders.
+    page.wait_for_url(
+        lambda url: (
+            "lightning.force.com" in str(url)
+            or "my.salesforce.com" in str(url)
+        ),
+        timeout=DEFAULT_NAVIGATION_TIMEOUT_MS,
+    )
     page.wait_for_selector(
         selectors.SF_LIGHTNING_AUTHENTICATED_SENTINEL,
         timeout=DEFAULT_NAVIGATION_TIMEOUT_MS,
@@ -259,6 +286,28 @@ def authenticate(
         creds=creds,
         discovery_path=discovery_path,
     )
+
+    # Verify we actually hold a Salesforce session before persisting
+    # storage. Without a `sid` cookie on a *.salesforce.com or
+    # *.force.com domain, every subsequent Lightning navigation will
+    # redirect to login (?ec=302) — silently saving a sessionless
+    # storage_state would make the next dry-run fail with a useless
+    # selector timeout instead of a clear auth failure here.
+    sf_sids = [
+        c for c in context.cookies()
+        if c.get("name") == "sid"
+        and ("salesforce.com" in c.get("domain", "")
+             or "force.com" in c.get("domain", ""))
+    ]
+    if not sf_sids:
+        raise RuntimeError(
+            "Microsoft SSO completed but no Salesforce `sid` cookie was "
+            "issued. The driver landed on a Lightning page but the "
+            "session cookie is missing — likely an unhandled Microsoft "
+            "interstitial (KMSI variant, MFA challenge, consent prompt). "
+            "Inspect `state/sso_discovery.json` and re-run with "
+            "`--headless` removed to see what Microsoft is showing."
+        )
 
     # Persist the authenticated storage so the next run can reuse.
     storage_path.parent.mkdir(parents=True, exist_ok=True)
