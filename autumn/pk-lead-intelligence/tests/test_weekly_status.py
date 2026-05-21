@@ -47,13 +47,13 @@ def test_weekly_doc_renders_with_enrichments():
             record_id="00Q5g00000XYZAbc",
             name="Acme GmbH",
             enriched_at="2026-05-12T09:00:00Z",
-            hypothesis_excerpt="Likely interested in stretch film migration.",
+            angle_excerpt="Likely interested in stretch film migration.",
         ),
         weekly_status.WeeklyLeadSummary(
             record_id="00Q5g00000XYZDef",
             name="Globex Corp",
             enriched_at="2026-05-13T11:15:00Z",
-            hypothesis_excerpt="Sustainability mandate triggering RFP.",
+            angle_excerpt="Sustainability mandate triggering RFP.",
         ),
     ]
 

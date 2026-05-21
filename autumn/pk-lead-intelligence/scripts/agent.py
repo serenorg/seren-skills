@@ -71,7 +71,7 @@ from scripts.auth import microsoft_sso  # noqa: E402
 from scripts.auth import op_service_account  # noqa: E402
 from scripts.integrations import google_drive  # noqa: E402
 from scripts.output import weekly_status  # noqa: E402
-from scripts.research import claude_hypothesis  # noqa: E402
+from scripts.research import claude_angles  # noqa: E402
 from scripts.research import linkedin_search  # noqa: E402
 from scripts.research import perplexity  # noqa: E402
 from scripts.sf import build_all_sources_leads_report as all_leads_report  # noqa: E402
@@ -429,7 +429,7 @@ def _run_enrichment(
     deps = enrich_lead.Dependencies(
         perplexity_research=perplexity.research_lead,
         linkedin_discover=linkedin_search.discover_candidates,
-        claude_hypothesis=claude_hypothesis.generate,
+        claude_angles=claude_angles.generate,
     )
     return enrich_lead.enrich(
         lead=lead,
@@ -764,7 +764,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     else:
         print("  linkedin:  (no candidate)")
-    print(f"  hypothesis: {enrichment.hypothesis.text[:120]}")
+    if enrichment.angles.angles:
+        first_angle = enrichment.angles.angles[0]
+        print(f"  angle:     {first_angle[:120]}")
+    else:
+        print("  angle:     (no angles generated)")
 
     # Phase 4 live Note write. Only runs when --allow-live is set
     # AND the config gate is on (already validated above).

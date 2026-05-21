@@ -25,16 +25,17 @@ from dataclasses import dataclass
 class WeeklyLeadSummary:
     """One Lead's enrichment summary for inclusion in the weekly doc.
 
-    `enriched_at` is ISO-8601 UTC. `hypothesis_excerpt` is the first
-    ~120 characters of the rendered Note's Hypothesis section —
-    enough for the operator to remember what the Note said without
-    re-opening every Lead in Salesforce.
+    `enriched_at` is ISO-8601 UTC. `angle_excerpt` is the first
+    ~120 characters of the first ultrasonic-welding angle on the
+    rendered Note — enough for the operator to remember what the
+    Note said without re-opening every Lead in Salesforce. Renamed
+    from `hypothesis_excerpt` per #766; the field's job is the same.
     """
 
     record_id: str
     name: str
     enriched_at: str
-    hypothesis_excerpt: str
+    angle_excerpt: str
 
 
 @dataclass(frozen=True)
@@ -128,8 +129,8 @@ def compose_weekly_status_doc(
                 f"- {summary.name} ({summary.record_id}) — "
                 f"enriched {summary.enriched_at}"
             )
-            if summary.hypothesis_excerpt:
-                lines.append(f"  Hypothesis: {summary.hypothesis_excerpt}")
+            if summary.angle_excerpt:
+                lines.append(f"  Angle: {summary.angle_excerpt}")
         lines.extend(
             [
                 "",
