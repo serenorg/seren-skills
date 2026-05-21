@@ -26,7 +26,7 @@ from typing import Callable, Optional
 
 from scripts.output import dryrun_docx
 from scripts.output.note_renderer import RenderedNote, render
-from scripts.research.claude_hypothesis import Hypothesis
+from scripts.research.claude_angles import UltrasonicAngles
 from scripts.research.linkedin_search import LinkedInCandidate
 from scripts.research.perplexity import PerplexityResearch
 from scripts.sf.client import LeadRow
@@ -39,7 +39,7 @@ from scripts.sf.client import LeadRow
 
 PerplexityFn = Callable[..., PerplexityResearch]
 LinkedInFn = Callable[..., list[LinkedInCandidate]]
-HypothesisFn = Callable[..., Hypothesis]
+AnglesFn = Callable[..., UltrasonicAngles]
 DocxWriterFn = Callable[..., Path]
 ClockFn = Callable[[], datetime]
 
@@ -54,7 +54,7 @@ class Dependencies:
 
     perplexity_research: PerplexityFn
     linkedin_discover: LinkedInFn
-    claude_hypothesis: HypothesisFn
+    claude_angles: AnglesFn
     docx_writer: DocxWriterFn = dryrun_docx.write
     clock: Optional[ClockFn] = None
 
@@ -78,7 +78,7 @@ class EnrichmentResult:
     docx_path: Path
     perplexity: PerplexityResearch
     linkedin: Optional[LinkedInCandidate]
-    hypothesis: Hypothesis
+    angles: UltrasonicAngles
 
 
 # --------------------------------------------------------------------- #
@@ -149,17 +149,28 @@ def enrich(
     )
     linkedin = candidates[0] if candidates else None
 
-    hypothesis = deps.claude_hypothesis(
+    # Prefer the company name Perplexity extracted from the live page;
+    # fall back to `company_hint` (passed by the caller, currently None
+    # until #794 plumbs it from the All Sources PK Leads report). This
+    # is what reaches the Claude angle prompt — it lets the model name
+    # the customer directly, which materially improves angle quality.
+    extracted_company = (
+        perplexity.extract.company_name
+        if perplexity.extract and perplexity.extract.company_name
+        else (company_hint or "")
+    )
+
+    angles = deps.claude_angles(
         lead_name=lead.name,
+        company_name=extracted_company,
         perplexity_summary=perplexity.summary,
-        linkedin_url=linkedin.url if linkedin else None,
     )
 
     note = render(
         lead=lead,
         perplexity=perplexity,
         linkedin=linkedin,
-        hypothesis=hypothesis,
+        angles=angles,
         now=deps.clock() if deps.clock else None,
     )
 
@@ -172,5 +183,5 @@ def enrich(
         docx_path=written,
         perplexity=perplexity,
         linkedin=linkedin,
-        hypothesis=hypothesis,
+        angles=angles,
     )

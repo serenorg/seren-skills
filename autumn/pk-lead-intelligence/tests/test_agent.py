@@ -138,8 +138,7 @@ def test_main_run_emits_single_line_summary_for_cron(
         )
     )
 
-    from scripts.research.claude_hypothesis import Hypothesis
-    from scripts.research.linkedin_search import LinkedInCandidate
+    from scripts.research.claude_angles import UltrasonicAngles
     from scripts.research.perplexity import PerplexityResearch
     from scripts.sf import client as sf_client
     from scripts.sf import enrich_lead
@@ -151,7 +150,7 @@ def test_main_run_emits_single_line_summary_for_cron(
         source_url="https://acme.lightning.force.com/lightning/o/Lead/list",
     )
     fake_note = RenderedNote(
-        title="t", sections=[NoteSection("Lead", "x")],
+        title="t", sections=[NoteSection("CONTACT", "x")],
         enriched_at_utc="2026-05-14T10:30:00Z",
     )
     fake_enrichment = enrich_lead.EnrichmentResult(
@@ -159,7 +158,7 @@ def test_main_run_emits_single_line_summary_for_cron(
         docx_path=tmp_path / "note.docx",
         perplexity=PerplexityResearch(summary="s", citations=[], raw_text=""),
         linkedin=None,
-        hypothesis=Hypothesis(text="h", recommended_action="a"),
+        angles=UltrasonicAngles(angles=["a"]),
     )
 
     monkeypatch.setattr(agent, "_run_dry_run", lambda **k: fake_lead)
@@ -314,7 +313,7 @@ def test_main_dry_run_prints_first_lead_and_enrichment(
         )
     )
 
-    from scripts.research.claude_hypothesis import Hypothesis
+    from scripts.research.claude_angles import UltrasonicAngles
     from scripts.research.linkedin_search import LinkedInCandidate
     from scripts.research.perplexity import PerplexityResearch
     from scripts.sf import client as sf_client
@@ -334,8 +333,8 @@ def test_main_dry_run_prints_first_lead_and_enrichment(
         return fake_lead
 
     fake_note = RenderedNote(
-        title="PK Lead Enrichment — Acme GmbH",
-        sections=[NoteSection("Lead", "x")],
+        title="PK Inbound Research — Acme GmbH / (company unknown) — 2026-05-14 (NMi)",
+        sections=[NoteSection("CONTACT", "x")],
         enriched_at_utc="2026-05-14T10:30:00Z",
     )
     fake_docx_path = tmp_path / "output" / "00Q5g00000XYZAbc_Acme_GmbH.docx"
@@ -349,7 +348,7 @@ def test_main_dry_run_prints_first_lead_and_enrichment(
             match_confidence=42,
             reasons=["linkedin-profile-url"],
         ),
-        hypothesis=Hypothesis(text="h", recommended_action="a"),
+        angles=UltrasonicAngles(angles=["lidding"]),
     )
 
     enrichment_kwargs: dict = {}
