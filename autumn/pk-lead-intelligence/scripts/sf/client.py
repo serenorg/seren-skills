@@ -187,18 +187,28 @@ def _build_lead_detail_url(salesforce_org_url: str, record_id: str) -> str:
 # --------------------------------------------------------------------- #
 
 
-def fetch_first_lead(
+def fetch_open_leads(
     *,
     page: _Page,
     salesforce_org_url: str,
-) -> LeadRow:
-    """Navigate to the Lead list and return the first visible row.
+    limit: int,
+) -> list[LeadRow]:
+    """Navigate to the Lead list and return up to `limit` visible rows.
 
-    Used by the dry-run probe. Returns a `LeadRow` whose
-    `is_packaging` is None — the list view does not surface the
-    Project Business Unit column, so callers must invoke
-    `populate_is_packaging` before any live-write decision.
+    Skips Lightning's `[[…]]` placeholder rows the same way
+    `fetch_first_lead` does. Each `LeadRow.is_packaging` is None — the
+    list view does not surface the Project Business Unit column, so
+    callers must invoke `populate_is_packaging` per Lead before any
+    live-write decision.
+
+    Raises `RuntimeError` with diagnostic counters when zero readable
+    rows are visible — this matches the single-lead path's failure mode
+    so an operator hitting either flow gets the same FLS / placeholder
+    advice.
     """
+
+    if limit < 1:
+        raise ValueError(f"limit must be >= 1, got {limit}")
 
     list_url = _build_lead_list_url(salesforce_org_url)
     page.goto(list_url, timeout=_LIST_LOAD_TIMEOUT_MS)
@@ -207,21 +217,17 @@ def fetch_first_lead(
         selectors.SF_LEAD_LIST_FIRST_ROW, timeout=_LIST_LOAD_TIMEOUT_MS
     )
 
-    # The combined selector matches every row × every record-linked
-    # anchor in the list. We iterate in DOM order and return the first
-    # anchor that points to a real Lead with a readable name — skipping
-    # any anchor whose visible text is Lightning's `[[…]]` placeholder
-    # (field-level access gap or imported placeholder data), which
-    # previously surfaced as `lead.name='[[Unknown]]'` and produced
-    # `__Unknown__.docx` outputs that confused operator review.
     links = page.locator(
         f"{selectors.SF_LEAD_LIST_FIRST_ROW} {selectors.SF_LEAD_ROW_NAME_LINK}"
     ).all()
 
+    rows: list[LeadRow] = []
     placeholder_rows = 0
     missing_href = 0
     blank_text = 0
     for link in links:
+        if len(rows) >= limit:
+            break
         href = link.get_attribute("href")
         if not href:
             missing_href += 1
@@ -233,22 +239,43 @@ def fetch_first_lead(
         if _LIGHTNING_NO_VALUE_PATTERN.match(name):
             placeholder_rows += 1
             continue
-        return LeadRow(
-            record_id=_record_id_from_href(href),
-            name=name,
-            source_url=list_url,
+        rows.append(
+            LeadRow(
+                record_id=_record_id_from_href(href),
+                name=name,
+                source_url=list_url,
+            )
         )
 
-    raise RuntimeError(
-        "No Lead row with a readable name found in the list view "
-        f"(rows scanned={len(links)}, "
-        f"missing href={missing_href}, "
-        f"blank text={blank_text}, "
-        f"Lightning placeholder `[[…]]`={placeholder_rows}). "
-        "If placeholder count is non-zero, the running SSO user likely "
-        "lacks field-level read access to Lead.Name or the source data "
-        "contains placeholder values — escalate to the Salesforce admin."
-    )
+    if not rows:
+        raise RuntimeError(
+            "No Lead row with a readable name found in the list view "
+            f"(rows scanned={len(links)}, "
+            f"missing href={missing_href}, "
+            f"blank text={blank_text}, "
+            f"Lightning placeholder `[[…]]`={placeholder_rows}). "
+            "If placeholder count is non-zero, the running SSO user likely "
+            "lacks field-level read access to Lead.Name or the source data "
+            "contains placeholder values — escalate to the Salesforce admin."
+        )
+    return rows
+
+
+def fetch_first_lead(
+    *,
+    page: _Page,
+    salesforce_org_url: str,
+) -> LeadRow:
+    """Navigate to the Lead list and return the first visible row.
+
+    Thin wrapper over `fetch_open_leads` for the single-lead dry-run
+    path. The combined-list DOM walk and placeholder-skipping live in
+    `fetch_open_leads` so batch and single-lead flows can't drift.
+    """
+
+    return fetch_open_leads(
+        page=page, salesforce_org_url=salesforce_org_url, limit=1
+    )[0]
 
 
 def read_project_business_unit(
