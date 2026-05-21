@@ -160,6 +160,31 @@ def test_enrich_invokes_every_adapter_in_order(tmp_path: Path) -> None:
     assert result.docx_path.exists()
 
 
+def test_enrich_pipes_perplexity_company_to_linkedin_discover(tmp_path: Path) -> None:
+    """Perplexity-extracted company name must reach linkedin_discover.
+
+    Before this wiring, linkedin_discover saw `company_hint=None`
+    whenever the caller didn't pass an explicit hint — even when
+    Perplexity had already identified the company. That dropped the
+    company-token boost in scoring and left scored candidates capped
+    at ~70 instead of 100. Setup keeps the two paths distinguishable:
+    caller hint is None, Perplexity extract carries "Acme Packaging".
+    """
+
+    deps, calls = _build_stub_deps()
+    result = enrich_lead.enrich(
+        lead=_make_lead(),
+        deps=deps,
+        company_hint=None,
+        output_dir=tmp_path,
+    )
+
+    assert calls.linkedin[0]["company_hint"] == "Acme Packaging"
+    # Sibling invariant: same name flows to angle generator.
+    assert calls.angles[0]["company_name"] == "Acme Packaging"
+    assert result.docx_path.exists()
+
+
 def test_enrich_handles_empty_linkedin_candidates(tmp_path: Path) -> None:
     """No candidates is a valid state; pipeline must still render + write."""
 
