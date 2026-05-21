@@ -415,3 +415,68 @@ def test_fresh_login_returns_early_when_microsoft_silently_resumes_to_lightning(
     # valid session and want the next run to reuse it.
     assert context.storage_state_calls == [str(storage_path)]
     assert result.reused_storage is False
+
+
+def test_fresh_login_returns_early_when_sf_resumes_session_without_microsoft_transit(
+    creds, storage_path, discovery_path
+):
+    """Regression for #762 SSO race B.
+
+    When both SF and Microsoft sessions are cached, the SF SSO button
+    click jumps **straight** to Lightning — `microsoftonline.com` is
+    never visited. Previously step 2's `wait_for_url(microsoftonline)`
+    deadlocked for 30s waiting for a URL that never appeared.
+
+    The fix widens the URL predicate to also accept Lightning hosts
+    and probes `_is_authenticated` after the race wins. This test
+    models the race-B path by making the Lightning sentinel visible
+    after step 2's `wait_for_url` and asserts that:
+
+    - no Microsoft form is filled,
+    - no discovery file is written (no tenant URL to record),
+    - storage state IS persisted (we landed on a valid session),
+    - the returned `microsoft_tenant_url` is `None`.
+    """
+
+    sentinel = selectors.SF_LIGHTNING_AUTHENTICATED_SENTINEL
+    page = FakePage(
+        # SF jumps straight to Lightning; URL never visits Microsoft.
+        wait_for_url_returns=[
+            "https://acme.lightning.force.com/lightning/page/home",
+        ],
+        wait_for_url_visibility_after=[{sentinel}],
+    )
+    context = FakeContext(page=page)
+
+    result = microsoft_sso.authenticate(
+        context=context,
+        salesforce_org_url="https://acme.lightning.force.com",
+        creds=creds,
+        storage_path=storage_path,
+        discovery_path=discovery_path,
+    )
+
+    # No credential fills happened — Microsoft flow was bypassed entirely.
+    assert not any(call[0] == "fill" for call in page.call_log), (
+        "race-B path must not fill any Microsoft form fields"
+    )
+
+    # discovery file is NOT written — there is no Microsoft URL to
+    # record, and writing a Lightning URL into sso_discovery.json
+    # would be misleading.
+    assert not discovery_path.exists()
+
+    # The wider URL predicate ran on exactly one wait_for_url call —
+    # the race-B early-return at step 2 skips every later flow step
+    # (Microsoft form-fills, KMSI, final SF redirect). The pre-fix
+    # behavior would have made TWO wait_for_url calls: one that
+    # deadlocked on `microsoftonline.com` and a second one we never
+    # reached.
+    url_waits = [c for c in page.call_log if c[0] == "wait_for_url"]
+    assert len(url_waits) == 1
+
+    # storage IS persisted — we landed on Lightning with a valid sid.
+    assert context.storage_state_calls == [str(storage_path)]
+    assert result.reused_storage is False
+    # No Microsoft tenant URL to surface — race B bypassed Microsoft.
+    assert result.microsoft_tenant_url is None

@@ -145,11 +145,13 @@ def _drive_fresh_login(
     salesforce_org_url: str,
     creds: SalesforceCredentials,
     discovery_path: Path,
-) -> str:
+) -> Optional[str]:
     """Walk Salesforce → Microsoft → Lightning.
 
     Returns the Microsoft tenant URL the SSO redirect landed us on,
-    so the caller can persist it alongside the browser storage.
+    so the caller can persist it alongside the browser storage. May
+    return `None` when SF resumes the session straight to Lightning
+    without transiting Microsoft at all — see step 2 race below.
     """
 
     # Step 1. Salesforce login page. Click the Microsoft SSO button.
@@ -159,14 +161,29 @@ def _drive_fresh_login(
         timeout=DEFAULT_SELECTOR_TIMEOUT_MS,
     )
 
-    # Step 2. Wait for the redirect to land on the Microsoft sign-in
-    # host, then capture the URL. We match the host by substring
-    # (`microsoftonline.com`) rather than a fixed tenant value
-    # because the tenant is per-customer and not known in advance.
+    # Step 2. Race between the Microsoft sign-in host and a direct
+    # Lightning resume. When both SF and Microsoft sessions are still
+    # cached, SF can complete login without an IdP round-trip and the
+    # page jumps straight to Lightning — a bare `wait_for_url` on
+    # `microsoftonline.com` deadlocks for 30s waiting for a URL the
+    # browser never visits. Widen the predicate to accept Lightning /
+    # my.salesforce.com hosts and discriminate on `page.url` after
+    # the race wins. Issue #762.
     page.wait_for_url(
-        lambda url: "microsoftonline.com" in str(url),
+        lambda url: (
+            "microsoftonline.com" in str(url)
+            or "lightning.force.com" in str(url)
+            or "my.salesforce.com" in str(url)
+        ),
         timeout=DEFAULT_NAVIGATION_TIMEOUT_MS,
     )
+    if "microsoftonline.com" not in page.url:
+        # Race resolved on a Lightning / *.salesforce.com host without
+        # ever transiting Microsoft — SF resumed the session directly.
+        # Skip discovery persistence (no tenant URL to record) and let
+        # the caller persist storage as a Lightning session.
+        return None
+
     microsoft_tenant_url = page.url
     _persist_sso_discovery(
         discovery_path=discovery_path,
