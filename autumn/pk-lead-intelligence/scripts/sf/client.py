@@ -51,6 +51,11 @@ class _Locator(Protocol):
     # column renders Lightning's `[[…]]` placeholder.
     def all(self) -> list["_Locator"]: ...
 
+    # `.count()` returns the number of DOM matches without raising.
+    # `read_project_business_unit` uses this to detect a legitimately
+    # empty PBU field (label rendered, value span omitted) — see #759.
+    def count(self) -> int: ...
+
     def get_attribute(self, name: str) -> str | None: ...
     def inner_text(self) -> str: ...
 
@@ -254,19 +259,26 @@ def read_project_business_unit(
     detail_url = _build_lead_detail_url(salesforce_org_url, record_id)
     page.goto(detail_url, timeout=_DETAIL_LOAD_TIMEOUT_MS)
 
-    # Wait for the Details tab's value span to render. The selector
-    # is scoped to the Project Business Unit label, so if it never
-    # appears the operator has a real problem to investigate (likely
-    # a custom Lead layout that hides the field).
+    # Wait on the FIELD WRAPPER, not the value span. Lightning renders
+    # the wrapper + label whenever the field is on the layout, even for
+    # Leads whose PBU is unset; the value span is only emitted when a
+    # value exists. Waiting on the value span timed out for 30s on
+    # legitimately empty fields (legal-services Lead, etc.) and crashed
+    # the `--allow-live` cycle — see #759.
     page.wait_for_selector(
-        selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_VALUE,
+        selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_FIELD,
         timeout=_DETAIL_LOAD_TIMEOUT_MS,
     )
 
     value_locator = page.locator(
         selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_VALUE
-    ).first
-    text = value_locator.inner_text().strip()
+    )
+    if value_locator.count() == 0:
+        # Value span absent → field is unset. Caller treats `None` as
+        # "not PK", which fails the cross-division gate closed.
+        return None
+
+    text = value_locator.first.inner_text().strip()
     return text or None
 
 

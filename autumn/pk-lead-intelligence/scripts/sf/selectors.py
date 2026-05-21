@@ -122,6 +122,19 @@ SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_VALUE = (
     ') span.test-id__field-value'
 )
 
+# Anchor selector for the Project Business Unit field WRAPPER. Lightning
+# always renders the form-element wrapper + label span when the field is
+# on the page layout, even for Leads whose value is unset; only the
+# inner value span is omitted. Waiting on the wrapper instead of the
+# value lets `read_project_business_unit` cleanly return `None` for a
+# legitimately empty field (legal-services Lead, etc.) without timing
+# out for 30s on a selector that will never resolve. Issue #759.
+SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_FIELD = (
+    'div.slds-form-element:has('
+    'span.test-id__field-label:has-text("Project Business Unit")'
+    ')'
+)
+
 # Build a Lead detail URL relative to the org root. HU's modern
 # Lightning emits both shapes; `/lightning/r/Lead/<id>/view` is the
 # stable canonical that always resolves regardless of org routing.

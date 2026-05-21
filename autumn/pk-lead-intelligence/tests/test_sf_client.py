@@ -82,8 +82,9 @@ def test_build_lead_list_url_handles_no_trailing_slash():
 
 @dataclass
 class FakeLocator:
-    href: str | None
-    text: str
+    href: str | None = None
+    text: str = ""
+    match_count: int = 1
 
     @property
     def first(self):
@@ -95,6 +96,13 @@ class FakeLocator:
         # `fetch_first_lead` iterates over `.all()`. The single-row
         # tests model a list of one resolved match.
         return [self]
+
+    def count(self):
+        # `read_project_business_unit` calls `.count()` on the value
+        # span locator to detect a legitimately empty PBU field (#759).
+        # Default is 1 so existing fixtures keep behaving like a
+        # single-match locator without tracking match counts.
+        return self.match_count
 
     def get_attribute(self, name):
         assert name == "href"
@@ -255,3 +263,39 @@ def test_fetch_first_lead_raises_with_diagnostic_counts_when_no_valid_row():
     assert "blank text=1" in msg
     assert "Lightning placeholder `[[…]]`=1" in msg
     assert "field-level read access" in msg
+
+
+# --------------------------------------------------------------------- #
+# read_project_business_unit                                            #
+# --------------------------------------------------------------------- #
+
+
+def test_read_project_business_unit_returns_none_when_value_span_absent():
+    """When the Lead's Project Business Unit is unset, Lightning renders
+    the field WRAPPER + label but omits the inner value span. The
+    function must wait on the wrapper (always present) and treat a
+    missing value span as `None` — not raise a 30s Playwright timeout
+    against the value selector that never resolves. Regression for
+    issue #759, surfaced by the Daniel Valdez legal-services Lead.
+    """
+
+    field_sel = selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_FIELD
+    value_sel = selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_VALUE
+    page = FakePage(
+        locator_for={value_sel: FakeLocator(match_count=0)},
+    )
+
+    result = sf_client.read_project_business_unit(
+        page=page,
+        record_id="00Q5g00000XYZAbc",
+        salesforce_org_url="https://acme.lightning.force.com",
+    )
+
+    assert result is None
+    waits = [c[1][0] for c in page.call_log if c[0] == "wait_for_selector"]
+    assert field_sel in waits, (
+        "wait_for_selector must anchor on the field wrapper, not the value"
+    )
+    assert value_sel not in waits, (
+        "waiting on the value span is the bug — must not regress"
+    )
