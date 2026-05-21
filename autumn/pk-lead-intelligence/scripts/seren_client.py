@@ -156,6 +156,41 @@ def _decode_response(status: int, body: bytes) -> dict[str, Any]:
     )
 
 
+# Keys that mark the model-routing gateway envelope. When all of these
+# co-occur inside `data`, the upstream provider's payload lives at
+# `data.body`; without them, `data` IS the upstream payload (the shape
+# data publishers like `seren-db` return).
+_GATEWAY_ENVELOPE_MARKERS = {"status", "body"}
+
+
+def _unwrap_gateway_envelope(payload: Any) -> Any:
+    """Strip the Seren gateway wrapper from a decoded publisher response.
+
+    Every gateway response is wrapped in `{"data": <X>}`. Model-routing
+    publishers (`perplexity`, `seren-models`) further wrap the upstream
+    payload as `{"data": {"status": 200, "cost": …, "body": <upstream>}}`.
+    Data publishers (`seren-db`) put the payload directly at `data`.
+
+    This helper returns the innermost upstream payload regardless of
+    shape, so adapters can keep their `response.get("choices")` /
+    `response.get("id")` access pattern without rewriting for the
+    envelope. Anything that does not look like the gateway wrap is
+    returned unchanged — preserves backwards-compat with fixtures and
+    publishers that already return the payload at the top level.
+
+    Trace: empty-research bug, May 2026 — every Note since inception
+    had `choices=None` because the adapters read the outer envelope.
+    """
+
+    if not (isinstance(payload, dict) and list(payload.keys()) == ["data"]):
+        return payload
+
+    inner = payload["data"]
+    if isinstance(inner, dict) and _GATEWAY_ENVELOPE_MARKERS.issubset(inner.keys()):
+        return inner["body"]
+    return inner
+
+
 # --------------------------------------------------------------------- #
 # Default urllib fetcher                                                #
 # --------------------------------------------------------------------- #
@@ -198,9 +233,19 @@ def call_publisher(
     api_key: Optional[str] = None,
     base_url: str = _DEFAULT_BASE_URL,
     fetcher: Optional[Fetcher] = None,
-) -> dict[str, Any]:
-    """Make one call to a Seren publisher and return the decoded
-    JSON body.
+) -> Any:
+    """Make one call to a Seren publisher and return the upstream
+    payload after stripping the gateway envelope.
+
+    The Seren gateway wraps responses in `{"data": …}`; model-routing
+    publishers (`perplexity`, `seren-models`) wrap further as
+    `{"data": {"status": …, "body": <upstream>, "cost": …}}`. This
+    function unwraps both layers so callers can read the upstream
+    payload directly (`response["choices"]`, `response["id"]`, etc.).
+    See `_unwrap_gateway_envelope` for the precise rules.
+
+    Returns `Any` because data publishers (`seren-db`) put a list at
+    `data` while model-routing publishers put a dict at `data.body`.
 
     `api_key` defaults to `resolve_api_key()`. `fetcher` defaults to
     `_default_fetcher`. Both are exposed for tests and for unusual
@@ -223,4 +268,5 @@ def call_publisher(
     )
 
     status, response_body = fetcher(method, url, headers, encoded_body)
-    return _decode_response(status, response_body)
+    decoded = _decode_response(status, response_body)
+    return _unwrap_gateway_envelope(decoded)

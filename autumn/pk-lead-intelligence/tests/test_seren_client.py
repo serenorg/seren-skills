@@ -253,3 +253,38 @@ def test_call_publisher_propagates_publisher_errors() -> None:
 
     assert excinfo.value.status == 401
     assert "unauthorized" in str(excinfo.value)
+
+
+def test_call_publisher_unwraps_model_routing_gateway_envelope() -> None:
+    """Model-routing publishers wrap upstream payloads twice:
+    `{"data": {"status": 200, "cost": …, "body": <upstream>}}`.
+
+    Regression for the empty-research bug — every research Note had
+    `choices=None` because the adapters were reading the outer wrap.
+    The wrapper must hand back the inner `body` so adapters can keep
+    their `response.get("choices")` access pattern.
+    """
+
+    raw_gateway_payload = (
+        b'{"data": {"status": 200, "cost": 0.000139, '
+        b'"payment_source": "prepaid_balance", "body": '
+        b'{"choices": [{"message": {"content": "PONG"}}], '
+        b'"model": "anthropic/claude-sonnet-4-5"}}}'
+    )
+
+    def fake_fetcher(method: str, url: str, headers: dict, body: bytes | None):
+        return (200, raw_gateway_payload)
+
+    result = sc.call_publisher(
+        "seren-models",
+        "POST",
+        "/chat/completions",
+        body={"model": "anthropic/claude-sonnet-4-5", "messages": []},
+        api_key="test-key",
+        fetcher=fake_fetcher,
+    )
+
+    assert result.get("model") == "anthropic/claude-sonnet-4-5"
+    choices = result.get("choices") or []
+    assert len(choices) == 1
+    assert choices[0]["message"]["content"] == "PONG"
