@@ -133,6 +133,14 @@ class FakePage:
     locator_for: dict[str, FakeLocator] = field(default_factory=dict)
     call_log: list[tuple[str, tuple]] = field(default_factory=list)
     url: str = ""
+    # Per-selector exception map: when `wait_for_selector(sel)` is
+    # called and `sel` is a key here, raise the stored exception.
+    # Lets tests model Playwright's `TimeoutError` for selectors that
+    # would never resolve in production (PBU field absent from a Lead's
+    # page layout — issue #764).
+    wait_for_selector_raises_for: dict[str, BaseException] = field(
+        default_factory=dict
+    )
 
     def goto(self, url, *, timeout: int = 0):
         self.call_log.append(("goto", (url,)))
@@ -140,6 +148,8 @@ class FakePage:
 
     def wait_for_selector(self, selector, *, timeout: int = 0):
         self.call_log.append(("wait_for_selector", (selector,)))
+        if selector in self.wait_for_selector_raises_for:
+            raise self.wait_for_selector_raises_for[selector]
 
     def locator(self, selector):
         self.call_log.append(("locator", (selector,)))
@@ -299,3 +309,41 @@ def test_read_project_business_unit_returns_none_when_value_span_absent():
     assert value_sel not in waits, (
         "waiting on the value span is the bug — must not regress"
     )
+
+
+def test_read_project_business_unit_returns_none_when_pbu_field_not_on_layout():
+    """When the Lead's page layout omits the PBU field entirely (a
+    non-PK Record Type, e.g. HU's legal-services Lead Record Type),
+    the field WRAPPER never renders either. The wait on the wrapper
+    times out — Playwright raises TimeoutError. The function must
+    catch that and return `None` so the caller's cross-division gate
+    fails closed instead of crashing the entire `--allow-live` cycle.
+
+    Regression for issue #764, surfaced by the Daniel Valdez Lead
+    after #759 / #763 unblocked SSO and Lead-list navigation.
+    """
+
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    field_sel = selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_FIELD
+    page = FakePage(
+        wait_for_selector_raises_for={
+            field_sel: PlaywrightTimeoutError(
+                "Page.wait_for_selector: Timeout 30000ms exceeded."
+            ),
+        },
+    )
+
+    result = sf_client.read_project_business_unit(
+        page=page,
+        record_id="00Q5g00000XYZAbc",
+        salesforce_org_url="https://acme.lightning.force.com",
+    )
+
+    assert result is None
+    # The wrapper wait happened (and timed out) but the function did
+    # NOT proceed to read the value locator — wrapper missing means
+    # field absent, no value to read.
+    waits = [c[1][0] for c in page.call_log if c[0] == "wait_for_selector"]
+    assert waits == [field_sel]
+    assert not any(c[0] == "locator" for c in page.call_log)
