@@ -222,6 +222,29 @@ def _build_parser() -> argparse.ArgumentParser:
             "Microsoft / Salesforce selector that has rotated."
         ),
     )
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        help=(
+            "Iterate every visible open Lead instead of stopping after "
+            "the first row. Each Lead runs the same enrich + "
+            "(optionally) live-write path as the single-lead flow. "
+            "A failure on one Lead does not abort the batch; the "
+            "summary line carries `leads_failed=N` for audit. Cap the "
+            "batch size with `--max-leads`."
+        ),
+    )
+    parser.add_argument(
+        "--max-leads",
+        type=int,
+        default=50,
+        help=(
+            "Cap on the number of Leads processed by `--batch`. The cap "
+            "exists to bound per-cycle Perplexity + Claude API spend; a "
+            "runaway 500-row list cannot burn the operator's budget in "
+            "one tick. Ignored without `--batch`."
+        ),
+    )
     return parser
 
 
@@ -280,6 +303,56 @@ def _run_dry_run(
                 return sf_client.fetch_first_lead(
                     page=result.page,
                     salesforce_org_url=salesforce_org_url,
+                )
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+
+def _run_batch_fetch(
+    *,
+    salesforce_org_url: str,
+    storage_path: Path,
+    headless: bool,
+    op_vault: str,
+    op_item: str,
+    limit: int,
+) -> list[sf_client.LeadRow]:
+    """Drive the op → SSO → list-N-leads flow once.
+
+    Mirrors `_run_dry_run`'s Playwright lifecycle but returns up to
+    `limit` rows from the AllOpenLeads list view instead of stopping at
+    one. Used by `--batch`. Enrichment and (optional) live-write run
+    against the returned list in `main` — this function deliberately
+    does no per-lead work so the browser closes before any Perplexity
+    or Claude call fires.
+    """
+
+    creds = op_service_account.read_salesforce_credentials(
+        vault=op_vault, item=op_item
+    )
+
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        try:
+            if storage_path.exists():
+                context = browser.new_context(storage_state=str(storage_path))
+            else:
+                context = browser.new_context()
+            try:
+                result = microsoft_sso.authenticate(
+                    context=context,
+                    salesforce_org_url=salesforce_org_url,
+                    creds=creds,
+                    storage_path=storage_path,
+                )
+                return sf_client.fetch_open_leads(
+                    page=result.page,
+                    salesforce_org_url=salesforce_org_url,
+                    limit=limit,
                 )
             finally:
                 context.close()
@@ -464,6 +537,7 @@ class RunSummary:
     notes_skipped_non_pk: int
     notes_skipped_recent: int
     docx_written: int
+    leads_failed: int
 
 
 def _run_live_note_write(
@@ -558,6 +632,7 @@ def _print_run_summary(summary: RunSummary) -> None:
         f"notes_skipped_non_pk={summary.notes_skipped_non_pk}",
         f"notes_skipped_recent={summary.notes_skipped_recent}",
         f"docx_written={summary.docx_written}",
+        f"leads_failed={summary.leads_failed}",
     ]
     print(f"pk-lead-intelligence run: {' '.join(parts)}")
 
@@ -742,6 +817,91 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # args.command == "run"
+    # Hoist ledger setup so it's resolved once per cycle regardless of
+    # batch / single-lead — the per-lead live-write inside the batch
+    # loop reuses the same ledger handle. SerenDB URI gate fails closed
+    # before any browser launches.
+    ledger = None
+    if args.allow_live:
+        ledger_uri = (config.get("inputs") or {}).get(
+            "serendb_connection_uri", ""
+        )
+        if not ledger_uri:
+            print(
+                "--allow-live requires config.json "
+                "`inputs.serendb_connection_uri` to be set. The "
+                "recency ledger lives in SerenDB; without a "
+                "connection URI the cron cannot enforce the 24h "
+                "skip gate. See SKILL.md > Phase 4.",
+                file=sys.stderr,
+            )
+            return 2
+        ledger = enrichment_ledger.PsycopgEnrichmentLedger(ledger_uri)
+        ledger.ensure_schema()
+
+    if args.batch:
+        leads = _run_batch_fetch(
+            salesforce_org_url=salesforce_org_url,
+            storage_path=args.storage_path,
+            headless=args.headless,
+            op_vault=op_vault,
+            op_item=op_item,
+            limit=args.max_leads,
+        )
+        print(f"batch_fetch: leads={len(leads)} cap={args.max_leads}")
+
+        counters = {
+            "notes_written": 0,
+            "notes_skipped_non_pk": 0,
+            "notes_skipped_recent": 0,
+            "docx_written": 0,
+            "leads_failed": 0,
+        }
+
+        for idx, lead in enumerate(leads, 1):
+            try:
+                enrichment = _run_enrichment(
+                    lead=lead, output_dir=args.output_dir
+                )
+                if enrichment.docx_path:
+                    counters["docx_written"] += 1
+                if args.allow_live:
+                    write_result = _run_live_note_write(
+                        salesforce_org_url=salesforce_org_url,
+                        storage_path=args.storage_path,
+                        headless=args.headless,
+                        op_vault=op_vault,
+                        op_item=op_item,
+                        enrichment=enrichment,
+                        lead=lead,
+                        ledger=ledger,
+                        dry_run=False,
+                    )
+                    if write_result.status == "written":
+                        counters["notes_written"] += 1
+                    elif write_result.status == "skipped_non_pk":
+                        counters["notes_skipped_non_pk"] += 1
+                    elif write_result.status == "skipped_recent":
+                        counters["notes_skipped_recent"] += 1
+            except Exception as exc:  # noqa: BLE001 — log and continue
+                counters["leads_failed"] += 1
+                print(
+                    f"[{idx}/{len(leads)}] FAILED "
+                    f"{lead.record_id} {lead.name}: {exc}",
+                    file=sys.stderr,
+                )
+
+        _print_run_summary(
+            RunSummary(
+                command="run",
+                dry_run=args.dry_run,
+                leads_evaluated=len(leads),
+                **counters,
+            )
+        )
+        return 0
+
+    # Single-lead path (unchanged behavior).
     lead = _run_dry_run(
         salesforce_org_url=salesforce_org_url,
         storage_path=args.storage_path,
@@ -772,37 +932,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("  angle:     (no angles generated)")
 
-    # Phase 4 live Note write. Only runs when --allow-live is set
-    # AND the config gate is on (already validated above).
-    #
-    # `is_packaging` is populated from the Lead detail page's
-    # "Project Business Unit" field by `populate_is_packaging`
-    # inside `_run_live_note_write` — the cross-division gate
-    # (P0 per SKILL.md) fires before any write attempt.
-    #
-    # Recency is enforced via a SerenDB-backed
-    # `pk_lead_enrichment_log` table (issue #563). The operator
-    # supplies the connection URI in `inputs.serendb_connection_uri`
-    # — Phase 5 will resolve it from the seren-db publisher
-    # automatically. Live path fails closed when the URI is missing.
     note_status = "not_attempted"
     if args.allow_live:
-        ledger_uri = (config.get("inputs") or {}).get(
-            "serendb_connection_uri", ""
-        )
-        if not ledger_uri:
-            print(
-                "--allow-live requires config.json "
-                "`inputs.serendb_connection_uri` to be set. The "
-                "recency ledger lives in SerenDB; without a "
-                "connection URI the cron cannot enforce the 24h "
-                "skip gate. See SKILL.md > Phase 4.",
-                file=sys.stderr,
-            )
-            return 2
-        ledger = enrichment_ledger.PsycopgEnrichmentLedger(ledger_uri)
-        ledger.ensure_schema()
-
         write_result = _run_live_note_write(
             salesforce_org_url=salesforce_org_url,
             storage_path=args.storage_path,
@@ -826,6 +957,7 @@ def main(argv: list[str] | None = None) -> int:
             notes_skipped_non_pk=1 if note_status == "skipped_non_pk" else 0,
             notes_skipped_recent=1 if note_status == "skipped_recent" else 0,
             docx_written=1 if enrichment.docx_path else 0,
+            leads_failed=0,
         )
     )
     return 0

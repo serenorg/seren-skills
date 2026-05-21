@@ -383,6 +383,146 @@ def test_main_dry_run_prints_first_lead_and_enrichment(
 
 
 # --------------------------------------------------------------------- #
+# Batch mode                                                             #
+# --------------------------------------------------------------------- #
+
+
+def _fake_lead(record_id: str, name: str):
+    from scripts.sf import client as sf_client
+
+    return sf_client.LeadRow(
+        record_id=record_id,
+        name=name,
+        source_url="https://acme.lightning.force.com/lightning/o/Lead/list",
+    )
+
+
+def _fake_enrichment(tmp_path):
+    from scripts.output.note_renderer import NoteSection, RenderedNote
+    from scripts.research.claude_angles import UltrasonicAngles
+    from scripts.research.perplexity import PerplexityResearch
+    from scripts.sf import enrich_lead
+
+    return enrich_lead.EnrichmentResult(
+        note=RenderedNote(
+            title="t",
+            sections=[NoteSection("CONTACT", "x")],
+            enriched_at_utc="2026-05-21T10:30:00Z",
+        ),
+        docx_path=tmp_path / "note.docx",
+        perplexity=PerplexityResearch(summary="s", citations=[], raw_text=""),
+        linkedin=None,
+        angles=UltrasonicAngles(angles=["a"]),
+    )
+
+
+def test_batch_iterates_all_leads_and_aggregates_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    """--batch enriches every fetched lead and aggregates counters.
+
+    Three leads in → leads_evaluated=3 and docx_written=3 in the
+    single-line summary. Each lead gets its own _run_enrichment call.
+    """
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {"inputs": {"salesforce_org_url": "https://acme.lightning.force.com"}}
+        )
+    )
+
+    leads = [
+        _fake_lead("00Q000000000001", "Lead One"),
+        _fake_lead("00Q000000000002", "Lead Two"),
+        _fake_lead("00Q000000000003", "Lead Three"),
+    ]
+    enrich_calls: list = []
+    monkeypatch.setattr(agent, "_run_batch_fetch", lambda **k: leads)
+
+    def fake_enrichment(**kwargs):
+        enrich_calls.append(kwargs["lead"].record_id)
+        return _fake_enrichment(tmp_path)
+
+    monkeypatch.setattr(agent, "_run_enrichment", fake_enrichment)
+
+    rc = agent.main(
+        [
+            "--command", "run", "--dry-run",
+            "--batch", "--max-leads", "10",
+            "--config", str(cfg),
+        ]
+    )
+
+    assert rc == 0
+    assert enrich_calls == [
+        "00Q000000000001",
+        "00Q000000000002",
+        "00Q000000000003",
+    ]
+    out = capsys.readouterr().out
+    summary = next(
+        ln for ln in out.splitlines()
+        if ln.startswith("pk-lead-intelligence run:")
+    )
+    assert "leads_evaluated=3" in summary
+    assert "docx_written=3" in summary
+    assert "leads_failed=0" in summary
+
+
+def test_batch_continues_after_per_lead_enrichment_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    """One lead's exception does not abort the batch.
+
+    Lead 2 of 3 raises during enrichment; leads 1 and 3 still complete.
+    leads_failed=1 surfaces in the summary so the operator can audit.
+    """
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {"inputs": {"salesforce_org_url": "https://acme.lightning.force.com"}}
+        )
+    )
+
+    leads = [
+        _fake_lead("00Q000000000001", "Lead One"),
+        _fake_lead("00Q000000000002", "Lead Two"),
+        _fake_lead("00Q000000000003", "Lead Three"),
+    ]
+    monkeypatch.setattr(agent, "_run_batch_fetch", lambda **k: leads)
+
+    def flaky_enrichment(**kwargs):
+        if kwargs["lead"].record_id == "00Q000000000002":
+            raise RuntimeError("simulated Perplexity 500")
+        return _fake_enrichment(tmp_path)
+
+    monkeypatch.setattr(agent, "_run_enrichment", flaky_enrichment)
+
+    rc = agent.main(
+        [
+            "--command", "run", "--dry-run",
+            "--batch", "--max-leads", "10",
+            "--config", str(cfg),
+        ]
+    )
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    summary = next(
+        ln for ln in captured.out.splitlines()
+        if ln.startswith("pk-lead-intelligence run:")
+    )
+    assert "leads_evaluated=3" in summary
+    assert "docx_written=2" in summary
+    assert "leads_failed=1" in summary
+    # The failing lead's record id should be surfaced on stderr so the
+    # operator can investigate without grepping a debug log.
+    assert "00Q000000000002" in captured.err
+
+
+# --------------------------------------------------------------------- #
 # Headless-by-default contract                                           #
 # --------------------------------------------------------------------- #
 
