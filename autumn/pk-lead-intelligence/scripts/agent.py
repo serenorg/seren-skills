@@ -857,6 +857,13 @@ def main(argv: list[str] | None = None) -> int:
             "docx_written": 0,
             "leads_failed": 0,
         }
+        # Collect failures so we can render an operator-visible block
+        # on stdout before the cron-parseable summary. Issue #774: a
+        # non-technical operator cannot grep stderr, so the same output
+        # stream they're already reading must carry the actionable
+        # detail. stderr still gets the per-line print for log-collection
+        # symmetry — it's free and machine-readable.
+        failures: list[dict] = []
 
         for idx, lead in enumerate(leads, 1):
             try:
@@ -885,11 +892,29 @@ def main(argv: list[str] | None = None) -> int:
                         counters["notes_skipped_recent"] += 1
             except Exception as exc:  # noqa: BLE001 — log and continue
                 counters["leads_failed"] += 1
+                failures.append(
+                    {"idx": idx, "lead": lead, "exc": exc}
+                )
                 print(
                     f"[{idx}/{len(leads)}] FAILED "
                     f"{lead.record_id} {lead.name}: {exc}",
                     file=sys.stderr,
                 )
+
+        if failures:
+            print()
+            print(f"FAILED LEADS ({len(failures)}):")
+            for failure in failures:
+                lead_obj = failure["lead"]
+                exc = failure["exc"]
+                print(
+                    f"  [{failure['idx']}/{len(leads)}] "
+                    f"{lead_obj.record_id} — {lead_obj.name}"
+                )
+                print(
+                    f"          {type(exc).__name__}: {exc}"
+                )
+            print()
 
         _print_run_summary(
             RunSummary(
