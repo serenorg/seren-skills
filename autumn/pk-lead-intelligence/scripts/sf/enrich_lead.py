@@ -143,22 +143,25 @@ def enrich(
         source_hint=lead.source_url,
     )
 
-    candidates = deps.linkedin_discover(
-        lead_name=lead.name,
-        company_hint=company_hint,
-    )
-    linkedin = candidates[0] if candidates else None
-
     # Prefer the company name Perplexity extracted from the live page;
     # fall back to `company_hint` (passed by the caller, currently None
-    # until #794 plumbs it from the All Sources PK Leads report). This
-    # is what reaches the Claude angle prompt — it lets the model name
-    # the customer directly, which materially improves angle quality.
+    # until #794 plumbs it from the All Sources PK Leads report). Used
+    # for both the LinkedIn `site:linkedin.com/in/` query (where it
+    # adds the 10-point company-token boost to candidate scoring) and
+    # the Claude angle prompt (where it lets the model name the
+    # customer directly). Computed before linkedin_discover so both
+    # downstream calls see the same resolved company name.
     extracted_company = (
         perplexity.extract.company_name
         if perplexity.extract and perplexity.extract.company_name
         else (company_hint or "")
     )
+
+    candidates = deps.linkedin_discover(
+        lead_name=lead.name,
+        company_hint=extracted_company or None,
+    )
+    linkedin = candidates[0] if candidates else None
 
     angles = deps.claude_angles(
         lead_name=lead.name,
