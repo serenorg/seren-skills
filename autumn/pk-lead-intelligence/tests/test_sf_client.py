@@ -87,11 +87,14 @@ class FakeLocator:
 
     @property
     def first(self):
-        # The production code chains `.first` to handle Playwright's
-        # strict-mode multi-match; the fake collapses that to a
-        # single-match identity so the rest of the assertions stay
-        # readable.
+        # `read_project_business_unit` uses `.first` for single-cell
+        # reads. Single-row tests inherit this identity behavior.
         return self
+
+    def all(self):
+        # `fetch_first_lead` iterates over `.all()`. The single-row
+        # tests model a list of one resolved match.
+        return [self]
 
     def get_attribute(self, name):
         assert name == "href"
@@ -99,6 +102,22 @@ class FakeLocator:
 
     def inner_text(self):
         return self.text
+
+
+@dataclass
+class FakeRowList:
+    """Fake for a locator that resolves to multiple matches.
+
+    `fetch_first_lead` calls `.all()` to iterate over every row+anchor
+    pair in the Lead list. This fake returns a pre-built list of
+    `FakeLocator`s, one per simulated DOM row, so tests can model the
+    multi-row scan (e.g. a placeholder row followed by a real row).
+    """
+
+    rows: list[FakeLocator]
+
+    def all(self):
+        return list(self.rows)
 
 
 @dataclass
@@ -127,6 +146,22 @@ def _make_page_with_link(*, href: str | None, text: str) -> FakePage:
         f"{selectors.SF_LEAD_ROW_NAME_LINK}"
     )
     return FakePage(locator_for={sel: FakeLocator(href=href, text=text)})
+
+
+def _make_page_with_rows(rows: list[tuple[str | None, str]]) -> FakePage:
+    """Build a FakePage whose name-link locator resolves to many rows."""
+
+    sel = (
+        f"{selectors.SF_LEAD_LIST_FIRST_ROW} "
+        f"{selectors.SF_LEAD_ROW_NAME_LINK}"
+    )
+    return FakePage(
+        locator_for={
+            sel: FakeRowList(
+                rows=[FakeLocator(href=h, text=t) for h, t in rows]
+            )
+        }
+    )
 
 
 def test_fetch_first_lead_returns_parsed_row():
@@ -169,31 +204,54 @@ def test_fetch_first_lead_strips_whitespace_in_name():
     assert row.name == "Acme GmbH"
 
 
-def test_fetch_first_lead_raises_when_href_missing():
-    page = _make_page_with_link(href=None, text="Acme GmbH")
-    with pytest.raises(RuntimeError, match="missing href"):
-        sf_client.fetch_first_lead(
-            page=page,
-            salesforce_org_url="https://acme.lightning.force.com",
-        )
+def test_fetch_first_lead_skips_lightning_placeholder_rows_and_returns_real_lead():
+    """A row whose Name link renders Lightning's `[[…]]` placeholder is
+    skipped and the next row's real Lead is returned.
 
+    Regression for issue #755: HU's first Lead list row surfaced
+    `[[Unknown]]` (Lightning's field-level-access placeholder), which
+    produced `00QS700000L7ELYMA3___Unknown__.docx` outputs. The fix
+    iterates rows and skips placeholders instead of silently using one.
+    """
 
-def test_fetch_first_lead_raises_when_href_empty_string():
-    page = _make_page_with_link(href="", text="Acme GmbH")
-    with pytest.raises(RuntimeError, match="missing href"):
-        sf_client.fetch_first_lead(
-            page=page,
-            salesforce_org_url="https://acme.lightning.force.com",
-        )
-
-
-def test_fetch_first_lead_raises_when_name_blank():
-    page = _make_page_with_link(
-        href="/lightning/r/Lead/00Q5g00000XYZAbc/view",
-        text="   ",
+    page = _make_page_with_rows(
+        [
+            ("/lightning/r/Lead/00QS700000L7ELYMA3/view", "[[Unknown]]"),
+            ("/lightning/r/Lead/00Q5g00000XYZAbc/view", "Acme GmbH"),
+        ]
     )
-    with pytest.raises(RuntimeError, match="without text"):
+
+    row = sf_client.fetch_first_lead(
+        page=page,
+        salesforce_org_url="https://acme.lightning.force.com",
+    )
+
+    assert row.record_id == "00Q5g00000XYZAbc"
+    assert row.name == "Acme GmbH"
+
+
+def test_fetch_first_lead_raises_with_diagnostic_counts_when_no_valid_row():
+    """When every row is unusable, the raise message surfaces per-failure
+    counts (missing href, blank text, Lightning placeholder) so the
+    operator can tell whether they're hit by a permissions gap, a
+    selector rotation, or a corrupted import."""
+
+    page = _make_page_with_rows(
+        [
+            (None, "Acme GmbH"),
+            ("/lightning/r/Lead/00Q5g00000XYZAbc/view", "   "),
+            ("/lightning/r/Lead/00QS700000L7ELYMA3/view", "[[Unknown]]"),
+        ]
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
         sf_client.fetch_first_lead(
             page=page,
             salesforce_org_url="https://acme.lightning.force.com",
         )
+
+    msg = str(excinfo.value)
+    assert "missing href=1" in msg
+    assert "blank text=1" in msg
+    assert "Lightning placeholder `[[…]]`=1" in msg
+    assert "field-level read access" in msg
