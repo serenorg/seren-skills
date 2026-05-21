@@ -173,10 +173,25 @@ def _drive_fresh_login(
         microsoft_tenant_url=microsoft_tenant_url,
     )
 
-    # Step 3. Email screen.
+    # Step 3. Race between the Microsoft email screen and the Salesforce
+    # Lightning sentinel. Some tenants silently resume the SSO session
+    # through Microsoft straight back to Lightning when the upstream IdP
+    # cookie is still valid — Microsoft never renders the email form,
+    # the page lands on Lightning, and a bare wait on `MS_EMAIL_INPUT`
+    # times out at 15s with no useful diagnostic. CSS-grouping the two
+    # selectors makes `wait_for_selector` return as soon as either one
+    # is visible; `is_visible` then disambiguates the winner. Issue #759.
     page.wait_for_selector(
-        selectors.MS_EMAIL_INPUT, timeout=DEFAULT_SELECTOR_TIMEOUT_MS
+        f"{selectors.MS_EMAIL_INPUT}, "
+        f"{selectors.SF_LIGHTNING_AUTHENTICATED_SENTINEL}",
+        timeout=DEFAULT_SELECTOR_TIMEOUT_MS,
     )
+    if page.is_visible(selectors.SF_LIGHTNING_AUTHENTICATED_SENTINEL):
+        # Silent session resume — the Microsoft form was never rendered.
+        # Persist the storage as a Lightning session and skip the
+        # email/password/TOTP/KMSI screens entirely.
+        return microsoft_tenant_url
+
     page.fill(selectors.MS_EMAIL_INPUT, creds.username)
     page.click(selectors.MS_EMAIL_SUBMIT)
 
