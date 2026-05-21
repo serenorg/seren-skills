@@ -21,6 +21,20 @@ from typing import Optional, Protocol
 
 from scripts.sf import selectors
 
+# Playwright's TimeoutError is what `page.wait_for_selector` raises when
+# the selector never resolves within the timeout. We catch it by class
+# in `read_project_business_unit` so a Lead whose layout omits the PBU
+# field altogether returns `None` instead of crashing the cycle. The
+# import is wrapped because client.py is also exercised in unit tests
+# that mock the Playwright surface — those tests still get a usable
+# class to raise via the fallback. Issue #764.
+try:
+    from playwright.sync_api import (  # type: ignore[import-not-found]
+        TimeoutError as _PlaywrightTimeoutError,
+    )
+except ImportError:  # pragma: no cover — Playwright is a runtime dep
+    _PlaywrightTimeoutError = TimeoutError  # type: ignore[assignment]
+
 
 # Lightning renders `[[…]]` as a placeholder when the visible text of a
 # field cannot be resolved — most commonly because the running user lacks
@@ -265,17 +279,27 @@ def read_project_business_unit(
     # value exists. Waiting on the value span timed out for 30s on
     # legitimately empty fields (legal-services Lead, etc.) and crashed
     # the `--allow-live` cycle — see #759.
-    page.wait_for_selector(
-        selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_FIELD,
-        timeout=_DETAIL_LOAD_TIMEOUT_MS,
-    )
+    #
+    # HU runs multiple Lead Record Types with different page layouts —
+    # the PBU field is only on the PK-routed layouts. For Leads on a
+    # different layout the wrapper itself never renders, so the wait
+    # times out. Treat that as "PBU not on this layout" → return `None`
+    # (caller's cross-division gate then fails closed). Issue #764.
+    try:
+        page.wait_for_selector(
+            selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_FIELD,
+            timeout=_DETAIL_LOAD_TIMEOUT_MS,
+        )
+    except _PlaywrightTimeoutError:
+        return None
 
     value_locator = page.locator(
         selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_VALUE
     )
     if value_locator.count() == 0:
-        # Value span absent → field is unset. Caller treats `None` as
-        # "not PK", which fails the cross-division gate closed.
+        # Wrapper rendered but value span absent → field is on the
+        # layout, just unset. Same fail-closed outcome as a missing
+        # wrapper — caller treats `None` as "not PK".
         return None
 
     text = value_locator.first.inner_text().strip()
