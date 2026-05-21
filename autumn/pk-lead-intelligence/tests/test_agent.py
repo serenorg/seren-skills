@@ -248,28 +248,22 @@ def test_main_provision_dry_run_prints_plan(
     from scripts.sf import build_all_sources_leads_report as all_leads_report
     from scripts.sf import build_pk_lead_dashboard as lead_dashboard
     from scripts.sf import build_pk_opp_artifacts as opp_artifacts
-    from scripts.sf import provision_fields
 
     fake_summary = agent.ProvisionSummary(
-        fields=provision_fields.ProvisionResult(
-            planned=list(provision_fields.LEAD_FIELD_SPECS),
-            created=[],
-            skipped=[],
-        ),
         all_sources_report=all_leads_report.ReportResult(
             spec=all_leads_report.ALL_SOURCES_PK_LEADS_REPORT_SPEC,
-            created=False,
-            url=None,
+            status="dry_run",
+            url=all_leads_report.PINNED_REPORT_URL,
         ),
         lead_dashboard=lead_dashboard.DashboardResult(
             spec=lead_dashboard.PK_LEAD_DASHBOARD_SPEC,
-            created=False,
-            url=None,
+            status="dry_run",
+            url=lead_dashboard.PINNED_DASHBOARD_URL,
         ),
         opp_dashboard=opp_artifacts.DashboardResult(
             spec=opp_artifacts.PK_OPP_PIPELINE_DASHBOARD_SPEC,
-            created=False,
-            url=None,
+            status="dry_run",
+            url=opp_artifacts.PINNED_DASHBOARD_URL,
         ),
     )
 
@@ -288,12 +282,11 @@ def test_main_provision_dry_run_prints_plan(
     assert rc == 0
     assert captured_kwargs["dry_run"] is True
     out = capsys.readouterr().out
-    # Each planned artifact must be surfaced so the operator can
-    # eyeball the plan before flipping live_mode=true.
-    assert "PACKAGING__c" in out
+    # The three operator-owned artifacts are each surfaced so the
+    # operator can eyeball the plan.
     assert "All Sources PK Leads" in out
-    assert "PK Lead Dashboard" in out
-    assert "PK Opportunity Pipeline & Rolling Forecast" in out
+    assert "PK Inbound Web Lead and Activity Tracking" in out
+    assert "PK Inbound Web Lead and Opportunity Tracking" in out
 
 
 # --------------------------------------------------------------------- #

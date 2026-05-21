@@ -1,27 +1,23 @@
-"""Build the PK Opportunity Pipeline & Rolling Forecast dashboard.
+"""Validate the PK Opportunity Pipeline dashboard (Phase 3).
 
-Five components covering open pipeline, forecast pacing, and
-rolling close-rate. The pacing-vs-target component is load-bearing
-for the Phase 4 weekly status doc — the doc reads its numerator
-directly. Removing it breaks the weekly doc.
+Operator-owned dashboard `01ZS7000004KhePMAS` — Nathan maintains the
+components; the skill just confirms it still loads on every provision
+tick. Same architectural rationale as
+`build_all_sources_leads_report.py` and
+`build_pk_lead_dashboard.py`: the Lightning Dashboard editor sits
+inside an Aura-app iframe that cannot be cleanly driven every cron
+tick, and the artifact is dedicated to this skill so drift is not a
+real concern.
 
-The dashboard is sourced from three supporting reports the driver
-also provisions:
-
-* `PK Open Pipeline` — open Opportunities filtered to PK.
-* `PK Won/Lost — Last 90 Days` — closed Opportunities for the
-  rolling close-rate metric.
-* `PK Won — This Month` — pacing numerator.
-
-Idempotent by title at both the report and dashboard level.
+The pacing-vs-target component is the load-bearing one for the Phase 4
+weekly status doc — the doc reads its numerator directly. Spec lock
+below.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Protocol
 
-from scripts.sf.build_all_sources_leads_report import ReportSpec, ReportFilterClause
 from scripts.sf.build_pk_lead_dashboard import (
     DashboardComponentSpec,
     DashboardResult,
@@ -35,7 +31,7 @@ from scripts.sf.build_pk_lead_dashboard import (
 
 
 class _Page(Protocol):
-    """Subset of `playwright.sync_api.Page` the driver uses."""
+    """Subset of `playwright.sync_api.Page` the validator uses."""
 
     url: str
 
@@ -43,91 +39,25 @@ class _Page(Protocol):
 
 
 # --------------------------------------------------------------------- #
-# Supporting report specs                                                #
+# Pinned artifact                                                        #
 # --------------------------------------------------------------------- #
 
 
-# Phase 4 will also enrich Opportunities, but Phase 3 only needs the
-# reports so the dashboard has data to bind to. Each report carries
-# a PK filter at the report layer so a dashboard component
-# accidentally reused on another dashboard still respects the
-# division boundary.
-PK_OPEN_PIPELINE_REPORT_SPEC = ReportSpec(
-    title="PK Open Pipeline",
-    report_type="Opportunities",
-    filters=[
-        ReportFilterClause(field="Division__c", operator="equals", value="PK"),
-        ReportFilterClause(field="IsClosed", operator="equals", value="false"),
-    ],
-    columns=[
-        "Opportunity Name",
-        "Account Name",
-        "Stage",
-        "Amount",
-        "Close Date",
-        "Owner",
-    ],
+PINNED_DASHBOARD_URL = (
+    "https://herrmannultraschall.lightning.force.com/lightning/r/Dashboard/"
+    "01ZS7000004KhePMAS/view"
 )
-
-PK_WON_LOST_90D_REPORT_SPEC = ReportSpec(
-    title="PK Won/Lost — Last 90 Days",
-    report_type="Opportunities",
-    filters=[
-        ReportFilterClause(field="Division__c", operator="equals", value="PK"),
-        ReportFilterClause(field="IsClosed", operator="equals", value="true"),
-        ReportFilterClause(
-            field="CloseDate",
-            operator="greater or equal",
-            value="LAST_N_DAYS:90",
-        ),
-    ],
-    columns=[
-        "Opportunity Name",
-        "Account Name",
-        "Stage",
-        "Amount",
-        "Close Date",
-        "IsWon",
-    ],
-)
-
-PK_WON_THIS_MONTH_REPORT_SPEC = ReportSpec(
-    title="PK Won — This Month",
-    report_type="Opportunities",
-    filters=[
-        ReportFilterClause(field="Division__c", operator="equals", value="PK"),
-        ReportFilterClause(field="IsWon", operator="equals", value="true"),
-        ReportFilterClause(
-            field="CloseDate",
-            operator="equals",
-            value="THIS_MONTH",
-        ),
-    ],
-    columns=[
-        "Opportunity Name",
-        "Account Name",
-        "Amount",
-        "Close Date",
-    ],
-)
-
-
-SUPPORTING_REPORT_SPECS: list[ReportSpec] = [
-    PK_OPEN_PIPELINE_REPORT_SPEC,
-    PK_WON_LOST_90D_REPORT_SPEC,
-    PK_WON_THIS_MONTH_REPORT_SPEC,
-]
 
 
 # --------------------------------------------------------------------- #
-# Dashboard spec                                                         #
+# Spec (locked — pacing component is load-bearing for weekly doc)        #
 # --------------------------------------------------------------------- #
 
 
 # Locked Phase 3 contract: five components. The pacing-vs-target
 # component is the load-bearing one for the Phase 4 weekly doc.
 PK_OPP_PIPELINE_DASHBOARD_SPEC = DashboardSpec(
-    title="PK Opportunity Pipeline & Rolling Forecast",
+    title="PK Inbound Web Lead and Opportunity Tracking - SerenAI",
     components=[
         DashboardComponentSpec(
             title="Open Pipeline by Stage",
@@ -169,33 +99,11 @@ PK_OPP_PIPELINE_DASHBOARD_SPEC = DashboardSpec(
 
 
 # --------------------------------------------------------------------- #
-# UI driving (validated at operator checkpoint)                          #
+# UI driving                                                            #
 # --------------------------------------------------------------------- #
 
 
-def _find_dashboard_url_by_title(  # pragma: no cover
-    page: _Page,
-    title: str,
-) -> Optional[str]:
-    raise NotImplementedError(
-        "Live Dashboards-list scan is validated at the Phase 3 "
-        "operator checkpoint."
-    )
-
-
-def _drive_new_dashboard(  # pragma: no cover
-    page: _Page,
-    spec: DashboardSpec,
-) -> str:
-    raise NotImplementedError(
-        "Live Dashboard Builder driving is validated at the Phase 3 "
-        "operator checkpoint."
-    )
-
-
-# --------------------------------------------------------------------- #
-# Public surface                                                        #
-# --------------------------------------------------------------------- #
+_DASHBOARD_LOAD_TIMEOUT_MS = 45_000
 
 
 def build_pk_opp_dashboard(
@@ -203,34 +111,23 @@ def build_pk_opp_dashboard(
     page: _Page,
     dry_run: bool,
 ) -> DashboardResult:
-    """Provision the PK Opportunity Pipeline dashboard (idempotent).
+    """Navigate to the pinned dashboard URL and confirm it loads.
 
-    Supporting reports are provisioned by callers (the agent's
-    `_run_provision` seam) before this function is invoked, so that
-    a missing dependency surfaces as a clear error rather than as
-    a half-built dashboard.
+    No Dashboard-Builder driving. Same reasoning as the report and
+    Lead-dashboard validators: artifact is operator-owned, dedicated
+    to this skill, no manual drift expected.
     """
-
-    existing_url = _find_dashboard_url_by_title(
-        page, PK_OPP_PIPELINE_DASHBOARD_SPEC.title
-    )
-    if existing_url is not None:
-        return DashboardResult(
-            spec=PK_OPP_PIPELINE_DASHBOARD_SPEC,
-            created=False,
-            url=existing_url,
-        )
 
     if dry_run:
         return DashboardResult(
             spec=PK_OPP_PIPELINE_DASHBOARD_SPEC,
-            created=False,
-            url=None,
+            status="dry_run",
+            url=PINNED_DASHBOARD_URL,
         )
 
-    url = _drive_new_dashboard(page, PK_OPP_PIPELINE_DASHBOARD_SPEC)
+    page.goto(PINNED_DASHBOARD_URL, timeout=_DASHBOARD_LOAD_TIMEOUT_MS)
     return DashboardResult(
         spec=PK_OPP_PIPELINE_DASHBOARD_SPEC,
-        created=True,
-        url=url,
+        status="validated",
+        url=PINNED_DASHBOARD_URL,
     )

@@ -1,12 +1,12 @@
-"""Build the three-component PK Lead Dashboard.
+"""Validate the `PK Lead Dashboard` (Phase 3).
 
-The dashboard is the human-readable surface for the same data the
-Phase 4 cron consumes. All three components source from the
-`All Sources PK Leads` report so the dashboard's totals always
-agree with the cron's enrichment scope.
-
-Idempotent by title: a dashboard already named `PK Lead Dashboard`
-is reused, not duplicated.
+Operator-owned dashboard `01ZS7000004KhcnMAC` — Nathan maintains the
+components; the skill just confirms it still loads on every provision
+tick. Same architectural rationale as
+`build_all_sources_leads_report.py`: the Lightning Dashboard editor
+sits inside an Aura-app iframe that cannot be cleanly driven every
+cron tick, and the artifact is dedicated to this skill so drift is
+not a real concern.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Optional, Protocol
 
 
 class _Page(Protocol):
-    """Subset of `playwright.sync_api.Page` the driver uses."""
+    """Subset of `playwright.sync_api.Page` the validator uses."""
 
     url: str
 
@@ -29,17 +29,28 @@ class _Page(Protocol):
 
 
 # --------------------------------------------------------------------- #
-# Spec                                                                  #
+# Pinned artifact                                                        #
+# --------------------------------------------------------------------- #
+
+
+PINNED_DASHBOARD_URL = (
+    "https://herrmannultraschall.lightning.force.com/lightning/r/Dashboard/"
+    "01ZS7000004KhcnMAC/view"
+)
+
+
+# --------------------------------------------------------------------- #
+# Spec (locked — read by Phase 4 weekly doc logic)                       #
 # --------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
 class DashboardComponentSpec:
-    """One component on a Lightning Dashboard.
+    """One Lightning Dashboard component.
 
-    `component_type` matches the visible chart-picker label in the
-    Dashboard Builder. Phase 3 uses `metric`, `horizontal_bar`, and
-    `vertical_bar`.
+    Mirrors the operator-configured components on
+    `01ZS7000004KhcnMAC` (`PK Inbound Web Lead and Activity Tracking
+    - SerenAI`). The skill does not write these — Nathan does.
     """
 
     title: str
@@ -51,21 +62,17 @@ class DashboardComponentSpec:
 
 @dataclass(frozen=True)
 class DashboardSpec:
-    """One Lightning Dashboard.
-
-    Order matters: `components` lists components in the order they
-    will appear on the dashboard grid (row-major, top-left first).
-    """
+    """Spec for the operator-owned PK Lead Dashboard."""
 
     title: str
     components: list[DashboardComponentSpec]
 
 
-# Locked Phase 3 contract. Three components, all sourcing from the
-# `All Sources PK Leads` report so the totals match Phase 4 cron
-# scope.
+# Locked Phase 3 contract — matches Nathan's configuration. Three
+# components, all sourced from `All Sources PK Leads` so the
+# dashboard's totals agree with the cron's enrichment scope.
 PK_LEAD_DASHBOARD_SPEC = DashboardSpec(
-    title="PK Lead Dashboard",
+    title="PK Inbound Web Lead and Activity Tracking - SerenAI",
     components=[
         DashboardComponentSpec(
             title="New PK Leads This Week",
@@ -85,7 +92,7 @@ PK_LEAD_DASHBOARD_SPEC = DashboardSpec(
             title="PK Leads by Activity Gap",
             component_type="vertical_bar",
             source_report="All Sources PK Leads",
-            grouping="Activity_Gap_Days__c",
+            grouping="Days Since Last Activity",
             aggregate="count",
         ),
     ],
@@ -99,49 +106,24 @@ PK_LEAD_DASHBOARD_SPEC = DashboardSpec(
 
 @dataclass(frozen=True)
 class DashboardResult:
-    """Bundle returned from a dashboard-builder call.
+    """Outcome of one `validate_dashboard` navigation.
 
-    `created=False` when the dashboard already existed and the
-    driver reused it.
+    `status`:
+      * `validated` — navigation succeeded; dashboard reachable.
+      * `dry_run` — caller passed `dry_run=True`; URL not visited.
     """
 
     spec: DashboardSpec
-    created: bool
-    url: Optional[str]
+    status: str
+    url: str
 
 
 # --------------------------------------------------------------------- #
-# UI driving (validated at operator checkpoint)                          #
+# UI driving                                                            #
 # --------------------------------------------------------------------- #
 
 
-def _find_dashboard_url_by_title(  # pragma: no cover
-    page: _Page,
-    title: str,
-) -> Optional[str]:
-    """Search the Dashboards list for `title`. Return its URL or None."""
-
-    raise NotImplementedError(
-        "Live Dashboards-list scan is validated at the Phase 3 "
-        "operator checkpoint."
-    )
-
-
-def _drive_new_dashboard(  # pragma: no cover
-    page: _Page,
-    spec: DashboardSpec,
-) -> str:
-    """Drive the New Dashboard builder. Return the saved URL."""
-
-    raise NotImplementedError(
-        "Live Dashboard Builder driving is validated at the Phase 3 "
-        "operator checkpoint."
-    )
-
-
-# --------------------------------------------------------------------- #
-# Public surface                                                        #
-# --------------------------------------------------------------------- #
+_DASHBOARD_LOAD_TIMEOUT_MS = 45_000
 
 
 def build_pk_lead_dashboard(
@@ -149,28 +131,23 @@ def build_pk_lead_dashboard(
     page: _Page,
     dry_run: bool,
 ) -> DashboardResult:
-    """Provision the `PK Lead Dashboard` (idempotent)."""
+    """Navigate to the pinned dashboard URL and confirm it loads.
 
-    existing_url = _find_dashboard_url_by_title(
-        page, PK_LEAD_DASHBOARD_SPEC.title
-    )
-    if existing_url is not None:
-        return DashboardResult(
-            spec=PK_LEAD_DASHBOARD_SPEC,
-            created=False,
-            url=existing_url,
-        )
+    No Dashboard-Builder driving. Same reasoning as the report
+    validator: artifact is operator-owned, dedicated to this skill,
+    no manual drift expected.
+    """
 
     if dry_run:
         return DashboardResult(
             spec=PK_LEAD_DASHBOARD_SPEC,
-            created=False,
-            url=None,
+            status="dry_run",
+            url=PINNED_DASHBOARD_URL,
         )
 
-    url = _drive_new_dashboard(page, PK_LEAD_DASHBOARD_SPEC)
+    page.goto(PINNED_DASHBOARD_URL, timeout=_DASHBOARD_LOAD_TIMEOUT_MS)
     return DashboardResult(
         spec=PK_LEAD_DASHBOARD_SPEC,
-        created=True,
-        url=url,
+        status="validated",
+        url=PINNED_DASHBOARD_URL,
     )

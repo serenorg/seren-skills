@@ -21,36 +21,52 @@ running the skill.
 
 ## Status by Phase
 
-The skill ships in phases. Each phase landed on `main` as a `feat(...)`
-commit, but **"feat" means "gates and pure logic merged" — not
-"end-to-end live against a Salesforce sandbox."** Live correctness for
-every Playwright-driven write below is gated behind a sandbox-supervised
-operator checkpoint that has not yet happened.
+The skill ships in phases. Selector verification against HU's live
+Lightning landed on 2026-05-21 (issue #563); Phases 3/4 are now
+end-to-end against the production org, not stubbed.
 
-| Phase | Status | What is real | What is gated behind operator checkpoint |
-| :--- | :--- | :--- | :--- |
-| 1 — auth + storage | ✅ wired | Microsoft SSO + 1Password Service Account; storage-state reuse | n/a |
-| 2 — enrichment dry-run | ✅ wired | Lead fetch, Perplexity + Claude + LinkedIn research, `.docx` render | n/a |
-| 3 — schema + reporting provisioning | ⚠ gates merged | Field schema, idempotency checks, naming conventions, dashboard layout specs | All Salesforce Object Manager / Report Builder / Dashboard Builder DOM driving (`_drive_new_field`, `_drive_new_report`, `_drive_new_dashboard`, `_find_report_url_by_title`, `_find_dashboard_url_by_title`, `_list_existing_lead_field_api_names`) |
-| 4 — live Note write + weekly Google Doc | ⚠ gates merged | Cross-division gate, 24h recency gate, write-then-stamp order, weekly renderer (empty/populated), Drive upload-then-share order, single-line cron summary, `--allow-live` × `live_mode=true` dual gate | Lead Notes form DOM driving (`_drive_new_note_form`, `_read_last_enrichment_at`, `_update_last_enrichment_at`). Weekly doc's `lead_summaries=[]` is hardcoded until the `enriched_leads` ledger lands. |
-| 5 — cron + slash command + monitoring | ❌ not started | n/a | seren-cron jobs, local-pull runner, `/pk-status`, JSON envelope, `enriched_leads` ledger, failure-modes doc |
+| Phase | Status | What is real |
+| :--- | :--- | :--- |
+| 1 — auth + storage | ✅ live | Microsoft SSO + 1Password Service Account; storage-state reuse |
+| 2 — enrichment dry-run | ✅ live | Lead fetch, Perplexity + Claude + LinkedIn research, `.docx` render |
+| 3 — reporting validation | ✅ live (2026-05-21) | Validate-only navigation to three operator-owned artifacts: `All Sources PK Leads` report (`00OS700000IzEBlMAN`), `PK Inbound Web Lead and Activity Tracking - SerenAI` dashboard (`01ZS7000004KhcnMAC`), `PK Inbound Web Lead and Opportunity Tracking - SerenAI` dashboard (`01ZS7000004KhePMAS`). Spec contracts unit-tested. |
+| 4 — live Note write | ✅ live (2026-05-21) | Per-Lead Project Business Unit DOM read (cross-division gate); SerenDB `pk_lead_enrichment_log` ledger (24h recency); Quill-editor Note-form driver; load-bearing write-then-stamp order; `--allow-live` × `live_mode=true` dual gate; weekly doc renderer + Drive share. |
+| 5 — cron + slash command + monitoring | ❌ not started | seren-cron jobs, local-pull runner, `/pk-status`, JSON envelope, failure-modes doc |
 
-### What the operator checkpoint requires
+### Architectural notes (issue #563 closeout)
 
-A single half-day session with a Salesforce **sandbox** org (not prod) where:
+Three pieces that shipped differently than the original Phase 3/4
+spec, all because the operator's Salesforce permission set in HU is
+constrained to a regular-user role (no Setup access):
 
-1. The operator drives `--command provision` headful and the engineer fills the Phase 3 stubs with the real Lightning selectors observed in that session.
-2. The operator drives `--command run --allow-live` headful against one PK Lead and the engineer fills the Phase 4 stubs with the real Note-form selectors.
-3. The engineer attaches the recording or selector transcript to the merge PR.
-4. The PR title is `feat(pk-lead-intelligence): land Phase 3/4 live drivers (operator checkpoint <date>)`.
+1. **Custom Lead fields were not created.** `PACKAGING__c`,
+   `Last_Enrichment_At__c`, and `Activity_Gap_Days__c` from the
+   original spec do not exist and never will. The cross-division
+   gate reads HU's existing `Project Business Unit` field instead
+   (value `PACKAGING` for the PK division). Recency moved to a
+   SerenDB-owned `pk_lead_enrichment_log` table because Salesforce
+   does not need to know when the skill last touched a Lead.
 
-Until that session lands, the skill in `--allow-live` mode will either skip every Lead (because `is_packaging` defaults `False`) or crash with `NotImplementedError` on the first PK-flagged Lead. This is the issue tracked in [#563](https://github.com/serenorg/seren-skills/issues/563).
+2. **Reports + dashboards are operator-owned, not skill-created.**
+   The Lightning Report Builder and Dashboard Builder live inside
+   Aura-app iframes that cannot be cleanly driven every cron tick.
+   The three artifacts above were cloned manually by Nathan; the
+   skill validates each is still reachable on every provision tick
+   but does not edit them.
+
+3. **Per-Lead detail-page read for the division gate.** The original
+   spec assumed the All Sources PK Leads report would surface
+   `PACKAGING__c` as a column the cron could read from the list
+   view. With the field gone, the cron now navigates to each Lead's
+   detail page to read `Project Business Unit` directly. One extra
+   page-load per Lead per cycle is acceptable at the skill's volume.
 
 ### How to tell what state you are in
 
-- `--command run --dry-run` — works today end-to-end against a real org login. Produces a `.docx` of the rendered Note for the first matching Lead and exits.
-- `--command run --allow-live` — refuses to write unless `inputs.live_mode: true` is also set in `config.json`. Once both gates are set, the path advances until it hits one of the Phase 4 stubs and raises `NotImplementedError` with the function name. This is fail-closed-correct until the operator checkpoint runs.
-- `--command weekly` — works today; renders the weekly Google Doc and uploads + shares it. The doc currently always says "no enrichments this week" because the `enriched_leads` ledger that feeds `lead_summaries` is Phase 5 scope.
+- `--command run --dry-run` — works end-to-end against a real org login. Produces a `.docx` of the rendered Note for the first matching Lead and exits.
+- `--command run --allow-live` — requires `inputs.live_mode: true` AND `inputs.serendb_connection_uri` set in `config.json`. Live runs populate `is_packaging` from the Lead detail page, then enforce the 24h recency gate via the SerenDB ledger, then drive the Note form on PK Leads only.
+- `--command provision --allow-live` — navigates to each of the three pinned artifact URLs and confirms they load under the operator's session. Does not edit them.
+- `--command weekly` — renders the weekly Google Doc and uploads + shares it.
 
 ## When to Use
 

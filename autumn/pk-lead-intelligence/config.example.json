@@ -3,6 +3,7 @@
     "salesforce_org_url": "https://<org-subdomain>.lightning.force.com",
     "salesforce_owner_email": "<owner-email>",
     "live_mode": false,
+    "serendb_connection_uri": "<postgres://...>",
     "monthly_close_target_usd": 500000,
     "google_drive_folder_id": "<paste-folder-id-from-google-drive>",
     "nathan_share_email": "<paste-share-recipient-email>"

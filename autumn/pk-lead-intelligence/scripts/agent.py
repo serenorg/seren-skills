@@ -17,18 +17,22 @@ The `run` command:
 4. Runs the enrichment pipeline (`sf.enrich_lead`) over that lead —
    Perplexity research, LinkedIn discovery, Claude hypothesis — and
    writes a local `.docx` Note for operator review.
-5. (Phase 4, `--allow-live`) Writes the rendered Note to the Lead's
-   Related tab, gated by `is_packaging_lead` + recency on
-   `Last_Enrichment_At__c`.
+5. (Phase 4, `--allow-live`) Populates `is_packaging` from the
+   Lead's "Project Business Unit" Details field, then writes the
+   rendered Note to the Lead's Related tab gated by
+   `is_packaging_lead` + a SerenDB-backed recency ledger
+   (`pk_lead_enrichment_log`).
 
-The `provision` command (Phase 3) provisions the schema and
-reporting surface the cron reads:
+The `provision` command (Phase 3) validates the three
+operator-owned Salesforce artifacts the cron reads:
 
-* 3 custom Lead fields (PACKAGING__c, Last_Enrichment_At__c,
-  Activity_Gap_Days__c) via Object Manager.
-* All Sources PK Leads report — filter PACKAGING__c=true.
-* PK Lead Dashboard (3 components).
-* PK Opportunity Pipeline & Rolling Forecast dashboard (5 components).
+* `All Sources PK Leads` report — filter Project Business Unit = PACKAGING.
+* `PK Inbound Web Lead and Activity Tracking - SerenAI` dashboard.
+* `PK Inbound Web Lead and Opportunity Tracking - SerenAI` dashboard.
+
+The skill does not create or edit any of these — Nathan owns them
+and the skill confirms they still load under the operator's
+Salesforce session (issue #563).
 
 The `weekly` command (Phase 4) composes the Tuesday-morning status
 doc from the past 7 days of enrichments and uploads it to Google
@@ -75,8 +79,8 @@ from scripts.sf import build_pk_lead_dashboard as lead_dashboard  # noqa: E402
 from scripts.sf import build_pk_opp_artifacts as opp_artifacts  # noqa: E402
 from scripts.sf import client as sf_client  # noqa: E402
 from scripts.sf import enrich_lead  # noqa: E402
-from scripts.sf import provision_fields  # noqa: E402
 from scripts.sf import write_note  # noqa: E402
+from scripts.storage import enrichment_ledger  # noqa: E402
 
 
 # --------------------------------------------------------------------- #
@@ -147,11 +151,11 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         choices=["run", "provision", "weekly"],
         help=(
-            "Top-level command. `run` enriches a Lead (Phase 2 "
-            "dry-run; Phase 4 live Note write). `provision` creates "
-            "the schema + reporting surface (Phase 3). `weekly` "
-            "composes the Tuesday-morning status doc and uploads it "
-            "to Google Drive (Phase 4). Live commands require "
+            "Top-level command. `run` enriches a Lead (dry-run or "
+            "live Note write). `provision` validates the three "
+            "operator-owned Salesforce artifacts are reachable. "
+            "`weekly` composes the Tuesday-morning status doc and "
+            "uploads it to Google Drive. Live commands require "
             "`--allow-live` paired with config `inputs.live_mode=true`."
         ),
     )
@@ -159,11 +163,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help=(
-            "Plan-only mode. For `run` this disables the Phase 4 "
-            "Note-write path. For `provision` this prints the "
-            "planned artifacts without driving the Setup / Report / "
-            "Dashboard UI. For `weekly` this prints the rendered "
-            "doc body without uploading."
+            "Plan-only mode. For `run` this disables the live "
+            "Note-write path. For `provision` this surfaces the "
+            "pinned artifact URLs without navigating to them. For "
+            "`weekly` this prints the rendered doc body without "
+            "uploading."
         ),
     )
     parser.add_argument(
@@ -173,8 +177,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "Enables live Salesforce or Drive writes; must be "
             "paired with `inputs.live_mode=true` in config.json. "
             "For `run`, writes the Note to the Lead's Related tab. "
-            "For `provision`, drives the Setup / Reports / "
-            "Dashboards UI. For `weekly`, uploads the doc to Drive."
+            "For `provision`, navigates to the three pinned "
+            "artifact URLs and confirms they load. For `weekly`, "
+            "uploads the doc to Drive."
         ),
     )
     parser.add_argument(
@@ -195,10 +200,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("output"),
+        default=Path.home() / "Documents" / "pk-lead-intelligence" / "output",
         help=(
-            "Directory for dry-run .docx Notes. Defaults to ./output "
-            "(gitignored)."
+            "Directory for dry-run .docx Notes. Defaults to "
+            "~/Documents/pk-lead-intelligence/output — kept OUTSIDE the "
+            "repo because rendered Notes can contain Salesforce PII "
+            "(names, emails, business unit) and this skill ships in a "
+            "public repo. The repo's `output/` is gitignored as a "
+            "second line of defense, but the default keeps generated "
+            "PII off the working tree entirely."
         ),
     )
     parser.add_argument(
@@ -284,12 +294,13 @@ def _run_dry_run(
 class ProvisionSummary:
     """Aggregate result of one `--command provision` cycle.
 
-    Bundles the four sub-results so the CLI can print a single
-    consolidated summary. Tests construct this directly to drive
-    the print path without running the underlying drivers.
+    Phase 3 was simplified by issue #563 — the three Salesforce
+    artifacts are operator-owned, not skill-provisioned. The
+    provision command now just validates each artifact is reachable
+    under the operator's session, so the summary is the three
+    navigate-only results.
     """
 
-    fields: provision_fields.ProvisionResult
     all_sources_report: all_leads_report.ReportResult
     lead_dashboard: lead_dashboard.DashboardResult
     opp_dashboard: opp_artifacts.DashboardResult
@@ -304,17 +315,15 @@ def _run_provision(
     op_item: str,
     dry_run: bool,
 ) -> ProvisionSummary:  # pragma: no cover
-    """Drive the SSO → Object Manager → Reports → Dashboards flow.
+    """Drive the SSO → validate-three-artifacts flow.
 
     Lifecycles the Playwright browser inside this function. Each
-    sub-provisioner is idempotent on its own surface — re-running
-    this function on a fully-provisioned org is a no-op that
-    returns `created=False` on every artifact.
+    sub-validator just navigates to a pinned artifact URL and
+    confirms it loads; nothing is created or edited.
 
     Marked `pragma: no cover` because the live behaviour requires
     Playwright + a real Salesforce org. Tests monkeypatch this
-    seam to assert the CLI print contract; live correctness is
-    validated at the Phase 3 operator checkpoint.
+    seam to assert the CLI print contract.
     """
 
     creds = op_service_account.read_salesforce_credentials(
@@ -340,9 +349,6 @@ def _run_provision(
                 )
                 page = sso_result.page
 
-                fields_result = provision_fields.provision_lead_fields(
-                    page=page, dry_run=dry_run
-                )
                 report_result = (
                     all_leads_report.build_all_sources_pk_leads_report(
                         page=page, dry_run=dry_run
@@ -356,7 +362,6 @@ def _run_provision(
                 )
 
                 return ProvisionSummary(
-                    fields=fields_result,
                     all_sources_report=report_result,
                     lead_dashboard=lead_dash_result,
                     opp_dashboard=opp_dash_result,
@@ -371,44 +376,32 @@ def _print_provision_summary(summary: ProvisionSummary, *, dry_run: bool) -> Non
     """Render the provision summary to stdout.
 
     Output format is structured so a Phase 5 cron can parse it
-    line-by-line without YAML / JSON. The operator-facing
-    information is dense: which artifacts were planned, which
-    were created, which were skipped.
+    line-by-line. The operator-facing information is the three
+    pinned artifact URLs + their validation status.
     """
 
     verb = "planned" if dry_run else "actioned"
     print(f"provision_summary ({verb}):")
 
-    print("  lead_fields:")
-    for spec in summary.fields.planned:
-        print(f"    + {spec.api_name} ({spec.field_type})")
-    for spec in summary.fields.skipped:
-        print(f"    = {spec.api_name} (already exists)")
-
     print(f"  all_sources_report: {summary.all_sources_report.spec.title}")
-    if summary.all_sources_report.url:
-        print(f"    url: {summary.all_sources_report.url}")
-    print(
-        f"    created: {summary.all_sources_report.created}"
-    )
+    print(f"    url: {summary.all_sources_report.url}")
+    print(f"    status: {summary.all_sources_report.status}")
 
     print(f"  lead_dashboard: {summary.lead_dashboard.spec.title}")
     print(
         f"    components: "
         f"{len(summary.lead_dashboard.spec.components)}"
     )
-    if summary.lead_dashboard.url:
-        print(f"    url: {summary.lead_dashboard.url}")
-    print(f"    created: {summary.lead_dashboard.created}")
+    print(f"    url: {summary.lead_dashboard.url}")
+    print(f"    status: {summary.lead_dashboard.status}")
 
     print(f"  opp_dashboard: {summary.opp_dashboard.spec.title}")
     print(
         f"    components: "
         f"{len(summary.opp_dashboard.spec.components)}"
     )
-    if summary.opp_dashboard.url:
-        print(f"    url: {summary.opp_dashboard.url}")
-    print(f"    created: {summary.opp_dashboard.created}")
+    print(f"    url: {summary.opp_dashboard.url}")
+    print(f"    status: {summary.opp_dashboard.status}")
 
 
 # --------------------------------------------------------------------- #
@@ -480,13 +473,26 @@ def _run_live_note_write(
     op_item: str,
     enrichment: enrich_lead.EnrichmentResult,
     lead: sf_client.LeadRow,
+    ledger: enrichment_ledger.EnrichmentLedger,
     dry_run: bool,
 ) -> write_note.NoteWriteResult:  # pragma: no cover
     """Drive the Phase 4 Note-write step.
 
+    Two Playwright passes on the same browser context:
+
+    1. `populate_is_packaging` navigates to the Lead detail page,
+       reads `Project Business Unit`, and returns a LeadRow whose
+       `is_packaging` is True iff the value is "PACKAGING". This is
+       the cross-division gate (P0 per SKILL.md) — performed before
+       any write attempt so a non-PK Lead never reaches the Note
+       form at all.
+
+    2. `write_note_to_lead` runs the recency-and-write path against
+       the populated lead, using the injected SerenDB ledger as the
+       recency oracle.
+
     Marked `pragma: no cover` — live correctness is validated at the
-    Phase 4 operator checkpoint. Tests monkeypatch this seam to
-    exercise the CLI without driving Lightning.
+    Phase 4 operator checkpoint. Tests monkeypatch this seam.
     """
 
     creds = op_service_account.read_salesforce_credentials(
@@ -509,14 +515,24 @@ def _run_live_note_write(
                     creds=creds,
                     storage_path=storage_path,
                 )
+                page = sso_result.page
+
+                populated_lead = sf_client.populate_is_packaging(
+                    page=page,
+                    lead=lead,
+                    salesforce_org_url=salesforce_org_url,
+                )
+
                 return write_note.write_note_to_lead(
-                    page=sso_result.page,
+                    page=page,
                     options=write_note.NoteWriteOptions(
-                        lead=lead,
+                        lead=populated_lead,
                         note=enrichment.note,
+                        salesforce_org_url=salesforce_org_url,
                     ),
                     now=datetime.now(tz=timezone.utc),
                     dry_run=dry_run,
+                    ledger=ledger,
                 )
             finally:
                 context.close()
@@ -751,15 +767,36 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  hypothesis: {enrichment.hypothesis.text[:120]}")
 
     # Phase 4 live Note write. Only runs when --allow-live is set
-    # AND the config gate is on (already validated above). The
-    # `is_packaging` flag is sourced from the Lead's PACKAGING__c
-    # column — Phase 4 reads it via the existing dry-run path's
-    # downstream wiring. Until the column-read lands, the live
-    # path inherits `is_packaging=False` from `LeadRow`'s default,
-    # which makes `write_note_to_lead` return `skipped_non_pk`.
-    # The cross-division gate fails closed by design.
+    # AND the config gate is on (already validated above).
+    #
+    # `is_packaging` is populated from the Lead detail page's
+    # "Project Business Unit" field by `populate_is_packaging`
+    # inside `_run_live_note_write` — the cross-division gate
+    # (P0 per SKILL.md) fires before any write attempt.
+    #
+    # Recency is enforced via a SerenDB-backed
+    # `pk_lead_enrichment_log` table (issue #563). The operator
+    # supplies the connection URI in `inputs.serendb_connection_uri`
+    # — Phase 5 will resolve it from the seren-db publisher
+    # automatically. Live path fails closed when the URI is missing.
     note_status = "not_attempted"
     if args.allow_live:
+        ledger_uri = (config.get("inputs") or {}).get(
+            "serendb_connection_uri", ""
+        )
+        if not ledger_uri:
+            print(
+                "--allow-live requires config.json "
+                "`inputs.serendb_connection_uri` to be set. The "
+                "recency ledger lives in SerenDB; without a "
+                "connection URI the cron cannot enforce the 24h "
+                "skip gate. See SKILL.md > Phase 4.",
+                file=sys.stderr,
+            )
+            return 2
+        ledger = enrichment_ledger.PsycopgEnrichmentLedger(ledger_uri)
+        ledger.ensure_schema()
+
         write_result = _run_live_note_write(
             salesforce_org_url=salesforce_org_url,
             storage_path=args.storage_path,
@@ -768,6 +805,7 @@ def main(argv: list[str] | None = None) -> int:
             op_item=op_item,
             enrichment=enrichment,
             lead=lead,
+            ledger=ledger,
             dry_run=False,
         )
         note_status = write_result.status

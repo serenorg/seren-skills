@@ -6,11 +6,17 @@ dashboard, and All Sources PK Leads report are consumed by Phase 4
 is to lock the spec shapes — filter clauses, component counts, and
 source-report wiring — so Phase 4 can rely on them.
 
-Like provision_fields, the actual UI driving is exercised at the
-operator checkpoint. These tests guard the contract.
+Issue #563 collapsed the editor-driving paths to navigate-only
+validators (the artifacts are operator-owned, dedicated to this
+skill, and live inside Aura-app iframes that are too fragile to
+drive every cron tick). The spec contract below is still the
+load-bearing piece — the cron's cross-division gate depends on
+Nathan keeping the filter intact.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass, field
 
 from scripts.sf import build_all_sources_leads_report as all_leads_report
 from scripts.sf import build_pk_lead_dashboard as lead_dashboard
@@ -18,17 +24,37 @@ from scripts.sf import build_pk_opp_artifacts as opp_artifacts
 
 
 # --------------------------------------------------------------------- #
+# Fakes                                                                 #
+# --------------------------------------------------------------------- #
+
+
+@dataclass
+class FakePage:
+    """Stand-in Page that records navigation attempts."""
+
+    goto_calls: list[str] = field(default_factory=list)
+    url: str = ""
+
+    def goto(self, url: str, *, timeout: int = 0) -> None:
+        self.goto_calls.append(url)
+        self.url = url
+
+
+# --------------------------------------------------------------------- #
 # All Sources PK Leads report                                            #
 # --------------------------------------------------------------------- #
 
 
-def test_all_sources_report_spec_filters_on_packaging_true():
+def test_all_sources_report_spec_filters_on_packaging():
     """The cross-division gate lives in the report filter.
 
-    If this filter ever stops scoping to PACKAGING__c=true, the
-    Phase 4 cron will enrich non-PK Leads and write Notes onto the
-    wrong division — the P0 mis-routing defect called out in
-    SKILL.md. The contract is locked here.
+    Issue #563: the field migrated from `PACKAGING__c` (custom field
+    the operator could not create) to `Project_Business_Unit__c`
+    (Lightning standard custom field already on the Lead object,
+    value `PACKAGING` for the PK division). If this filter ever
+    stops scoping to PK, the cron will enrich non-PK Leads and
+    write Notes onto the wrong division — the P0 mis-routing
+    defect called out in SKILL.md. The contract is locked here.
     """
 
     spec = all_leads_report.ALL_SOURCES_PK_LEADS_REPORT_SPEC
@@ -36,24 +62,48 @@ def test_all_sources_report_spec_filters_on_packaging_true():
     assert spec.title == "All Sources PK Leads"
     assert spec.report_type == "Leads"
 
-    packaging_clauses = [
-        c for c in spec.filters if c.field == "PACKAGING__c"
+    pk_clauses = [
+        c for c in spec.filters if c.field == "Project_Business_Unit__c"
     ]
-    assert len(packaging_clauses) == 1, (
-        "Exactly one PACKAGING__c filter clause is required. "
-        f"Got: {packaging_clauses}"
+    assert len(pk_clauses) == 1, (
+        "Exactly one Project_Business_Unit__c filter clause is "
+        f"required. Got: {pk_clauses}"
     )
-    clause = packaging_clauses[0]
+    clause = pk_clauses[0]
     assert clause.operator == "equals"
-    # The Lightning report filter UI compares booleans as the literal
-    # strings "true" / "false"; the value here must match what the
-    # form accepts.
-    assert clause.value == "true"
+    assert clause.value == "PACKAGING"
 
-    # The skill reads the new custom Lead fields by API name when
-    # the cron lands in Phase 4. Lock the column wiring now.
-    assert "Activity_Gap_Days__c" in spec.columns
-    assert "Last_Enrichment_At__c" in spec.columns
+    # Operator-facing column wiring. Nathan owns the actual report;
+    # this spec describes the contract the cron expects to see.
+    assert "Project Business Unit" in spec.columns
+
+
+def test_all_sources_report_validate_navigates_to_pinned_url():
+    """Live validation hits the pinned operator-owned URL."""
+
+    page = FakePage()
+    result = all_leads_report.build_all_sources_pk_leads_report(
+        page=page, dry_run=False
+    )
+
+    assert result.status == "validated"
+    assert result.url == all_leads_report.PINNED_REPORT_URL
+    assert page.goto_calls == [all_leads_report.PINNED_REPORT_URL]
+
+
+def test_all_sources_report_dry_run_does_not_navigate():
+    """Dry-run returns the spec without driving Playwright."""
+
+    page = FakePage()
+    result = all_leads_report.build_all_sources_pk_leads_report(
+        page=page, dry_run=True
+    )
+
+    assert result.status == "dry_run"
+    assert result.url == all_leads_report.PINNED_REPORT_URL
+    assert page.goto_calls == [], (
+        "dry_run must not touch the live URL"
+    )
 
 
 # --------------------------------------------------------------------- #
@@ -70,21 +120,36 @@ def test_pk_lead_dashboard_spec_has_three_components():
 
     spec = lead_dashboard.PK_LEAD_DASHBOARD_SPEC
 
-    assert spec.title == "PK Lead Dashboard"
+    assert spec.title == "PK Inbound Web Lead and Activity Tracking - SerenAI"
     assert len(spec.components) == 3, (
         "Phase 3 contract: 3 components. "
         f"Got {len(spec.components)}: {[c.title for c in spec.components]}"
     )
 
     # Every component must read from the canonical PK report so the
-    # dashboard and the cron agree on which Leads are in scope. A
-    # component sourced from a different report would render
-    # numbers that disagree with the Lead enrichment count.
+    # dashboard and the cron agree on which Leads are in scope.
     for component in spec.components:
         assert component.source_report == "All Sources PK Leads", (
             f"{component.title}: source_report must be "
             f"'All Sources PK Leads', got {component.source_report!r}"
         )
+
+
+def test_pk_lead_dashboard_validate_navigates_to_pinned_url():
+    page = FakePage()
+    result = lead_dashboard.build_pk_lead_dashboard(page=page, dry_run=False)
+
+    assert result.status == "validated"
+    assert result.url == lead_dashboard.PINNED_DASHBOARD_URL
+    assert page.goto_calls == [lead_dashboard.PINNED_DASHBOARD_URL]
+
+
+def test_pk_lead_dashboard_dry_run_does_not_navigate():
+    page = FakePage()
+    result = lead_dashboard.build_pk_lead_dashboard(page=page, dry_run=True)
+
+    assert result.status == "dry_run"
+    assert page.goto_calls == []
 
 
 # --------------------------------------------------------------------- #
@@ -103,7 +168,10 @@ def test_pk_opp_dashboard_spec_has_five_components_with_pacing():
 
     spec = opp_artifacts.PK_OPP_PIPELINE_DASHBOARD_SPEC
 
-    assert spec.title == "PK Opportunity Pipeline & Rolling Forecast"
+    assert (
+        spec.title
+        == "PK Inbound Web Lead and Opportunity Tracking - SerenAI"
+    )
     assert len(spec.components) == 5, (
         "Phase 3 contract: 5 components. "
         f"Got {len(spec.components)}: {[c.title for c in spec.components]}"
@@ -114,3 +182,20 @@ def test_pk_opp_dashboard_spec_has_five_components_with_pacing():
         "Pacing-vs-target component is the load-bearing one for the "
         f"Phase 4 weekly status doc. Component titles: {titles}"
     )
+
+
+def test_pk_opp_dashboard_validate_navigates_to_pinned_url():
+    page = FakePage()
+    result = opp_artifacts.build_pk_opp_dashboard(page=page, dry_run=False)
+
+    assert result.status == "validated"
+    assert result.url == opp_artifacts.PINNED_DASHBOARD_URL
+    assert page.goto_calls == [opp_artifacts.PINNED_DASHBOARD_URL]
+
+
+def test_pk_opp_dashboard_dry_run_does_not_navigate():
+    page = FakePage()
+    result = opp_artifacts.build_pk_opp_dashboard(page=page, dry_run=True)
+
+    assert result.status == "dry_run"
+    assert page.goto_calls == []
