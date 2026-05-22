@@ -4,6 +4,9 @@ PK Lead Intelligence skill — daily enrichment + weekly status pipeline for
 the Packaging division. End-user-facing documentation lives in `SKILL.md`;
 this README is for the engineer cloning the repo.
 
+The published catalog slug is `autumn-pk-lead-intelligence` — install via
+Seren Desktop's Skills panel or `GET /publishers/seren-skills/skills/autumn-pk-lead-intelligence`.
+
 ## Local setup
 
 1. Python 3.11+
