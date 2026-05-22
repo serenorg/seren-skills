@@ -198,6 +198,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--state-dir",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent / "state",
+        help=(
+            "Directory for skill-local state files. The weekly run log "
+            "(`weekly_status_runs.jsonl`, gitignored) lives here and is "
+            "read by `slash/pk_status.py`. Defaults to the skill's "
+            "state/ directory."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path.home() / "Documents" / "pk-lead-intelligence" / "output",
@@ -958,6 +969,29 @@ def main(argv: list[str] | None = None) -> int:
             f"shared_with={result.shared_with or '(none)'} "
             f"url={result.doc_url or '(none)'}"
         )
+        # Persist the run for `/pk-status` to read. Only on successful
+        # live shares — dry-runs and skipped_no_email runs must not
+        # surface a fake/empty URL to the operator on the next slash
+        # command. Issue #779.
+        if not args.dry_run and result.status == "shared":
+            from scripts.storage import weekly_run_log  # noqa: PLC0415
+
+            now = datetime.now(tz=timezone.utc)
+            from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+            local_iso = now.astimezone(ZoneInfo("America/New_York")).isocalendar()
+            week_label = f"{local_iso.year}-W{local_iso.week:02d}"
+            weekly_run_log.append(
+                args.state_dir,
+                {
+                    "week_label": week_label,
+                    "title": f"PK Weekly Status — {week_label}",
+                    "doc_url": result.doc_url,
+                    "shared_with": result.shared_with,
+                    "status": result.status,
+                    "generated_at_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                },
+            )
         return 0
 
     # args.command == "run"
