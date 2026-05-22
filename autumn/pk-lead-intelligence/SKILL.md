@@ -195,6 +195,18 @@ python scripts/agent.py --command run --allow-live
 Both `live_mode=true` and `--allow-live` are required. Either alone
 refuses to write. This is intentional — see Pre-Run Checklist below.
 
+### ContentNote throttle (issue #783)
+
+Salesforce enforces a ~90-second window between sequential
+ContentNote writes on the Lightning UI session. The skill pauses
+between Notes in `--batch --allow-live` by default; without the
+pause, batches silently drop Notes after the 2nd–3rd Lead. Override
+via `inputs.pause_between_notes_seconds` in `config.json` (default
+`90`) or the `--pause-between-notes <seconds>` CLI flag. Skipped /
+failed / non-PK Leads do not trigger a pause — they did not consume
+a throttle slot. Set to `0` only when running through a Salesforce
+Connected App + REST path (not the default UI flow).
+
 ### Weekly status doc
 
 The weekly doc is normally cron-driven, but a manual run is fine:

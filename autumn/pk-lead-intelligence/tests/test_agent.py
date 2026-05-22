@@ -756,6 +756,113 @@ def test_batch_live_dispatches_to_single_session_runner(
 
 
 # --------------------------------------------------------------------- #
+# ContentNote throttle (issue #783)                                     #
+# --------------------------------------------------------------------- #
+
+
+def test_iterate_batch_writes_sleeps_pause_seconds_only_between_writes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Salesforce ContentNote enforces a ~90s window between sequential
+    Note writes on the same Lightning session. The batch loop must pause
+    `pause_between_notes_seconds` after every successful write — but
+    only when more leads remain, and only after a *write* (skips and
+    failures did not consume the throttle slot).
+
+    Single critical test, two scenarios in one body:
+
+    Scenario A — 4 writes succeed in order. Expect exactly 3 sleep
+        calls (after leads 1, 2, 3 — never after the last lead).
+        Each call argument equals the configured pause.
+
+    Scenario B — 4 leads, lead #2 returns `skipped_recent` (no
+        ContentNote write). Expect exactly 2 sleep calls (after
+        leads 1 and 3). Lead #2 must not trigger a sleep, because
+        no throttle slot was consumed.
+
+    The helper signature lets the test inject `sleep_fn` so we can
+    record calls without actually blocking.
+    """
+
+    from scripts.sf import client as sf_client
+    from scripts.sf import write_note
+
+    leads = [_fake_lead(f"00Q00000000000{i}", f"Lead {i}") for i in range(1, 5)]
+
+    # Stub enrichment and the SF cross-division populate call so the
+    # loop body reaches the write step unchanged.
+    monkeypatch.setattr(
+        agent, "_run_enrichment", lambda **k: _fake_enrichment(tmp_path)
+    )
+    monkeypatch.setattr(
+        sf_client,
+        "populate_is_packaging",
+        lambda **k: k["lead"],
+    )
+
+    # -- Scenario A: every write returns `written` -------------------- #
+    monkeypatch.setattr(
+        write_note,
+        "write_note_to_lead",
+        lambda **k: write_note.NoteWriteResult(
+            status="written", last_enriched_at="2026-05-21T10:30:00Z"
+        ),
+    )
+    sleeps_a: list[int] = []
+    counters_a, failures_a = agent._iterate_batch_writes(
+        leads=leads,
+        page=object(),
+        salesforce_org_url="https://acme.lightning.force.com",
+        output_dir=tmp_path,
+        ledger=object(),
+        scrape_fn=None,
+        linkedin_scrape_min_confidence=70,
+        pause_between_notes_seconds=90,
+        sleep_fn=sleeps_a.append,
+    )
+    assert counters_a["notes_written"] == 4
+    assert failures_a == []
+    assert sleeps_a == [90, 90, 90], (
+        "4 successful writes must produce exactly 3 inter-write pauses, "
+        f"got {sleeps_a!r}"
+    )
+
+    # -- Scenario B: lead #2 is skipped_recent ------------------------ #
+    def mixed_write(**kwargs):
+        lead = kwargs["options"].lead
+        if lead.record_id == "00Q000000000002":
+            return write_note.NoteWriteResult(
+                status="skipped_recent",
+                last_enriched_at="2026-05-21T10:30:00Z",
+            )
+        return write_note.NoteWriteResult(
+            status="written", last_enriched_at="2026-05-21T10:30:00Z"
+        )
+
+    monkeypatch.setattr(write_note, "write_note_to_lead", mixed_write)
+    sleeps_b: list[int] = []
+    counters_b, failures_b = agent._iterate_batch_writes(
+        leads=leads,
+        page=object(),
+        salesforce_org_url="https://acme.lightning.force.com",
+        output_dir=tmp_path,
+        ledger=object(),
+        scrape_fn=None,
+        linkedin_scrape_min_confidence=70,
+        pause_between_notes_seconds=90,
+        sleep_fn=sleeps_b.append,
+    )
+    assert counters_b["notes_written"] == 3
+    assert counters_b["notes_skipped_recent"] == 1
+    assert failures_b == []
+    assert sleeps_b == [90, 90], (
+        "Skipped leads do not consume a ContentNote throttle slot, so "
+        "no sleep should follow them. Expected 2 sleeps (after leads "
+        f"#1 and #3), got {sleeps_b!r}"
+    )
+
+
+# --------------------------------------------------------------------- #
 # Headless-by-default contract                                           #
 # --------------------------------------------------------------------- #
 
