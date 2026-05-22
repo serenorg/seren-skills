@@ -27,6 +27,7 @@ from typing import Callable, Optional
 from scripts.output import dryrun_docx
 from scripts.output.note_renderer import RenderedNote, render
 from scripts.research.claude_angles import UltrasonicAngles
+from scripts.research.linkedin_scraper import LinkedInProfile
 from scripts.research.linkedin_search import LinkedInCandidate
 from scripts.research.perplexity import PerplexityResearch
 from scripts.sf.client import LeadRow
@@ -39,6 +40,7 @@ from scripts.sf.client import LeadRow
 
 PerplexityFn = Callable[..., PerplexityResearch]
 LinkedInFn = Callable[..., list[LinkedInCandidate]]
+LinkedInScrapeFn = Callable[..., Optional[LinkedInProfile]]
 AnglesFn = Callable[..., UltrasonicAngles]
 DocxWriterFn = Callable[..., Path]
 ClockFn = Callable[[], datetime]
@@ -50,6 +52,16 @@ class Dependencies:
 
     Tests pass stubs; `scripts/agent.py` passes the live adapters from
     `scripts.research.*` and `scripts.output.dryrun_docx`.
+
+    `linkedin_scrape` is None by default — when None, the LinkedIn
+    profile scraper (#781) is bypassed and the pipeline behaves
+    identically to the pre-#781 state. The agent wires this only when
+    the operator opts in via `inputs.linkedin_scraping_enabled` in
+    config.json.
+
+    `linkedin_scrape_min_confidence` gates the scraper: only the
+    top-confidence candidate is scraped, and only when its score is
+    at or above this threshold. Default 70 — operator-tunable.
     """
 
     perplexity_research: PerplexityFn
@@ -57,6 +69,8 @@ class Dependencies:
     claude_angles: AnglesFn
     docx_writer: DocxWriterFn = dryrun_docx.write
     clock: Optional[ClockFn] = None
+    linkedin_scrape: Optional[LinkedInScrapeFn] = None
+    linkedin_scrape_min_confidence: int = 70
 
 
 # --------------------------------------------------------------------- #
@@ -79,6 +93,13 @@ class EnrichmentResult:
     perplexity: PerplexityResearch
     linkedin: Optional[LinkedInCandidate]
     angles: UltrasonicAngles
+    profile: Optional[LinkedInProfile] = None
+    # True iff the agent invoked the scraper for this Lead (the
+    # candidate cleared the min-confidence gate). The agent uses this
+    # to distinguish `signed_out` from `not_attempted` on the run
+    # summary — a soft-failed attempt counts; a skipped low-confidence
+    # candidate does not.
+    linkedin_scrape_attempted: bool = False
 
 
 # --------------------------------------------------------------------- #
@@ -163,6 +184,21 @@ def enrich(
     )
     linkedin = candidates[0] if candidates else None
 
+    # Issue #781 — opt-in profile scrape. Only attempted when the
+    # operator wired `linkedin_scrape` AND the top candidate clears
+    # the min-confidence gate; soft-fails to profile=None on any
+    # navigation / parse error, which the renderer falls through to
+    # not-surfaced markers.
+    profile: Optional[LinkedInProfile] = None
+    scrape_attempted = False
+    if (
+        deps.linkedin_scrape is not None
+        and linkedin is not None
+        and linkedin.match_confidence >= deps.linkedin_scrape_min_confidence
+    ):
+        scrape_attempted = True
+        profile = deps.linkedin_scrape(profile_url=linkedin.url)
+
     angles = deps.claude_angles(
         lead_name=lead.name,
         company_name=extracted_company,
@@ -174,6 +210,7 @@ def enrich(
         perplexity=perplexity,
         linkedin=linkedin,
         angles=angles,
+        profile=profile,
         now=deps.clock() if deps.clock else None,
     )
 
@@ -187,4 +224,6 @@ def enrich(
         perplexity=perplexity,
         linkedin=linkedin,
         angles=angles,
+        profile=profile,
+        linkedin_scrape_attempted=scrape_attempted,
     )

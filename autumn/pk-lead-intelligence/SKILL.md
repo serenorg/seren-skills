@@ -316,11 +316,19 @@ operating it.
   blocks `*.png` to keep dev screenshots out of git. Never paste
   Salesforce screenshots into chat or share them outside the org —
   they always carry PII.
-- **No bulk LinkedIn scraping.** The research module uses
-  search-engine queries to find candidate LinkedIn URLs and
-  surfaces the URL plus a match-confidence score. It does not
-  enumerate connections, scrape profile contents in bulk, or
-  bypass LinkedIn's session model.
+- **LinkedIn discovery and optional profile scraping.** The
+  discovery module uses search-engine queries to find candidate
+  LinkedIn URLs and surfaces the URL plus a match-confidence
+  score. The profile scraper (issue #781) is available behind the
+  `inputs.linkedin_scraping_enabled` config flag (default false);
+  when enabled, the skill reads the operator-authenticated
+  profile page using the same Playwright context as Salesforce
+  and stores the structured fields it extracts (current title,
+  tenure, prior roles, education, skills, recent activity). The
+  scraper never enumerates connections in bulk, never bypasses
+  LinkedIn's session model, and soft-fails to None on the
+  signed-out gate so the Note falls through to the existing
+  not-surfaced markers.
 - **Salesforce is the source of truth.** When LinkedIn and
   Salesforce disagree on a person's title or role, the Note
   surfaces the discrepancy as an observation. It does not silently

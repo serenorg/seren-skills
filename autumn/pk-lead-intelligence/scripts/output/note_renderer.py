@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from scripts.research.claude_angles import UltrasonicAngles
+from scripts.research.linkedin_scraper import LinkedInProfile
 from scripts.research.linkedin_search import LinkedInCandidate
 from scripts.research.perplexity import CompanyExtract, PerplexityResearch
 from scripts.sf.client import LeadRow
@@ -109,20 +110,57 @@ def _join_or_marker(items: list[str]) -> str:
     return "\n".join(f"{i + 1}) {item}" for i, item in enumerate(items[:3]))
 
 
+def _format_tenure_months(months: int) -> str:
+    """Render LinkedIn-derived months as a compact `Ny Mmo` label.
+
+    `28` → `"2y 4mo"`. `6` → `"6mo"`. `12` → `"1y"`. Mirrors the
+    LinkedIn UI's own format so a reviewer who clicks the profile
+    link sees the same number twice.
+    """
+
+    if months < 12:
+        return f"{months}mo"
+    years, remaining = divmod(months, 12)
+    if remaining == 0:
+        return f"{years}y"
+    return f"{years}y {remaining}mo"
+
+
 def _build_contact_body(
     *,
     lead: LeadRow,
     extract: Optional[CompanyExtract],
     linkedin: Optional[LinkedInCandidate],
+    profile: Optional[LinkedInProfile] = None,
 ) -> str:
-    """Compose the CONTACT block body in Nathan's labeled-field shape."""
+    """Compose the CONTACT block body in Nathan's labeled-field shape.
 
-    title = (extract.contact_title if extract else "") or _NOT_SURFACED
+    When a `profile` is supplied (LinkedIn scraper opted in and the
+    scrape succeeded), the scraped fields override the Perplexity-
+    derived placeholders for title and tenure. Email stays Perplexity-
+    derived because LinkedIn does not surface emails publicly.
+    """
+
+    # Title — prefer scraped value, fall back to Perplexity extract.
+    title_value = (profile.current_title if profile else None) or (
+        extract.contact_title if extract else ""
+    )
+    title = title_value or _NOT_SURFACED
+
     email = (extract.contact_email if extract else "") or _NOT_SURFACED
     linkedin_url = linkedin.url if linkedin is not None else _NOT_SURFACED
-    tenure_company = (
-        (extract.contact_tenure_company if extract else "") or _NOT_SURFACED
-    )
+
+    # Tenure at company — prefer scraped months value, fall back to
+    # the Perplexity-extracted string. The scraped value is more
+    # precise; "Not publicly available" → "2y 4mo" is the wholesale
+    # upgrade the operator opted in for.
+    if profile is not None and profile.current_tenure_months is not None:
+        tenure_company = _format_tenure_months(profile.current_tenure_months)
+    else:
+        tenure_company = (
+            (extract.contact_tenure_company if extract else "") or _NOT_SURFACED
+        )
+
     tenure_role = (
         (extract.contact_tenure_role if extract else "") or _NOT_SURFACED
     )
@@ -171,16 +209,63 @@ def _build_header_body(*, date_iso: str) -> str:
     return f"Prepared {date_iso} by NMi\n{_STAGE_LINE}"
 
 
-def _build_source_body(lead: LeadRow) -> str:
+def _build_source_body(
+    lead: LeadRow, *, profile: Optional[LinkedInProfile] = None
+) -> str:
     """SOURCE block — back-reference to the Lead's list-view URL.
 
     Nathan's template references the weekly spreadsheet by filename;
     we substitute the Lead's list-view URL because the skill does not
     own the operator's spreadsheet path. The contract is "where did
     this record come from?" — either pointer satisfies it.
+
+    When the LinkedIn profile scraper ran successfully, a second line
+    records the fetch timestamp so a reviewer can audit which Notes
+    used profile data without diffing against the run log.
     """
 
-    return f"Lead list view: {lead.source_url}"
+    body = f"Lead list view: {lead.source_url}"
+    if profile is not None:
+        body += f"\nLinkedIn (scraped {profile.fetched_at_utc}): {profile.url}"
+    return body
+
+
+def _build_owner_notes_body(
+    *,
+    extract: Optional[CompanyExtract],
+    profile: Optional[LinkedInProfile] = None,
+) -> str:
+    """Compose the OWNER NOTES block.
+
+    Preserves the existing Perplexity-derived owner notes verbatim
+    and appends a LinkedIn-vs-Salesforce company mismatch warning
+    when the scraped profile names a different employer than the
+    Perplexity-extracted company. This is the canonical audit signal
+    per #781 — we never silently overwrite the Salesforce/Perplexity
+    company value, but we do surface the conflict to the reviewer.
+    """
+
+    base = (extract.owner_notes if extract else "") or ""
+    notes_lines: list[str] = []
+    if base.strip():
+        notes_lines.append(base.strip())
+
+    if (
+        profile is not None
+        and profile.current_company
+        and extract is not None
+        and extract.company_name
+        and profile.current_company.strip().lower()
+        != extract.company_name.strip().lower()
+    ):
+        notes_lines.append(
+            f"LinkedIn-derived company differs from Salesforce: "
+            f"{profile.current_company}"
+        )
+
+    if not notes_lines:
+        return _NOT_SURFACED
+    return "\n".join(notes_lines)
 
 
 # --------------------------------------------------------------------- #
@@ -195,6 +280,7 @@ def render(
     linkedin: Optional[LinkedInCandidate],
     angles: UltrasonicAngles,
     now: Optional[datetime] = None,
+    profile: Optional[LinkedInProfile] = None,
 ) -> RenderedNote:
     """Build the locked-layout `RenderedNote` for one enrichment.
 
@@ -220,7 +306,7 @@ def render(
     bodies = {
         "PK INBOUND INQUIRY RESEARCH": _build_header_body(date_iso=date_iso),
         "CONTACT": _build_contact_body(
-            lead=lead, extract=extract, linkedin=linkedin
+            lead=lead, extract=extract, linkedin=linkedin, profile=profile
         ),
         "COMPANY": _build_company_body(extract),
         "TOP 3 SERVICES / PRODUCT LINES": _join_or_marker(
@@ -234,10 +320,8 @@ def render(
             extract.key_products_made if extract else ""
         ),
         "ULTRASONIC WELDING OPPORTUNITY": _build_ultrasonic_body(angles),
-        "OWNER NOTES": _value_or_marker(
-            extract.owner_notes if extract else ""
-        ),
-        "SOURCE": _build_source_body(lead),
+        "OWNER NOTES": _build_owner_notes_body(extract=extract, profile=profile),
+        "SOURCE": _build_source_body(lead, profile=profile),
     }
 
     sections = [NoteSection(heading=h, body=bodies[h]) for h in _LOCKED_HEADINGS]

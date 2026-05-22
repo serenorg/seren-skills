@@ -66,6 +66,7 @@ if _SKILL_ROOT not in sys.path:
 
 from dataclasses import dataclass  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
+from typing import Optional  # noqa: E402
 
 from scripts.auth import microsoft_sso  # noqa: E402
 from scripts.auth import op_service_account  # noqa: E402
@@ -396,6 +397,8 @@ def _run_batch_live(
     limit: int,
     output_dir: Path,
     ledger: enrichment_ledger.EnrichmentLedger,
+    linkedin_scraping_enabled: bool = False,
+    linkedin_scrape_min_confidence: int = 70,
 ) -> _BatchLiveResult:  # pragma: no cover
     """Drive `--batch --allow-live` in ONE Playwright session. Issue #776.
 
@@ -432,6 +435,13 @@ def _run_batch_live(
         "notes_skipped_recent": 0,
         "docx_written": 0,
         "leads_failed": 0,
+        # Issue #781 — LinkedIn scraper telemetry. `profiles_scraped`
+        # counts successful scrapes; `signed_out` counts attempts that
+        # returned None (typically the signed-out gate or a parse miss).
+        # Below-threshold candidates are NOT attempted and do not count
+        # toward either bucket.
+        "linkedin_profiles_scraped": 0,
+        "linkedin_signed_out": 0,
     }
     failures: list[dict] = []
 
@@ -461,14 +471,39 @@ def _run_batch_live(
                 # Echo for parity with the dry-run path.
                 print(f"batch_fetch: leads={len(leads)} cap={limit}")
 
+                # Build the LinkedIn scrape closure once. The closure
+                # captures the shared Page so each enrichment in the
+                # batch reuses the same browser context (no new SSO,
+                # no new context launches per Lead). When the flag is
+                # off, `scrape_fn` is None and `_run_enrichment` skips
+                # the scrape entirely.
+                scrape_fn = None
+                if linkedin_scraping_enabled:
+                    from scripts.research import linkedin_scraper  # noqa: PLC0415
+
+                    def scrape_fn(*, profile_url: str):  # type: ignore[misc]
+                        return linkedin_scraper.scrape_profile(
+                            profile_url=profile_url, page=page
+                        )
+
                 total = len(leads)
                 for idx, lead in enumerate(leads, 1):
                     try:
                         enrichment = _run_enrichment(
-                            lead=lead, output_dir=output_dir
+                            lead=lead,
+                            output_dir=output_dir,
+                            linkedin_scrape=scrape_fn,
+                            linkedin_scrape_min_confidence=(
+                                linkedin_scrape_min_confidence
+                            ),
                         )
                         if enrichment.docx_path:
                             counters["docx_written"] += 1
+                        if enrichment.linkedin_scrape_attempted:
+                            if enrichment.profile is not None:
+                                counters["linkedin_profiles_scraped"] += 1
+                            else:
+                                counters["linkedin_signed_out"] += 1
 
                         populated_lead = sf_client.populate_is_packaging(
                             page=page,
@@ -643,6 +678,8 @@ def _run_enrichment(
     *,
     lead: sf_client.LeadRow,
     output_dir: Path,
+    linkedin_scrape: Optional[enrich_lead.LinkedInScrapeFn] = None,
+    linkedin_scrape_min_confidence: int = 70,
 ) -> enrich_lead.EnrichmentResult:
     """Run the research → render → docx pipeline for one Lead.
 
@@ -654,12 +691,20 @@ def _run_enrichment(
     carry an explicit company field, and the Perplexity / LinkedIn
     adapters degrade gracefully without it. Phase 3 will populate
     the hint from the All Sources PK Leads report column.
+
+    Issue #781 — when `linkedin_scrape` is non-None, the LinkedIn
+    profile scraper runs against the top-confidence candidate URL
+    (subject to the min-confidence gate). The caller is responsible
+    for capturing the shared Playwright Page into the closure so
+    every Lead in the batch reuses the same browser context.
     """
 
     deps = enrich_lead.Dependencies(
         perplexity_research=perplexity.research_lead,
         linkedin_discover=linkedin_search.discover_candidates,
         claude_angles=claude_angles.generate,
+        linkedin_scrape=linkedin_scrape,
+        linkedin_scrape_min_confidence=linkedin_scrape_min_confidence,
     )
     return enrich_lead.enrich(
         lead=lead,
@@ -693,6 +738,11 @@ class RunSummary:
     notes_skipped_recent: int
     docx_written: int
     leads_failed: int
+    # Issue #781 — LinkedIn scraper telemetry. Default 0 so existing
+    # callers that don't yet pass the new fields stay green. Both
+    # batch and single-lead paths fill them when the scraper is wired.
+    linkedin_profiles_scraped: int = 0
+    linkedin_signed_out: int = 0
 
 
 def _run_live_note_write(
@@ -788,6 +838,8 @@ def _print_run_summary(summary: RunSummary) -> None:
         f"notes_skipped_recent={summary.notes_skipped_recent}",
         f"docx_written={summary.docx_written}",
         f"leads_failed={summary.leads_failed}",
+        f"linkedin_profiles_scraped={summary.linkedin_profiles_scraped}",
+        f"linkedin_signed_out={summary.linkedin_signed_out}",
     ]
     print(f"pk-lead-intelligence run: {' '.join(parts)}")
 
@@ -1017,6 +1069,16 @@ def main(argv: list[str] | None = None) -> int:
         ledger = enrichment_ledger.PsycopgEnrichmentLedger(ledger_uri)
         ledger.ensure_schema()
 
+    # Issue #781 — LinkedIn profile scraper opt-in. Default false; the
+    # operator turns it on in `config.json` per Lead enrichment cycle.
+    # Read once at the top of the run so every batch / single-lead
+    # dispatch path sees the same setting.
+    inputs = config.get("inputs") or {}
+    linkedin_scraping_enabled = bool(inputs.get("linkedin_scraping_enabled", False))
+    linkedin_scrape_min_confidence = int(
+        inputs.get("linkedin_scrape_min_confidence", 70)
+    )
+
     if args.batch:
         # Bug 3 (issue #776): catch ZeroLeadsFoundError at the dispatch
         # boundary so the FLS-gap / empty-list case prints the
@@ -1035,6 +1097,10 @@ def main(argv: list[str] | None = None) -> int:
                     limit=args.max_leads,
                     output_dir=args.output_dir,
                     ledger=ledger,
+                    linkedin_scraping_enabled=linkedin_scraping_enabled,
+                    linkedin_scrape_min_confidence=(
+                        linkedin_scrape_min_confidence
+                    ),
                 )
                 leads_evaluated = live_result.leads_evaluated
                 counters = live_result.counters

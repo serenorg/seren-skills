@@ -936,3 +936,39 @@ def test_weekly_dry_run_does_not_append_to_run_log(
     from scripts.storage import weekly_run_log
 
     assert weekly_run_log.latest(state_dir) is None
+
+
+# --------------------------------------------------------------------- #
+# Issue #781 — LinkedIn scraper telemetry on the cron summary line       #
+# --------------------------------------------------------------------- #
+
+
+def test_print_run_summary_includes_linkedin_counters(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The cron parses the run-summary line; new counters must appear in
+    a stable position so existing awk/grep parses continue to work and
+    operators can see scraper health at a glance.
+    """
+
+    agent._print_run_summary(
+        agent.RunSummary(
+            command="run",
+            dry_run=False,
+            leads_evaluated=3,
+            notes_written=2,
+            notes_skipped_non_pk=0,
+            notes_skipped_recent=1,
+            docx_written=3,
+            leads_failed=0,
+            linkedin_profiles_scraped=2,
+            linkedin_signed_out=1,
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert "linkedin_profiles_scraped=2" in out
+    assert "linkedin_signed_out=1" in out
+    # Existing keys still present in the same line.
+    assert "leads_evaluated=3" in out
+    assert "notes_written=2" in out

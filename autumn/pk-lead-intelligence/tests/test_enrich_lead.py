@@ -234,3 +234,135 @@ def test_is_packaging_lead_reads_attribute_when_present() -> None:
 
     assert enrich_lead.is_packaging_lead(pk_lead) is True
     assert enrich_lead.is_packaging_lead(non_pk_lead) is False
+
+
+# --------------------------------------------------------------------- #
+# Issue #781 — LinkedIn scraper wiring                                  #
+# --------------------------------------------------------------------- #
+
+
+def test_enrich_with_linkedin_scrape_none_keeps_existing_behavior(
+    tmp_path: Path,
+) -> None:
+    """Default `Dependencies.linkedin_scrape=None` must not change a
+    single byte of the produced EnrichmentResult vs the pre-#781
+    state. The flag-off path is the dominant production path; a
+    regression here would land in every Note.
+    """
+
+    deps, _calls = _build_stub_deps()
+    result = enrich_lead.enrich(
+        lead=_make_lead(),
+        deps=deps,
+        company_hint=None,
+        output_dir=tmp_path,
+    )
+
+    # The new field defaults to None when no scraper is wired.
+    assert result.profile is None
+    # The existing surface is intact.
+    assert result.linkedin is not None
+    assert result.docx_path.exists()
+
+
+def test_enrich_with_linkedin_scrape_wired_plumbs_profile(tmp_path: Path) -> None:
+    """When a scraper is wired, the top-confidence candidate URL is
+    passed in, the returned profile rides on EnrichmentResult, and the
+    profile reaches the rendered Note.
+    """
+
+    from scripts.research.linkedin_scraper import LinkedInProfile
+
+    scrape_calls: list[str] = []
+
+    def fake_scrape(*, profile_url: str) -> LinkedInProfile:
+        scrape_calls.append(profile_url)
+        return LinkedInProfile(
+            url=profile_url,
+            headline="Operator headline",
+            current_title="Director",
+            current_company="Acme Packaging",
+            current_tenure_months=14,
+            location="Toronto, ON",
+            prior_roles=[],
+            education=[],
+            skills=[],
+            recent_activity=[],
+            fetched_at_utc="2026-05-22T07:00:00Z",
+        )
+
+    deps, _ = _build_stub_deps()
+    deps_with_scrape = enrich_lead.Dependencies(
+        perplexity_research=deps.perplexity_research,
+        linkedin_discover=deps.linkedin_discover,
+        claude_angles=deps.claude_angles,
+        docx_writer=deps.docx_writer,
+        clock=deps.clock,
+        linkedin_scrape=fake_scrape,
+    )
+
+    result = enrich_lead.enrich(
+        lead=_make_lead(),
+        deps=deps_with_scrape,
+        company_hint=None,
+        output_dir=tmp_path,
+    )
+
+    # Top-confidence candidate URL was passed to the scraper.
+    assert scrape_calls == ["https://www.linkedin.com/in/jane-operator/"]
+    # The profile reached the result.
+    assert result.profile is not None
+    assert result.profile.current_company == "Acme Packaging"
+    # And the rendered Note saw the scraped tenure value.
+    contact_body = next(
+        s.body for s in result.note.sections if s.heading == "CONTACT"
+    )
+    assert "1y 2mo" in contact_body
+
+
+def test_enrich_scrape_below_min_confidence_does_not_call_scraper(
+    tmp_path: Path,
+) -> None:
+    """`min_confidence` gates the scraper so low-confidence matches do
+    not waste a navigation. Default is `70`; a 50-confidence candidate
+    must skip the scrape entirely.
+    """
+
+    scrape_calls: list[str] = []
+
+    def fake_scrape(*, profile_url: str):
+        scrape_calls.append(profile_url)
+        return None
+
+    deps, _ = _build_stub_deps(
+        linkedin_candidates=[
+            LinkedInCandidate(
+                url="https://www.linkedin.com/in/low-conf/",
+                title=None,
+                match_confidence=50,  # below default 70
+                reasons=["url-only"],
+            )
+        ]
+    )
+    deps_with_scrape = enrich_lead.Dependencies(
+        perplexity_research=deps.perplexity_research,
+        linkedin_discover=deps.linkedin_discover,
+        claude_angles=deps.claude_angles,
+        docx_writer=deps.docx_writer,
+        clock=deps.clock,
+        linkedin_scrape=fake_scrape,
+        linkedin_scrape_min_confidence=70,
+    )
+
+    result = enrich_lead.enrich(
+        lead=_make_lead(),
+        deps=deps_with_scrape,
+        company_hint=None,
+        output_dir=tmp_path,
+    )
+
+    assert scrape_calls == []  # below threshold — no navigation
+    assert result.profile is None
+    # And `linkedin_attempted` is False on the result so the summary
+    # line does not count this as a signed-out failure.
+    assert result.linkedin_scrape_attempted is False
