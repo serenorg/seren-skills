@@ -112,28 +112,47 @@ matches where you are running the skill:
    and the agent can probe `mcp__seren-mcp__list_projects` to confirm
    auth. Skip the rest of this section.
 
-2. **Claude Cowork or plain Claude Code (recommended outside the
-   desktop).** Install the hosted Seren MCP — it handles OAuth web
-   auth on first call and exposes every publisher this skill needs
-   (issue #789):
+2. **Claude Cowork (the desktop Claude app).** Cowork installs custom
+   MCP connectors through its GUI, not a shell command:
+
+   1. Open Claude Desktop.
+   2. Go to **Settings > Connectors**.
+   3. Click **Add Custom Connector**.
+   4. Paste the URL: `https://mcp.serendb.com/mcp`
+   5. Trigger any MCP call (e.g. ask Claude to list Seren projects);
+      the hosted MCP completes OAuth in your browser on first use.
+
+   The hosted MCP exposes every publisher this skill calls. No `.env`
+   entry is needed — Cowork carries the session for you.
+
+3. **Claude Code (the CLI).** Install the same hosted MCP via the
+   `claude` command:
 
    ```bash
    claude mcp add --scope user --transport http seren \
        https://mcp.serendb.com/mcp
    ```
 
-   Trigger the web-auth flow once (any MCP call will prompt). Then
-   write the session API key the MCP issues to `<skill-root>/.env`:
+   Trigger any MCP call to complete OAuth. If you also want a
+   `SEREN_API_KEY` in `.env` for cron runs, paste the key the MCP
+   issues:
 
    ```
    SEREN_API_KEY=<the-key-the-mcp-handed-back>
    ```
 
-   The skill reads `.env` on every run; you do not need to `export`
-   anything in your shell.
+4. **No setup — just run the skill (cold-start auto-register).** If
+   none of the above is configured, the skill registers a fresh Seren
+   agent account on its first publisher call, writes
+   `SEREN_API_KEY=<key>` to `<skill-root>/.env`, and continues. A
+   one-line warning is emitted on stderr so you can see what
+   happened. This is the path Claude Cowork users hit when they
+   activate the skill before setting up the connector — Jill never
+   sees an error.
 
-3. **No MCP available (cron host, CI box, locked-down server).**
-   Register a Seren agent account directly:
+5. **Locked-down host with no outbound to `/auth/agent` either (CI,
+   air-gapped cron).** Register the account from a machine that does
+   have outbound, then paste the key into `<skill-root>/.env`:
 
    ```bash
    curl -sS -X POST https://api.serendb.com/auth/agent \
@@ -146,9 +165,13 @@ matches where you are running the skill:
 
 > **Do not create a duplicate account if a key already exists.** The
 > `/auth/agent` endpoint always issues a fresh `$0`-balance key; a
-> second account does not inherit your team's SerenBucks. Always
-> check `<skill-root>/.env` (and probe `mcp__seren-mcp__list_projects`
-> when MCP is available) before invoking the registration curl.
+> second account does not inherit your team's SerenBucks. The
+> cold-start auto-register in path 4 only fires when neither `API_KEY`
+> nor `SEREN_API_KEY` is set in the environment AND no
+> `<skill-root>/.env` exists with a key — so an existing team key is
+> never overwritten. Always check `<skill-root>/.env` (and probe
+> `mcp__seren-mcp__list_projects` when MCP is available) before
+> invoking the registration curl manually.
 
 Reference: <https://docs.serendb.com/skills.md>.
 

@@ -3,7 +3,8 @@
 Pure Python over `urllib`, no third-party deps. The wrapper layers
 cleanly so each piece is unit-testable in isolation:
 
-- `resolve_api_key()` — pick the right env var.
+- `resolve_api_key()` — find an API key across env, `.env`, or
+  auto-register a fresh agent account on cold start.
 - `_build_url()` — construct the gateway URL for a publisher + path.
 - `_build_headers()` — Bearer auth + Content-Type for JSON bodies.
 - `_decode_response()` — 2xx → dict, non-2xx → `PublisherError`.
@@ -19,8 +20,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 
@@ -33,6 +36,14 @@ Fetcher = Callable[
 
 _DEFAULT_BASE_URL = "https://api.serendb.com"
 _API_KEY_ENV_VARS = ("API_KEY", "SEREN_API_KEY")
+
+# Default skill root: parent of `scripts/`. `.env` lives at the root.
+# Tests override this via the `skill_root` argument on `resolve_api_key`.
+_DEFAULT_SKILL_ROOT = Path(__file__).resolve().parent.parent
+
+# Skill identifier sent to `POST /auth/agent` on first-run registration.
+# Matches the skill's package name + the value documented in SKILL.md.
+_SKILL_NAME = "pk-lead-intelligence"
 
 
 class PublisherError(RuntimeError):
@@ -51,49 +62,195 @@ class PublisherError(RuntimeError):
 # --------------------------------------------------------------------- #
 
 
-# Authentication recovery hint shown when no API key is available in
-# the environment. Lists the two supported recovery paths in priority
-# order. Issue #789 — Claude Cowork users hit this every cold start;
-# the message must be self-sufficient so a docs trawl is not required.
+# Cold-start error shown when no API key is available anywhere AND
+# the caller opted out of auto-register (`auto_register=False`). Issue
+# #792 — PR #790's message told Claude Cowork users to run
+# `claude mcp add`, a Claude *Code* CLI command. Cowork is the desktop
+# Claude app; its custom-connector install is a GUI flow. This message
+# splits the two products into their own labelled blocks so the recipe
+# matches the surface.
 _MISSING_API_KEY_MESSAGE = (
     "Neither API_KEY nor SEREN_API_KEY is set — pk-lead-intelligence "
     "cannot reach the Seren publishers (perplexity, seren-models, "
     "google-drive, seren-cron, seren-db) without auth.\n\n"
-    "Recommended (Claude Cowork or plain Claude Code): install the "
-    "hosted Seren MCP, which handles web auth and exposes every "
-    "publisher this skill calls.\n"
+    "Claude Cowork (desktop):\n"
+    "  Open Claude Desktop, then Settings > Connectors > "
+    "Add Custom Connector. Paste this URL:\n"
+    "      https://mcp.serendb.com/mcp\n"
+    "  Trigger any MCP call to complete OAuth. The hosted MCP "
+    "exposes every publisher this skill calls.\n\n"
+    "Claude Code (CLI):\n"
     "  claude mcp add --scope user --transport http seren "
     "https://mcp.serendb.com/mcp\n\n"
-    "Fallback (no MCP available): register a Seren agent account and "
-    "write the returned key to <skill-root>/.env as SEREN_API_KEY=...\n"
-    "  curl -sS -X POST https://api.serendb.com/auth/agent "
+    "Locked-down host with no MCP path (CI, headless cron):\n"
+    "  Register a Seren agent account and paste the returned "
+    "key into <skill-root>/.env as SEREN_API_KEY=...\n"
+    "    curl -sS -X POST https://api.serendb.com/auth/agent "
     '-H \'Content-Type: application/json\' '
     "-d '{\"name\":\"pk-lead-intelligence\"}'\n\n"
     "Reference: https://docs.serendb.com/skills.md"
 )
 
 
-def resolve_api_key() -> str:
-    """Return the Seren API key from env, preferring `API_KEY` over
-    `SEREN_API_KEY`.
+def resolve_api_key(
+    *,
+    auto_register: bool = True,
+    skill_root: Optional[Path] = None,
+    fetcher: Optional[Fetcher] = None,
+) -> str:
+    """Return the Seren API key from any of four sources, in priority
+    order:
 
-    Seren Desktop injects `API_KEY` for the lifetime of a run; an
-    operator running standalone (Claude Cowork, plain Claude Code,
-    a cron host) falls back to `SEREN_API_KEY`. The desktop-injected
-    key wins when both are set so a desktop session is not
-    accidentally routed at a stale standalone key.
+      1. `os.environ["API_KEY"]` — Seren Desktop injection.
+      2. `os.environ["SEREN_API_KEY"]` — operator-set in shell.
+      3. `<skill-root>/.env` — `SEREN_API_KEY=...` line (the path
+         SKILL.md tells users to paste into).
+      4. If `auto_register=True` (default) — `POST /auth/agent`,
+         write the returned key to `<skill-root>/.env`, return it.
 
-    When neither is set, the error message names both supported
-    recovery paths (seren-mcp install + `/auth/agent` registration)
-    so a Cowork user has them in front of them on the first failure.
-    Issue #789.
+    Issue #792: Jill on Claude Cowork should never see the cold-start
+    error. With auto-register on, a brand-new Cowork user gets a
+    fresh key without any manual step. The duplicate-account guard
+    documented in SKILL.md is preserved because layer 3 catches any
+    existing `.env` before layer 4 fires.
+
+    `auto_register=False` is the legacy fail-fast behaviour, useful
+    for CI/test code that wants the explicit error rather than a
+    silent network call to `/auth/agent`.
+
+    `skill_root` defaults to the directory containing `scripts/`.
+    Tests override it to isolate `.env` reads and writes.
+
+    `fetcher` defaults to the urllib-based `_default_fetcher`.
+    Tests inject a fake to avoid hitting the network.
     """
 
     for var in _API_KEY_ENV_VARS:
         value = os.environ.get(var)
         if value:
             return value
-    raise RuntimeError(_MISSING_API_KEY_MESSAGE)
+
+    root = skill_root if skill_root is not None else _DEFAULT_SKILL_ROOT
+    dotenv_key = _read_seren_api_key_from_dotenv(root)
+    if dotenv_key:
+        return dotenv_key
+
+    if not auto_register:
+        raise RuntimeError(_MISSING_API_KEY_MESSAGE)
+
+    transport = fetcher if fetcher is not None else _default_fetcher
+    registered_key = _register_new_agent_account(transport)
+    _write_seren_api_key_to_dotenv(root, registered_key)
+    print(
+        f"pk-lead-intelligence: registered new Seren agent account. "
+        f"Key written to {root / '.env'}. If you have an existing "
+        f"funded account, set SEREN_API_KEY before next run.",
+        file=sys.stderr,
+    )
+    return registered_key
+
+
+def _read_seren_api_key_from_dotenv(skill_root: Path) -> Optional[str]:
+    """Read `SEREN_API_KEY` from `<skill-root>/.env` if present.
+
+    Hand-rolled parser (no python-dotenv dependency at module import
+    time): the file format we need to support is a one-line
+    `KEY=value` per line plus `#` comments. Anything beyond that
+    (export prefixes, multiline values) is out of scope — the file
+    is operator-edited and the skill writes it in the simple form.
+    """
+
+    dotenv_path = skill_root / ".env"
+    if not dotenv_path.exists():
+        return None
+
+    for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() == "SEREN_API_KEY":
+            return value.strip().strip('"').strip("'") or None
+    return None
+
+
+def _register_new_agent_account(fetcher: Fetcher) -> str:
+    """Call `POST /auth/agent` and return the freshly-issued key.
+
+    Per docs.serendb.com/skills.md the endpoint returns
+    `{"data": {"agent": {"api_key": "..."}}}` on success. Raised
+    errors carry the gateway's body so the operator can act on it.
+    """
+
+    body = json.dumps({"name": _SKILL_NAME}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    url = f"{_DEFAULT_BASE_URL}/auth/agent"
+
+    status, response_body = fetcher("POST", url, headers, body)
+    if not (200 <= status < 300):
+        text = response_body.decode("utf-8", errors="replace")
+        if len(text) > 500:
+            text = text[:500] + "...[truncated]"
+        raise RuntimeError(
+            f"pk-lead-intelligence: auto-register POST {url} returned "
+            f"HTTP {status}: {text}\n\n{_MISSING_API_KEY_MESSAGE}"
+        )
+
+    try:
+        decoded = json.loads(response_body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"pk-lead-intelligence: auto-register returned 2xx but "
+            f"body was not JSON: {exc}"
+        ) from exc
+
+    api_key = (
+        (decoded or {}).get("data", {}).get("agent", {}).get("api_key")
+    )
+    if not api_key:
+        raise RuntimeError(
+            "pk-lead-intelligence: auto-register response missing "
+            "data.agent.api_key — endpoint contract may have changed; "
+            "set SEREN_API_KEY manually."
+        )
+    return api_key
+
+
+def _write_seren_api_key_to_dotenv(skill_root: Path, api_key: str) -> None:
+    """Append `SEREN_API_KEY=<key>` to `<skill-root>/.env`.
+
+    If the file does not exist, it is created with just this line.
+    If the file exists but has no `SEREN_API_KEY=`, the line is
+    appended. If the file already has the line — should not happen
+    because the read layer catches it earlier — the existing line is
+    rewritten so a stale empty value cannot shadow the new key.
+    """
+
+    dotenv_path = skill_root / ".env"
+    new_line = f"SEREN_API_KEY={api_key}"
+
+    if not dotenv_path.exists():
+        dotenv_path.write_text(new_line + "\n", encoding="utf-8")
+        return
+
+    lines = dotenv_path.read_text(encoding="utf-8").splitlines()
+    updated: list[str] = []
+    found = False
+    for line in lines:
+        stripped = line.strip()
+        if (
+            stripped.startswith("SEREN_API_KEY=")
+            or stripped.startswith("SEREN_API_KEY =")
+        ):
+            updated.append(new_line)
+            found = True
+        else:
+            updated.append(line)
+    if not found:
+        updated.append(new_line)
+    dotenv_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
 
 
 # --------------------------------------------------------------------- #

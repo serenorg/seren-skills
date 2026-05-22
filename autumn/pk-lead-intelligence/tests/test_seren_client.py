@@ -47,40 +47,138 @@ def test_resolve_api_key_falls_back_to_SEREN_API_KEY(
     assert sc.resolve_api_key() == "standalone-shell"
 
 
-def test_resolve_api_key_raises_when_neither_is_set(
+def test_resolve_api_key_raises_when_neither_is_set_and_auto_register_disabled(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
+    """When no env var is set, no `.env` is on disk, and the caller
+    opted out of auto-register, `resolve_api_key()` raises so the
+    operator gets the actionable error. `auto_register=False` exists
+    for callers that want the legacy fail-fast behaviour (CI, tests,
+    cron environments where unattended account creation is wrong).
+    """
+
     monkeypatch.delenv("API_KEY", raising=False)
     monkeypatch.delenv("SEREN_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="API_KEY"):
-        sc.resolve_api_key()
+        sc.resolve_api_key(auto_register=False, skill_root=tmp_path)
 
 
-def test_resolve_api_key_error_hints_at_seren_mcp_install_and_auth_fallback(
+def test_resolve_api_key_error_uses_cowork_settings_connectors_path_when_auto_register_disabled(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
-    """Issue #789 — Claude Cowork users hit this code path on every
-    cold start. The error must hand them both recovery paths in one
-    message so the discovery loop is one line, not a docs trawl:
-
-      1. The `claude mcp add` install command for the hosted
-         seren-mcp (the path SerenDesktop-equivalent users take).
-      2. The `https://api.serendb.com/auth/agent` curl fallback
-         (the path for users who cannot install MCP).
-
-    A future refactor that silently drops either hint is a P0
-    regression for the Cowork onboarding flow.
+    """Issue #792 — PR #790 told Claude Cowork users to run
+    `claude mcp add`, a Claude *Code* CLI command. Cowork is the
+    desktop app; its install path is Settings > Connectors. The
+    error message must call those products by their distinct names
+    and route each to its real install path. A future refactor that
+    re-conflates them is a P0 regression for the Cowork onboarding
+    flow this code path exists to serve.
     """
 
     monkeypatch.delenv("API_KEY", raising=False)
     monkeypatch.delenv("SEREN_API_KEY", raising=False)
     with pytest.raises(RuntimeError) as excinfo:
-        sc.resolve_api_key()
+        sc.resolve_api_key(auto_register=False, skill_root=tmp_path)
 
     message = str(excinfo.value)
-    assert "claude mcp add" in message
+
+    # Cowork desktop block — must cite the Settings > Connectors path
+    # and the remote-MCP URL, must not cite `claude mcp add` (wrong
+    # product) inside its own block.
+    assert "Settings > Connectors" in message
     assert "https://mcp.serendb.com/mcp" in message
+    cowork_block_start = message.index("Claude Cowork")
+    cowork_block_end = message.index("Claude Code", cowork_block_start)
+    assert "claude mcp add" not in message[cowork_block_start:cowork_block_end]
+
+    # Claude Code (CLI) block — separate, owns the `claude mcp add`
+    # command. Keeps the recipe for the right product on the right line.
+    assert "claude mcp add" in message[cowork_block_end:]
+
+    # /auth/agent fallback is still surfaced for hosts where neither
+    # MCP product is reachable (locked-down CI, headless cron boxes).
     assert "https://api.serendb.com/auth/agent" in message
+
+
+def test_resolve_api_key_reads_seren_api_key_from_dotenv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Latent bug from issue #792 audit: SKILL.md tells users to
+    paste the key into `<skill-root>/.env`, but the previous
+    `resolve_api_key()` only read `os.environ`. A user following the
+    docs literally still tripped the cold-start error. This test
+    pins the `.env` read so the doc instruction is honored.
+    """
+
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("SEREN_API_KEY", raising=False)
+    (tmp_path / ".env").write_text(
+        "# Comment that must be ignored\n"
+        "SEREN_API_KEY=from-dotenv-file\n"
+        "OP_VAULT=Some Other Var\n",
+        encoding="utf-8",
+    )
+
+    assert sc.resolve_api_key(skill_root=tmp_path) == "from-dotenv-file"
+
+
+def test_resolve_api_key_auto_registers_when_no_auth_anywhere(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    capsys,
+) -> None:
+    """Issue #792 — Jill on Cowork should never see the cold-start
+    error. With no env var, no `.env`, and `auto_register=True` (the
+    default), `resolve_api_key()` registers a fresh agent account
+    via `POST /auth/agent`, writes the key to `<skill-root>/.env`,
+    and returns it. A second call reads the now-written `.env`
+    instead of re-registering (preserves the no-duplicate-account
+    invariant from SKILL.md).
+    """
+
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("SEREN_API_KEY", raising=False)
+
+    fetcher_calls: list[dict] = []
+
+    def fake_fetcher(method: str, url: str, headers: dict, body: bytes | None):
+        fetcher_calls.append({"method": method, "url": url, "body": body})
+        return (
+            201,
+            b'{"data": {"agent": {"api_key": "reg-xyz-newly-issued"}}}',
+        )
+
+    key = sc.resolve_api_key(skill_root=tmp_path, fetcher=fake_fetcher)
+
+    # (a) Returned key matches the registration response.
+    assert key == "reg-xyz-newly-issued"
+
+    # (b) `.env` was created at skill_root with the right line.
+    dotenv = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "SEREN_API_KEY=reg-xyz-newly-issued" in dotenv
+
+    # The auto-register call hit the documented endpoint with a JSON
+    # body naming this skill. The endpoint contract is part of the
+    # public docs at docs.serendb.com/skills.md — pin it so the
+    # registration target cannot silently drift.
+    assert len(fetcher_calls) == 1
+    assert fetcher_calls[0]["method"] == "POST"
+    assert fetcher_calls[0]["url"] == "https://api.serendb.com/auth/agent"
+    assert b"pk-lead-intelligence" in (fetcher_calls[0]["body"] or b"")
+
+    # One operator-visible warning on stderr so a follow-up audit
+    # can find the auto-registration event in the run log.
+    captured = capsys.readouterr()
+    assert "registered new Seren agent account" in captured.err
+
+    # (c) Second call must NOT re-register. It reads the freshly-
+    # written `.env`. This is the duplicate-account guard.
+    key_again = sc.resolve_api_key(skill_root=tmp_path, fetcher=fake_fetcher)
+    assert key_again == "reg-xyz-newly-issued"
+    assert len(fetcher_calls) == 1, "second call must not re-hit /auth/agent"
 
 
 # --------------------------------------------------------------------- #
