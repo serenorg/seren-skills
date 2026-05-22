@@ -41,3 +41,5 @@ skipped by default; the runbook for the operator checkpoint session that
 lands the live drivers (and the sandbox tests that exercise them) is at
 `tests/sandbox/CHECKPOINT_RUNBOOK.md`. Run those tests with
 `pytest -m sandbox` once they land.
+
+<!-- trigger publisher reverse-sync after seren-skills-publisher#42 self-register-folder fix landed 2026-05-22 -->
