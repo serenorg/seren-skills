@@ -47,6 +47,20 @@ except ImportError:  # pragma: no cover — Playwright is a runtime dep
 _LIGHTNING_NO_VALUE_PATTERN = re.compile(r"^\[\[.*\]\]$")
 
 
+class ZeroLeadsFoundError(RuntimeError):
+    """fetch_open_leads found zero readable Lead rows in the list view.
+
+    Subclasses RuntimeError so existing single-lead callers
+    (``fetch_first_lead``) keep their current "loud traceback" behavior —
+    a traceback in single-lead mode is acceptable because the operator
+    is in front of the terminal driving the cycle directly. Batch
+    callers in ``agent.py`` catch this class specifically at the
+    dispatch site and render an operator-readable summary so the
+    cron-parseable summary contract is preserved on FLS-gap / empty-list
+    runs. Issue #776.
+    """
+
+
 # --------------------------------------------------------------------- #
 # Protocols                                                             #
 # --------------------------------------------------------------------- #
@@ -258,7 +272,7 @@ def fetch_open_leads(
         )
 
     if not rows:
-        raise RuntimeError(
+        raise ZeroLeadsFoundError(
             "No Lead row with a readable name found in the list view "
             f"(rows scanned={len(links)}, "
             f"missing href={missing_href}, "

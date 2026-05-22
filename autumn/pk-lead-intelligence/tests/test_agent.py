@@ -580,6 +580,182 @@ def test_batch_renders_failed_leads_block_on_stdout_for_non_technical_operator(
 
 
 # --------------------------------------------------------------------- #
+# Bug 3 — operator-readable summary on zero-row case (issue #776)        #
+# --------------------------------------------------------------------- #
+
+
+def test_batch_zero_leads_renders_summary_not_traceback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    """Empty list view must render a structured summary, not a stack trace.
+
+    Operator scenario: AllOpenLeads loads but every row is a Lightning
+    placeholder (FLS gap on Lead.Name). fetch_open_leads raises
+    ZeroLeadsFoundError. main() must catch, print a LEAD LIST IS EMPTY
+    block with the diagnostic message, print the cron-parseable summary
+    with leads_evaluated=0 leads_failed=0, and return 0. A Python
+    traceback in this path breaks the cron summary contract and gives
+    a non-technical operator nothing to act on.
+    """
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {"inputs": {"salesforce_org_url": "https://acme.lightning.force.com"}}
+        )
+    )
+
+    from scripts.sf import client as sf_client
+
+    def fake_fetch(**_kwargs):
+        raise sf_client.ZeroLeadsFoundError(
+            "No Lead row with a readable name found in the list view "
+            "(rows scanned=47, missing href=0, blank text=0, "
+            "Lightning placeholder `[[…]]`=47, non-Lead record (`005`/etc.)=0). "
+            "If placeholder count is non-zero, the running SSO user likely "
+            "lacks field-level read access to Lead.Name — escalate to the "
+            "Salesforce admin."
+        )
+
+    monkeypatch.setattr(agent, "_run_batch_fetch", fake_fetch)
+
+    rc = agent.main(
+        [
+            "--command", "run", "--dry-run",
+            "--batch", "--max-leads", "10",
+            "--config", str(cfg),
+        ]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    # Operator-readable block names the zero state and surfaces the
+    # diagnostic message verbatim so the FLS-gap hint reaches the operator.
+    assert "LEAD LIST IS EMPTY" in out
+    assert "Lightning placeholder" in out
+    assert "field-level read access" in out
+    # Summary contract preserved.
+    summary = next(
+        ln for ln in out.splitlines()
+        if ln.startswith("pk-lead-intelligence run:")
+    )
+    assert "leads_evaluated=0" in summary
+    assert "leads_failed=0" in summary
+
+
+# --------------------------------------------------------------------- #
+# Bug 4 — --batch --allow-live single-Playwright dispatch (issue #776)   #
+# --------------------------------------------------------------------- #
+
+
+def test_batch_live_dispatches_to_single_session_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    """--batch --allow-live routes to _run_batch_live, not the per-lead loop.
+
+    Before this fix, --batch --allow-live ran _run_batch_fetch (one
+    browser launch) then _run_live_note_write per lead (N more browser
+    launches) = N+1 Chromium cold-launches per cycle. The fix moves all
+    --batch --allow-live work into _run_batch_live which holds one
+    Playwright session for the whole batch. The dispatcher test pins
+    the routing; the single-session property is a structural invariant
+    of _run_batch_live's implementation.
+
+    This test asserts:
+    - --batch --allow-live calls _run_batch_live (and not the per-lead
+      _run_live_note_write inside main).
+    - --batch --dry-run still calls _run_batch_fetch (single-session is
+      a live-only concern; dry-run has no per-lead Playwright work).
+    """
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "inputs": {
+                    "salesforce_org_url": "https://acme.lightning.force.com",
+                    "live_mode": True,
+                    "serendb_connection_uri": "postgres://fake",
+                }
+            }
+        )
+    )
+
+    from scripts.storage import enrichment_ledger
+
+    class _FakeLedger:
+        def ensure_schema(self):
+            pass
+
+        def was_recently_enriched(self, *_args, **_kwargs):
+            return False
+
+        def record_enrichment(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(
+        enrichment_ledger,
+        "PsycopgEnrichmentLedger",
+        lambda *_a, **_k: _FakeLedger(),
+    )
+
+    batch_live_called = []
+    batch_fetch_called = []
+    live_note_write_called = []
+
+    def fake_batch_live(**kwargs):
+        batch_live_called.append(kwargs)
+        return agent._BatchLiveResult(
+            leads_evaluated=0,
+            counters={
+                "notes_written": 0,
+                "notes_skipped_non_pk": 0,
+                "notes_skipped_recent": 0,
+                "docx_written": 0,
+                "leads_failed": 0,
+            },
+            failures=[],
+        )
+
+    monkeypatch.setattr(agent, "_run_batch_live", fake_batch_live)
+    monkeypatch.setattr(
+        agent, "_run_batch_fetch",
+        lambda **k: batch_fetch_called.append(k) or [],
+    )
+    monkeypatch.setattr(
+        agent, "_run_live_note_write",
+        lambda **k: live_note_write_called.append(k) or None,
+    )
+
+    # --batch --allow-live → _run_batch_live, never the per-lead path
+    rc = agent.main(
+        [
+            "--command", "run", "--allow-live",
+            "--batch", "--max-leads", "10",
+            "--config", str(cfg),
+        ]
+    )
+    assert rc == 0
+    assert len(batch_live_called) == 1
+    assert batch_fetch_called == []
+    assert live_note_write_called == []
+
+    # --batch --dry-run still uses _run_batch_fetch (no behavior change)
+    batch_live_called.clear()
+    batch_fetch_called.clear()
+    rc = agent.main(
+        [
+            "--command", "run", "--dry-run",
+            "--batch", "--max-leads", "10",
+            "--config", str(cfg),
+        ]
+    )
+    assert rc == 0
+    assert batch_live_called == []
+    assert len(batch_fetch_called) == 1
+
+
+# --------------------------------------------------------------------- #
 # Headless-by-default contract                                           #
 # --------------------------------------------------------------------- #
 

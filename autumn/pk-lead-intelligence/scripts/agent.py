@@ -360,6 +360,150 @@ def _run_batch_fetch(
             browser.close()
 
 
+@dataclass(frozen=True)
+class _BatchLiveResult:
+    """Return type for `_run_batch_live`.
+
+    `counters` carries the same keys as the dry-run batch loop —
+    notes_written, notes_skipped_non_pk, notes_skipped_recent,
+    docx_written, leads_failed — so the caller renders the cron summary
+    line identically for both batch paths.
+    """
+
+    leads_evaluated: int
+    counters: dict
+    failures: list
+
+
+def _run_batch_live(
+    *,
+    salesforce_org_url: str,
+    storage_path: Path,
+    headless: bool,
+    op_vault: str,
+    op_item: str,
+    limit: int,
+    output_dir: Path,
+    ledger: enrichment_ledger.EnrichmentLedger,
+) -> _BatchLiveResult:  # pragma: no cover
+    """Drive `--batch --allow-live` in ONE Playwright session. Issue #776.
+
+    Pre-fix path: `_run_batch_fetch` opened browser #1 to fetch the list,
+    then the batch loop in `main()` called `_run_live_note_write` per
+    lead — each opening its own browser + SSO replay. A 30-lead cycle
+    paid 31 cold launches and 31 SSO replays.
+
+    This function collapses both responsibilities into one
+    `sync_playwright` lifecycle: one browser, one context, one SSO,
+    then iterate every Lead through enrichment + populate_is_packaging
+    + write_note_to_lead on the shared page. Per-lead failures are
+    caught and recorded so a single bad Lead does not abort the batch;
+    the caller renders the FAILED LEADS block.
+
+    Does NOT catch `sf_client.ZeroLeadsFoundError` — that one
+    propagates so the caller can render the operator-readable
+    `LEAD LIST IS EMPTY` block (Bug 3 fix, same issue).
+
+    `pragma: no cover` — live correctness is validated at the operator
+    checkpoint. The dispatch routing is unit-tested via the
+    `--batch --allow-live` → `_run_batch_live` contract test.
+    """
+
+    creds = op_service_account.read_salesforce_credentials(
+        vault=op_vault, item=op_item
+    )
+
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+
+    counters = {
+        "notes_written": 0,
+        "notes_skipped_non_pk": 0,
+        "notes_skipped_recent": 0,
+        "docx_written": 0,
+        "leads_failed": 0,
+    }
+    failures: list[dict] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        try:
+            if storage_path.exists():
+                context = browser.new_context(storage_state=str(storage_path))
+            else:
+                context = browser.new_context()
+            try:
+                sso_result = microsoft_sso.authenticate(
+                    context=context,
+                    salesforce_org_url=salesforce_org_url,
+                    creds=creds,
+                    storage_path=storage_path,
+                )
+                page = sso_result.page
+
+                # ZeroLeadsFoundError propagates to the caller, which
+                # renders the operator-readable empty-list summary.
+                leads = sf_client.fetch_open_leads(
+                    page=page,
+                    salesforce_org_url=salesforce_org_url,
+                    limit=limit,
+                )
+                # Echo for parity with the dry-run path.
+                print(f"batch_fetch: leads={len(leads)} cap={limit}")
+
+                total = len(leads)
+                for idx, lead in enumerate(leads, 1):
+                    try:
+                        enrichment = _run_enrichment(
+                            lead=lead, output_dir=output_dir
+                        )
+                        if enrichment.docx_path:
+                            counters["docx_written"] += 1
+
+                        populated_lead = sf_client.populate_is_packaging(
+                            page=page,
+                            lead=lead,
+                            salesforce_org_url=salesforce_org_url,
+                        )
+
+                        write_result = write_note.write_note_to_lead(
+                            page=page,
+                            options=write_note.NoteWriteOptions(
+                                lead=populated_lead,
+                                note=enrichment.note,
+                                salesforce_org_url=salesforce_org_url,
+                            ),
+                            now=datetime.now(tz=timezone.utc),
+                            dry_run=False,
+                            ledger=ledger,
+                        )
+                        if write_result.status == "written":
+                            counters["notes_written"] += 1
+                        elif write_result.status == "skipped_non_pk":
+                            counters["notes_skipped_non_pk"] += 1
+                        elif write_result.status == "skipped_recent":
+                            counters["notes_skipped_recent"] += 1
+                    except Exception as exc:  # noqa: BLE001
+                        counters["leads_failed"] += 1
+                        failures.append(
+                            {"idx": idx, "lead": lead, "exc": exc}
+                        )
+                        print(
+                            f"[{idx}/{total}] FAILED "
+                            f"{lead.record_id} {lead.name}: {exc}",
+                            file=sys.stderr,
+                        )
+
+                return _BatchLiveResult(
+                    leads_evaluated=total,
+                    counters=counters,
+                    failures=failures,
+                )
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+
 # --------------------------------------------------------------------- #
 # Phase 3 provision flow                                                #
 # --------------------------------------------------------------------- #
@@ -840,67 +984,90 @@ def main(argv: list[str] | None = None) -> int:
         ledger.ensure_schema()
 
     if args.batch:
-        leads = _run_batch_fetch(
-            salesforce_org_url=salesforce_org_url,
-            storage_path=args.storage_path,
-            headless=args.headless,
-            op_vault=op_vault,
-            op_item=op_item,
-            limit=args.max_leads,
-        )
-        print(f"batch_fetch: leads={len(leads)} cap={args.max_leads}")
-
-        counters = {
-            "notes_written": 0,
-            "notes_skipped_non_pk": 0,
-            "notes_skipped_recent": 0,
-            "docx_written": 0,
-            "leads_failed": 0,
-        }
-        # Collect failures so we can render an operator-visible block
-        # on stdout before the cron-parseable summary. Issue #774: a
-        # non-technical operator cannot grep stderr, so the same output
-        # stream they're already reading must carry the actionable
-        # detail. stderr still gets the per-line print for log-collection
-        # symmetry — it's free and machine-readable.
-        failures: list[dict] = []
-
-        for idx, lead in enumerate(leads, 1):
-            try:
-                enrichment = _run_enrichment(
-                    lead=lead, output_dir=args.output_dir
+        # Bug 3 (issue #776): catch ZeroLeadsFoundError at the dispatch
+        # boundary so the FLS-gap / empty-list case prints the
+        # cron-parseable summary instead of a Python traceback. Bug 4
+        # (same issue): --batch --allow-live dispatches to
+        # _run_batch_live which holds one Playwright session for the
+        # whole cycle instead of N+1.
+        try:
+            if args.allow_live:
+                live_result = _run_batch_live(
+                    salesforce_org_url=salesforce_org_url,
+                    storage_path=args.storage_path,
+                    headless=args.headless,
+                    op_vault=op_vault,
+                    op_item=op_item,
+                    limit=args.max_leads,
+                    output_dir=args.output_dir,
+                    ledger=ledger,
                 )
-                if enrichment.docx_path:
-                    counters["docx_written"] += 1
-                if args.allow_live:
-                    write_result = _run_live_note_write(
-                        salesforce_org_url=salesforce_org_url,
-                        storage_path=args.storage_path,
-                        headless=args.headless,
-                        op_vault=op_vault,
-                        op_item=op_item,
-                        enrichment=enrichment,
-                        lead=lead,
-                        ledger=ledger,
-                        dry_run=False,
-                    )
-                    if write_result.status == "written":
-                        counters["notes_written"] += 1
-                    elif write_result.status == "skipped_non_pk":
-                        counters["notes_skipped_non_pk"] += 1
-                    elif write_result.status == "skipped_recent":
-                        counters["notes_skipped_recent"] += 1
-            except Exception as exc:  # noqa: BLE001 — log and continue
-                counters["leads_failed"] += 1
-                failures.append(
-                    {"idx": idx, "lead": lead, "exc": exc}
+                leads_evaluated = live_result.leads_evaluated
+                counters = live_result.counters
+                failures = live_result.failures
+            else:
+                leads = _run_batch_fetch(
+                    salesforce_org_url=salesforce_org_url,
+                    storage_path=args.storage_path,
+                    headless=args.headless,
+                    op_vault=op_vault,
+                    op_item=op_item,
+                    limit=args.max_leads,
                 )
-                print(
-                    f"[{idx}/{len(leads)}] FAILED "
-                    f"{lead.record_id} {lead.name}: {exc}",
-                    file=sys.stderr,
-                )
+                print(f"batch_fetch: leads={len(leads)} cap={args.max_leads}")
 
+                counters = {
+                    "notes_written": 0,
+                    "notes_skipped_non_pk": 0,
+                    "notes_skipped_recent": 0,
+                    "docx_written": 0,
+                    "leads_failed": 0,
+                }
+                # Collect per-lead failures for the FAILED LEADS block
+                # on stdout (issue #774). stderr still gets the per-line
+                # print for log-collection symmetry — it's free and
+                # machine-readable.
+                failures = []
+
+                for idx, lead in enumerate(leads, 1):
+                    try:
+                        enrichment = _run_enrichment(
+                            lead=lead, output_dir=args.output_dir
+                        )
+                        if enrichment.docx_path:
+                            counters["docx_written"] += 1
+                    except Exception as exc:  # noqa: BLE001
+                        counters["leads_failed"] += 1
+                        failures.append(
+                            {"idx": idx, "lead": lead, "exc": exc}
+                        )
+                        print(
+                            f"[{idx}/{len(leads)}] FAILED "
+                            f"{lead.record_id} {lead.name}: {exc}",
+                            file=sys.stderr,
+                        )
+
+                leads_evaluated = len(leads)
+        except sf_client.ZeroLeadsFoundError as exc:
+            print()
+            print("LEAD LIST IS EMPTY:")
+            print(f"  {exc}")
+            print()
+            _print_run_summary(
+                RunSummary(
+                    command="run",
+                    dry_run=args.dry_run,
+                    leads_evaluated=0,
+                    notes_written=0,
+                    notes_skipped_non_pk=0,
+                    notes_skipped_recent=0,
+                    docx_written=0,
+                    leads_failed=0,
+                )
+            )
+            return 0
+
+        # Common FAILED LEADS block + summary for both batch paths.
         if failures:
             print()
             print(f"FAILED LEADS ({len(failures)}):")
@@ -908,19 +1075,17 @@ def main(argv: list[str] | None = None) -> int:
                 lead_obj = failure["lead"]
                 exc = failure["exc"]
                 print(
-                    f"  [{failure['idx']}/{len(leads)}] "
+                    f"  [{failure['idx']}/{leads_evaluated}] "
                     f"{lead_obj.record_id} — {lead_obj.name}"
                 )
-                print(
-                    f"          {type(exc).__name__}: {exc}"
-                )
+                print(f"          {type(exc).__name__}: {exc}")
             print()
 
         _print_run_summary(
             RunSummary(
                 command="run",
                 dry_run=args.dry_run,
-                leads_evaluated=len(leads),
+                leads_evaluated=leads_evaluated,
                 **counters,
             )
         )
