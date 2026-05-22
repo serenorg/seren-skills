@@ -825,3 +825,114 @@ def test_direct_script_invocation_resolves_sibling_imports():
     # Sanity check that argparse really rendered (i.e. we hit `main`,
     # not a partial import). The CLI's `prog` name is stable.
     assert "pk-lead-intelligence" in result.stdout
+
+
+# --------------------------------------------------------------------- #
+# Weekly run-log persistence (Phase 5 issue #779)                       #
+# --------------------------------------------------------------------- #
+
+
+def _make_share_result():
+    """Build a ShareResult that looks like a successful Drive upload."""
+    from scripts.integrations import google_drive
+
+    return google_drive.ShareResult(
+        status="shared",
+        doc_url="https://docs.google.com/document/d/abc",
+        shared_with="nathan@example.com",
+    )
+
+
+def _weekly_config(tmp_path: Path, *, live: bool) -> Path:
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "inputs": {
+                    "salesforce_org_url": "https://acme.lightning.force.com",
+                    "live_mode": live,
+                    "google_drive_folder_id": "folder123",
+                    "nathan_share_email": "nathan@example.com",
+                    "monthly_close_target_usd": 500000,
+                }
+            }
+        )
+    )
+    return cfg
+
+
+def test_weekly_live_appends_to_run_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful live weekly run must persist a record so /pk-status
+    has something to read. Without this the slash command always
+    reports 'no doc for this week' even after a real publish.
+    """
+
+    state_dir = tmp_path / "state"
+    cfg = _weekly_config(tmp_path, live=True)
+
+    monkeypatch.setattr(
+        agent, "_run_weekly", lambda **k: _make_share_result()
+    )
+    monkeypatch.setenv("OP_VAULT", "PK Salesforce Skill")
+    monkeypatch.setenv("OP_ITEM", "PK Salesforce")
+
+    rc = agent.main(
+        [
+            "--command", "weekly",
+            "--allow-live",
+            "--config", str(cfg),
+            "--state-dir", str(state_dir),
+        ]
+    )
+    assert rc == 0
+
+    from scripts.storage import weekly_run_log
+
+    latest = weekly_run_log.latest(state_dir)
+    assert latest is not None, "live weekly must persist a record"
+    assert latest["doc_url"] == "https://docs.google.com/document/d/abc"
+    assert latest["status"] == "shared"
+    assert latest["shared_with"] == "nathan@example.com"
+    # week_label is derived inside agent from now(); just confirm shape.
+    assert latest["week_label"].startswith("20")
+    assert "-W" in latest["week_label"]
+
+
+def test_weekly_dry_run_does_not_append_to_run_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dry-run weekly is for the operator to preview the rendered doc.
+    It must not leave a fake URL in the log that /pk-status would then
+    surface as the latest published doc.
+    """
+
+    state_dir = tmp_path / "state"
+    cfg = _weekly_config(tmp_path, live=False)
+
+    from scripts.integrations import google_drive
+
+    monkeypatch.setattr(
+        agent,
+        "_run_weekly",
+        lambda **k: google_drive.ShareResult(
+            status="dry_run", doc_url=None, shared_with="nathan@example.com"
+        ),
+    )
+    monkeypatch.setenv("OP_VAULT", "PK Salesforce Skill")
+    monkeypatch.setenv("OP_ITEM", "PK Salesforce")
+
+    rc = agent.main(
+        [
+            "--command", "weekly",
+            "--dry-run",
+            "--config", str(cfg),
+            "--state-dir", str(state_dir),
+        ]
+    )
+    assert rc == 0
+
+    from scripts.storage import weekly_run_log
+
+    assert weekly_run_log.latest(state_dir) is None

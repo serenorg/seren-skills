@@ -31,7 +31,7 @@ end-to-end against the production org, not stubbed.
 | 2 — enrichment dry-run | ✅ live | Lead fetch, Perplexity + Claude + LinkedIn research, `.docx` render |
 | 3 — reporting validation | ✅ live (2026-05-21) | Validate-only navigation to three operator-owned artifacts: `All Sources PK Leads` report (`00OS700000IzEBlMAN`), `PK Inbound Web Lead and Activity Tracking - SerenAI` dashboard (`01ZS7000004KhcnMAC`), `PK Inbound Web Lead and Opportunity Tracking - SerenAI` dashboard (`01ZS7000004KhePMAS`). Spec contracts unit-tested. |
 | 4 — live Note write | ✅ live (2026-05-21) | Per-Lead Project Business Unit DOM read (cross-division gate); SerenDB `pk_lead_enrichment_log` ledger (24h recency); Quill-editor Note-form driver; load-bearing write-then-stamp order; `--allow-live` × `live_mode=true` dual gate; weekly doc renderer + Drive share. |
-| 5 — cron + slash command + monitoring | ❌ not started | seren-cron jobs, local-pull runner, `/pk-status`, JSON envelope, failure-modes doc |
+| 5 — cron + slash command | ✅ live (2026-05-21) | `scripts/setup_cron.py` (daily + weekly local-pull jobs via seren-cron), `scripts/run_local_pull_runner.py` (claims due ticks, dispatches to `agent.py`, auto-pauses on publisher 402), `scripts/slash/pk_status.py` (reads `state/weekly_status_runs.jsonl`, surfaces latest doc URL or offers on-demand `--command weekly` run). JSON envelope on `--command run` and `docs/failure_modes.md` remain v1 follow-ups. |
 
 ### Architectural notes (issue #563 closeout)
 
