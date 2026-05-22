@@ -51,24 +51,49 @@ class PublisherError(RuntimeError):
 # --------------------------------------------------------------------- #
 
 
+# Authentication recovery hint shown when no API key is available in
+# the environment. Lists the two supported recovery paths in priority
+# order. Issue #789 — Claude Cowork users hit this every cold start;
+# the message must be self-sufficient so a docs trawl is not required.
+_MISSING_API_KEY_MESSAGE = (
+    "Neither API_KEY nor SEREN_API_KEY is set — pk-lead-intelligence "
+    "cannot reach the Seren publishers (perplexity, seren-models, "
+    "google-drive, seren-cron, seren-db) without auth.\n\n"
+    "Recommended (Claude Cowork or plain Claude Code): install the "
+    "hosted Seren MCP, which handles web auth and exposes every "
+    "publisher this skill calls.\n"
+    "  claude mcp add --scope user --transport http seren "
+    "https://mcp.serendb.com/mcp\n\n"
+    "Fallback (no MCP available): register a Seren agent account and "
+    "write the returned key to <skill-root>/.env as SEREN_API_KEY=...\n"
+    "  curl -sS -X POST https://api.serendb.com/auth/agent "
+    '-H \'Content-Type: application/json\' '
+    "-d '{\"name\":\"pk-lead-intelligence\"}'\n\n"
+    "Reference: https://docs.serendb.com/skills.md"
+)
+
+
 def resolve_api_key() -> str:
     """Return the Seren API key from env, preferring `API_KEY` over
     `SEREN_API_KEY`.
 
     Seren Desktop injects `API_KEY` for the lifetime of a run; an
-    operator running standalone falls back to `SEREN_API_KEY`. The
-    desktop-injected key wins when both are set so a desktop session
-    is not accidentally routed at a stale standalone key.
+    operator running standalone (Claude Cowork, plain Claude Code,
+    a cron host) falls back to `SEREN_API_KEY`. The desktop-injected
+    key wins when both are set so a desktop session is not
+    accidentally routed at a stale standalone key.
+
+    When neither is set, the error message names both supported
+    recovery paths (seren-mcp install + `/auth/agent` registration)
+    so a Cowork user has them in front of them on the first failure.
+    Issue #789.
     """
 
     for var in _API_KEY_ENV_VARS:
         value = os.environ.get(var)
         if value:
             return value
-    raise RuntimeError(
-        "Neither API_KEY nor SEREN_API_KEY is set — "
-        "see https://docs.serendb.com/skills.md for setup"
-    )
+    raise RuntimeError(_MISSING_API_KEY_MESSAGE)
 
 
 # --------------------------------------------------------------------- #
