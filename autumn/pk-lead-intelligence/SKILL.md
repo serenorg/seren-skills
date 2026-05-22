@@ -175,11 +175,48 @@ matches where you are running the skill:
 
 Reference: <https://docs.serendb.com/skills.md>.
 
-### 1Password Service Account
+### Salesforce credentials
 
-The Salesforce credentials (username, password, rolling TOTP) live in
-a 1Password vault. The skill reads them at runtime via the `op` CLI
-under a Service Account token.
+The skill needs your Salesforce username, password, and the TOTP seed
+backing your MFA rolling code. Pick whichever path fits your setup —
+the skill tries the env-var path first and falls back to 1Password
+Business if env vars are unset.
+
+#### Path A: env vars in `.env` (consumer-friendly, no 1Password Business needed)
+
+Works on consumer 1Password (Personal/Families), no 1Password at all,
+or any other secrets store. The skill reads three env vars and
+computes the rolling 6-digit code locally via `pyotp`. Issue #795.
+
+1. Paste the three values into `<skill-root>/.env`:
+   ```
+   SF_USERNAME=jill@your-company.com
+   SF_PASSWORD=<your-salesforce-password>
+   SF_TOTP_SECRET=<base32-seed-from-MFA-setup>
+   ```
+2. Get the `SF_TOTP_SECRET` value one of two ways:
+   - **From an existing 1Password (Personal works fine):** open your
+     Salesforce login item → Edit → click the one-time-password field
+     → reveal/copy the underlying secret (the long base32 string,
+     **not** the 6-digit code that rotates).
+   - **From a fresh MFA setup:** in Salesforce, Settings → Identity
+     Verification → Add Verification Method → Mobile App. The setup
+     screen shows a QR code AND a text panel labeled "Can't scan?
+     Use this secret key" — copy that string.
+3. Confirm: `pip install -r requirements.txt` (pulls `pyotp`), then
+   `python -c "from scripts.auth.op_service_account import
+   read_salesforce_credentials as r; print(r(vault='', item='').totp_code)"`
+   should print a 6-digit code that matches your authenticator app.
+
+Set all three or none. Setting two of three is rejected with an
+explicit error — half-set env can otherwise mis-route the SSO
+driver if it silently falls through to `op`.
+
+#### Path B: 1Password Business Service Account (the original path)
+
+Use this if your org already runs 1Password Business or Teams and
+wants secrets centralized. **Requires a Business/Teams plan** — the
+consumer Personal and Families plans do not expose Service Accounts.
 
 1. In 1Password admin, create a vault named `PK Salesforce Skill`
    and add one login item named `PK Salesforce`. The item must carry
@@ -190,7 +227,10 @@ under a Service Account token.
    `brew install --cask 1password-cli` (or the Linux package).
 4. Verify: `op --version` returns 2.x.
 5. Set `OP_SERVICE_ACCOUNT_TOKEN` in `.env` (see Configuration).
-6. Sanity-check from the shell:
+6. Make sure `SF_USERNAME`, `SF_PASSWORD`, and `SF_TOTP_SECRET` are
+   **not** set — the env-var path runs first and would shadow this
+   one.
+7. Sanity-check from the shell:
    - `op vault list` must list `PK Salesforce Skill`.
    - `op item get "PK Salesforce" --vault "PK Salesforce Skill"
      --otp` must print a rolling 6-digit code.
