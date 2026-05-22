@@ -19,13 +19,18 @@ phase-by-phase breakdown.
 
 ## Phase status (read before assuming any path is end-to-end)
 
-Phase 3 (#550) and Phase 4 (#557) ship as `feat(...)` commits, but the
-Playwright code that drives Salesforce Lightning is gated behind
-`# pragma: no cover` stubs that `raise NotImplementedError`. Pure logic
-(gates, idempotency, recency checks, renderers) is real and unit-tested;
-the DOM driving is deferred to a sandbox-supervised operator checkpoint
-that has not yet happened. See `SKILL.md` § "Status by Phase" and issue
-[#563](https://github.com/serenorg/seren-skills/issues/563).
+Phases 3 and 4 are live against the production HU Salesforce org as of
+the [#563](https://github.com/serenorg/seren-skills/issues/563) closeout
+(2026-05-21). Live Note writes run behind the `live_mode = true` +
+`--allow-live` double gate and the Project Business Unit cross-division
+check. The earlier `# pragma: no cover` stubs that raised
+`NotImplementedError` have been replaced by the real Lightning DOM
+drivers; `SKILL.md` § "Status by Phase" is the canonical state table.
+
+Sandbox test scaffolding is still gated behind the `pytest.mark.sandbox`
+marker, and the operator checkpoint runbook stays at
+`tests/sandbox/CHECKPOINT_RUNBOOK.md` for the rare manual revalidation
+case.
 
 Sandbox-only test scaffolding lives under `tests/sandbox/`. The
 `pytest.mark.sandbox` marker is registered in `pyproject.toml` and
