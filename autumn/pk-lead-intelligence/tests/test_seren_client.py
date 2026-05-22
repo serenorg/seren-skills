@@ -56,6 +56,33 @@ def test_resolve_api_key_raises_when_neither_is_set(
         sc.resolve_api_key()
 
 
+def test_resolve_api_key_error_hints_at_seren_mcp_install_and_auth_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #789 — Claude Cowork users hit this code path on every
+    cold start. The error must hand them both recovery paths in one
+    message so the discovery loop is one line, not a docs trawl:
+
+      1. The `claude mcp add` install command for the hosted
+         seren-mcp (the path SerenDesktop-equivalent users take).
+      2. The `https://api.serendb.com/auth/agent` curl fallback
+         (the path for users who cannot install MCP).
+
+    A future refactor that silently drops either hint is a P0
+    regression for the Cowork onboarding flow.
+    """
+
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("SEREN_API_KEY", raising=False)
+    with pytest.raises(RuntimeError) as excinfo:
+        sc.resolve_api_key()
+
+    message = str(excinfo.value)
+    assert "claude mcp add" in message
+    assert "https://mcp.serendb.com/mcp" in message
+    assert "https://api.serendb.com/auth/agent" in message
+
+
 # --------------------------------------------------------------------- #
 # URL construction                                                      #
 # --------------------------------------------------------------------- #

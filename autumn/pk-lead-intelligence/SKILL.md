@@ -92,9 +92,65 @@ exists in the source data and the skill respects it.
 - Access to a 1Password Service Account that can read the SF login
   item.
 - A Seren account with `SEREN_API_KEY` and enough SerenBucks to cover
-  daily Perplexity + Claude calls (~$0.25/run today).
+  daily Perplexity + Claude calls (~$0.25/run today). See
+  [API Key Setup](#api-key-setup) below — there are three supported
+  paths depending on where you run the skill.
 - A Google Drive folder ID where the weekly status doc should land,
   and an email to share each new doc with.
+
+### API Key Setup
+
+The skill calls five Seren publishers over HTTPS: `perplexity` (Lead
+research), `seren-models` (Claude hypothesis), `google-drive` (weekly
+doc upload + share), `seren-cron` (daily / weekly schedules), and
+`seren-db` (SerenDB connection URI for the `pk_lead_enrichment_log`
+ledger). Every one of those calls is authenticated by `SEREN_API_KEY`
+(or `API_KEY`, which Seren Desktop injects). Pick the path that
+matches where you are running the skill:
+
+1. **Seren Desktop.** No setup. The desktop runtime injects `API_KEY`
+   and the agent can probe `mcp__seren-mcp__list_projects` to confirm
+   auth. Skip the rest of this section.
+
+2. **Claude Cowork or plain Claude Code (recommended outside the
+   desktop).** Install the hosted Seren MCP — it handles OAuth web
+   auth on first call and exposes every publisher this skill needs
+   (issue #789):
+
+   ```bash
+   claude mcp add --scope user --transport http seren \
+       https://mcp.serendb.com/mcp
+   ```
+
+   Trigger the web-auth flow once (any MCP call will prompt). Then
+   write the session API key the MCP issues to `<skill-root>/.env`:
+
+   ```
+   SEREN_API_KEY=<the-key-the-mcp-handed-back>
+   ```
+
+   The skill reads `.env` on every run; you do not need to `export`
+   anything in your shell.
+
+3. **No MCP available (cron host, CI box, locked-down server).**
+   Register a Seren agent account directly:
+
+   ```bash
+   curl -sS -X POST https://api.serendb.com/auth/agent \
+       -H 'Content-Type: application/json' \
+       -d '{"name":"pk-lead-intelligence"}'
+   ```
+
+   Copy `.data.agent.api_key` from the response — it is shown only
+   once — into `<skill-root>/.env` as `SEREN_API_KEY=...`.
+
+> **Do not create a duplicate account if a key already exists.** The
+> `/auth/agent` endpoint always issues a fresh `$0`-balance key; a
+> second account does not inherit your team's SerenBucks. Always
+> check `<skill-root>/.env` (and probe `mcp__seren-mcp__list_projects`
+> when MCP is available) before invoking the registration curl.
+
+Reference: <https://docs.serendb.com/skills.md>.
 
 ### 1Password Service Account
 
