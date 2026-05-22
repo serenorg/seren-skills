@@ -222,3 +222,160 @@ def test_render_default_clock_produces_utc_timestamp() -> None:
         angles=_make_angles(),
     )
     assert note.enriched_at_utc.endswith("Z")
+
+
+# --------------------------------------------------------------------- #
+# Issue #781 — LinkedIn profile integration                              #
+# --------------------------------------------------------------------- #
+
+
+def _make_profile(*, current_company: str = "Fresh Pak, Inc."):
+    """Stub a populated LinkedInProfile for renderer tests.
+
+    Local import keeps the existing tests independent of the scraper
+    module — if the scraper file is renamed, the older tests keep
+    running.
+    """
+
+    from scripts.research.linkedin_scraper import (
+        ActivityItem,
+        Education,
+        LinkedInProfile,
+        PriorRole,
+    )
+
+    return LinkedInProfile(
+        url="https://www.linkedin.com/in/jose-zamudio-abc/",
+        headline="Operations Manager at Fresh Pak",
+        current_title="Operations Manager",
+        current_company=current_company,
+        current_tenure_months=28,
+        location="Detroit, MI",
+        prior_roles=[
+            PriorRole(
+                title="Operations Manager",
+                company=current_company,
+                duration_label="Jan 2023 - Present · 2 yrs 4 mos",
+            ),
+            PriorRole(
+                title="Production Supervisor",
+                company="MidwestPack Co",
+                duration_label="2019 - 2022 · 3 yrs",
+            ),
+        ],
+        education=[
+            Education(
+                school="Wayne State University",
+                degree="BS",
+                field="Industrial Engineering",
+                duration_label="2014 - 2018",
+            ),
+        ],
+        skills=["Operations", "Lean Manufacturing", "Packaging"],
+        recent_activity=[
+            ActivityItem(
+                kind="post",
+                snippet="Cut glue from our top-seal line — ultrasonic pilot showed "
+                "20% throughput lift on lidstock changes.",
+                posted_at_label="3d",
+            ),
+        ],
+        fetched_at_utc="2026-05-22T07:00:00Z",
+    )
+
+
+def test_render_with_profile_populates_contact_tenure() -> None:
+    """A populated profile must surface tenure on the CONTACT block.
+
+    Without the profile, `Tenure at company` falls back to whatever
+    Perplexity returned (often "Not publicly available"). With the
+    profile, the scraped months value lands on the Note.
+    """
+
+    note = note_renderer.render(
+        lead=_make_lead(),
+        perplexity=_make_perplexity(),
+        linkedin=_make_linkedin(),
+        angles=_make_angles(),
+        profile=_make_profile(),
+        now=datetime(2026, 5, 19, 10, 30, 0, tzinfo=timezone.utc),
+    )
+    bodies = {s.heading: s.body for s in note.sections}
+
+    contact = bodies["CONTACT"]
+    # Tenure shows up in human-readable form (months → "2y 4mo").
+    assert "2y 4mo" in contact
+    # The profile-derived current title also lands.
+    assert "Operations Manager" in contact
+
+
+def test_render_with_profile_company_mismatch_lands_in_owner_notes() -> None:
+    """When LinkedIn-derived company differs from Salesforce / Perplexity,
+    the renderer must surface the mismatch as an OWNER NOTES bullet —
+    never silently overwrite the Salesforce-side company value.
+
+    The COMPANY block keeps the Perplexity-extracted name as
+    authoritative; the OWNER NOTES block carries the audit signal so
+    the reviewer sees the conflict.
+    """
+
+    note = note_renderer.render(
+        lead=_make_lead(),
+        perplexity=_make_perplexity(),  # company = "Fresh Pak, Inc."
+        linkedin=_make_linkedin(),
+        angles=_make_angles(),
+        profile=_make_profile(current_company="Old Acquired Co"),
+        now=datetime(2026, 5, 19, 10, 30, 0, tzinfo=timezone.utc),
+    )
+    bodies = {s.heading: s.body for s in note.sections}
+
+    # COMPANY block stays Salesforce-authoritative.
+    assert "Fresh Pak" in bodies["COMPANY"]
+    # OWNER NOTES surfaces the discrepancy.
+    assert "Old Acquired Co" in bodies["OWNER NOTES"]
+    assert "LinkedIn" in bodies["OWNER NOTES"]
+
+
+def test_render_with_profile_appends_audit_to_source_block() -> None:
+    """SOURCE block must record that the LinkedIn scraper ran so a
+    reviewer can audit which Notes used profile data.
+    """
+
+    note = note_renderer.render(
+        lead=_make_lead(),
+        perplexity=_make_perplexity(),
+        linkedin=_make_linkedin(),
+        angles=_make_angles(),
+        profile=_make_profile(),
+        now=datetime(2026, 5, 19, 10, 30, 0, tzinfo=timezone.utc),
+    )
+    bodies = {s.heading: s.body for s in note.sections}
+
+    source = bodies["SOURCE"]
+    assert "LinkedIn (scraped" in source
+    assert "2026-05-22T07:00:00Z" in source
+
+
+def test_render_profile_none_path_unchanged() -> None:
+    """Regression guard: `profile=None` (the default) must produce the
+    exact same Note as not passing the kwarg at all.
+
+    Existing rendering tests do not pass `profile`. Adding the new
+    optional kwarg must not change their output by a single byte; this
+    test pins the equivalence explicitly so a refactor catches it.
+    """
+
+    common = dict(
+        lead=_make_lead(),
+        perplexity=_make_perplexity(),
+        linkedin=_make_linkedin(),
+        angles=_make_angles(),
+        now=datetime(2026, 5, 19, 10, 30, 0, tzinfo=timezone.utc),
+    )
+    without_kwarg = note_renderer.render(**common)
+    with_none_kwarg = note_renderer.render(profile=None, **common)
+
+    assert without_kwarg.title == with_none_kwarg.title
+    assert [s.body for s in without_kwarg.sections] == [
+        s.body for s in with_none_kwarg.sections
+    ]
