@@ -193,3 +193,118 @@ def test_read_salesforce_credentials_assembles_three_fields(
     for call in call_log:
         assert "PK Salesforce" in call
         assert "PK Salesforce Skill" in call
+
+
+# --------------------------------------------------------------------- #
+# Consumer-1Password env-var fallback (issue #795)                      #
+# --------------------------------------------------------------------- #
+
+# Canonical RFC 6238 test seed. Public, by design — picked so the test
+# is reproducible without leaking a real secret. Tests must never use a
+# customer's actual TOTP seed.
+_RFC6238_TEST_SEED = "JBSWY3DPEHPK3PXP"
+
+
+def test_read_salesforce_credentials_uses_env_vars_when_all_three_are_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #795 — consumer 1Password users have no Service Account.
+    When SF_USERNAME + SF_PASSWORD + SF_TOTP_SECRET are all set, the
+    reader must return creds from env and must NOT invoke `op`. The
+    rolling 6-digit code is computed locally from the base32 seed.
+
+    Pin: any future refactor that re-enters the `op` subprocess when
+    env vars are set re-locks consumer users out and is a P0
+    regression for issue #795's audience.
+    """
+
+    import pyotp  # type: ignore[import-not-found]
+
+    monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
+    monkeypatch.setenv("SF_USERNAME", "jill@example.com")
+    monkeypatch.setenv("SF_PASSWORD", "consumer-pw")
+    monkeypatch.setenv("SF_TOTP_SECRET", _RFC6238_TEST_SEED)
+
+    def fake_op_must_not_be_called(args: list[str]) -> str:
+        raise AssertionError(
+            f"`op` was invoked despite SF_* env vars being set: args={args}"
+        )
+
+    monkeypatch.setattr(op_sa, "_op", fake_op_must_not_be_called)
+
+    creds = op_sa.read_salesforce_credentials(
+        vault="ignored-in-env-path",
+        item="ignored-in-env-path",
+    )
+
+    assert creds.username == "jill@example.com"
+    assert creds.password == "consumer-pw"
+    # Rolling code matches independent pyotp computation in the same
+    # 30-second window. Strict equality is safe because both calls
+    # happen in the same test tick.
+    assert creds.totp_code == pyotp.TOTP(_RFC6238_TEST_SEED).now()
+    # Sanity-check shape; 1Password's `op item get --otp` returns the
+    # same 6-digit format.
+    assert len(creds.totp_code) == 6
+    assert creds.totp_code.isdigit()
+
+
+def test_read_salesforce_credentials_env_path_rejects_partial_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two of three env vars set is a configuration error, not a hint
+    to fall back to `op`. A partial config would silently mis-route
+    credentials (e.g. an operator who set SF_USERNAME + SF_PASSWORD
+    but forgot SF_TOTP_SECRET would end up with the wrong account if
+    `op` returned a different vault's creds). Raise clearly.
+
+    Pin: the error message must name SF_TOTP_SECRET so the operator
+    knows which field is missing without spelunking the source.
+    """
+
+    monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
+    monkeypatch.setenv("SF_USERNAME", "jill@example.com")
+    monkeypatch.setenv("SF_PASSWORD", "consumer-pw")
+    monkeypatch.delenv("SF_TOTP_SECRET", raising=False)
+
+    def fake_op_must_not_be_called(args: list[str]) -> str:
+        raise AssertionError(
+            "`op` was invoked despite partial SF_* env vars — the "
+            "reader must not silently fall back when the env path is "
+            "partially configured."
+        )
+
+    monkeypatch.setattr(op_sa, "_op", fake_op_must_not_be_called)
+
+    with pytest.raises(RuntimeError, match="SF_TOTP_SECRET"):
+        op_sa.read_salesforce_credentials(
+            vault="ignored-in-env-path",
+            item="ignored-in-env-path",
+        )
+
+
+def test_read_salesforce_credentials_env_path_rejects_invalid_totp_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The TOTP seed must be valid base32. An operator who pastes the
+    rolling 6-digit *code* into SF_TOTP_SECRET instead of the base32
+    seed is the most likely failure mode in the field. Fail loudly
+    rather than producing a deterministic-but-wrong code that
+    Salesforce will silently reject every 30 seconds.
+
+    Pin: the error message must hint that the value is the base32
+    secret, not the 6-digit code.
+    """
+
+    monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
+    monkeypatch.setenv("SF_USERNAME", "jill@example.com")
+    monkeypatch.setenv("SF_PASSWORD", "consumer-pw")
+    # "123456" is what an operator types when they confuse the rolling
+    # 6-digit code with the underlying seed. Not valid base32 length.
+    monkeypatch.setenv("SF_TOTP_SECRET", "123456")
+
+    with pytest.raises(RuntimeError, match="base32"):
+        op_sa.read_salesforce_credentials(
+            vault="ignored-in-env-path",
+            item="ignored-in-env-path",
+        )
