@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 # Make `from scripts.* import …` work when this file is launched as
@@ -257,6 +258,32 @@ def _build_parser() -> argparse.ArgumentParser:
             "one tick. Ignored without `--batch`."
         ),
     )
+    # Issue #783 — Salesforce ContentNote enforces a ~90s window
+    # between sequential Note writes on the same Lightning session.
+    # Back-to-back writes silently drop after the 2nd-3rd Lead. CLI
+    # flag overrides `inputs.pause_between_notes_seconds` in config,
+    # which itself defaults to 90 if absent. Set to 0 to disable
+    # (only safe when using a Connected App + REST path — not the
+    # default UI flow). Use `None` as the argparse sentinel so we can
+    # tell "operator passed --pause-between-notes 0" apart from
+    # "operator did not pass the flag at all" — the latter should
+    # fall through to config / default.
+    parser.add_argument(
+        "--pause-between-notes",
+        type=int,
+        default=None,
+        dest="pause_between_notes",
+        help=(
+            "Seconds to wait between sequential live Note writes in "
+            "`--batch --allow-live`. Defaults to "
+            "`inputs.pause_between_notes_seconds` in config (which "
+            "itself defaults to 90). Salesforce ContentNote enforces "
+            "a ~90-second cadence on the Lightning UI; without a "
+            "pause, batches silently drop Notes after the 2nd-3rd "
+            "Lead. Skipped / failed / non-PK Leads do not trigger "
+            "the pause (they did not consume a throttle slot)."
+        ),
+    )
     return parser
 
 
@@ -387,6 +414,111 @@ class _BatchLiveResult:
     failures: list
 
 
+def _iterate_batch_writes(
+    *,
+    leads,
+    page,
+    salesforce_org_url: str,
+    output_dir: Path,
+    ledger: enrichment_ledger.EnrichmentLedger,
+    scrape_fn,
+    linkedin_scrape_min_confidence: int,
+    pause_between_notes_seconds: int,
+    sleep_fn=time.sleep,
+):
+    """Per-lead enrich → populate_is_packaging → write-Note loop.
+
+    Pulled out of `_run_batch_live` so the throttle behavior is
+    testable without standing up Playwright. The Playwright lifecycle
+    stays in `_run_batch_live`; this helper just walks the list and
+    delegates to the same primitives.
+
+    Throttle contract (issue #783): after every successful `written`
+    result, sleep `pause_between_notes_seconds` BEFORE moving to the
+    next Lead — but only when more Leads remain (the final write
+    never gets a trailing sleep). Skipped and failed results do NOT
+    trigger a sleep — they did not write a Note, so they did not
+    consume a Salesforce ContentNote throttle slot.
+
+    `sleep_fn` is injected so tests can record calls without blocking.
+    Setting `pause_between_notes_seconds` to 0 disables the pause
+    entirely; the no-pause path is the pre-#783 behavior and is only
+    safe under a Connected App + REST execution path.
+
+    Returns `(counters, failures)`.
+    """
+
+    counters = {
+        "notes_written": 0,
+        "notes_skipped_non_pk": 0,
+        "notes_skipped_recent": 0,
+        "docx_written": 0,
+        "leads_failed": 0,
+        "linkedin_profiles_scraped": 0,
+        "linkedin_signed_out": 0,
+    }
+    failures: list[dict] = []
+    total = len(leads)
+
+    for idx, lead in enumerate(leads, 1):
+        try:
+            enrichment = _run_enrichment(
+                lead=lead,
+                output_dir=output_dir,
+                linkedin_scrape=scrape_fn,
+                linkedin_scrape_min_confidence=(
+                    linkedin_scrape_min_confidence
+                ),
+            )
+            if enrichment.docx_path:
+                counters["docx_written"] += 1
+            if enrichment.linkedin_scrape_attempted:
+                if enrichment.profile is not None:
+                    counters["linkedin_profiles_scraped"] += 1
+                else:
+                    counters["linkedin_signed_out"] += 1
+
+            populated_lead = sf_client.populate_is_packaging(
+                page=page,
+                lead=lead,
+                salesforce_org_url=salesforce_org_url,
+            )
+
+            write_result = write_note.write_note_to_lead(
+                page=page,
+                options=write_note.NoteWriteOptions(
+                    lead=populated_lead,
+                    note=enrichment.note,
+                    salesforce_org_url=salesforce_org_url,
+                ),
+                now=datetime.now(tz=timezone.utc),
+                dry_run=False,
+                ledger=ledger,
+            )
+            if write_result.status == "written":
+                counters["notes_written"] += 1
+                # Issue #783 — pause to respect the ContentNote
+                # throttle, but only between writes. The last Lead
+                # in the batch never gets a trailing sleep (the
+                # cron tick ends, nothing else hits the throttle).
+                if idx < total and pause_between_notes_seconds > 0:
+                    sleep_fn(pause_between_notes_seconds)
+            elif write_result.status == "skipped_non_pk":
+                counters["notes_skipped_non_pk"] += 1
+            elif write_result.status == "skipped_recent":
+                counters["notes_skipped_recent"] += 1
+        except Exception as exc:  # noqa: BLE001
+            counters["leads_failed"] += 1
+            failures.append({"idx": idx, "lead": lead, "exc": exc})
+            print(
+                f"[{idx}/{total}] FAILED "
+                f"{lead.record_id} {lead.name}: {exc}",
+                file=sys.stderr,
+            )
+
+    return counters, failures
+
+
 def _run_batch_live(
     *,
     salesforce_org_url: str,
@@ -399,6 +531,7 @@ def _run_batch_live(
     ledger: enrichment_ledger.EnrichmentLedger,
     linkedin_scraping_enabled: bool = False,
     linkedin_scrape_min_confidence: int = 70,
+    pause_between_notes_seconds: int = 90,
 ) -> _BatchLiveResult:  # pragma: no cover
     """Drive `--batch --allow-live` in ONE Playwright session. Issue #776.
 
@@ -428,22 +561,6 @@ def _run_batch_live(
     )
 
     from playwright.sync_api import sync_playwright  # noqa: PLC0415
-
-    counters = {
-        "notes_written": 0,
-        "notes_skipped_non_pk": 0,
-        "notes_skipped_recent": 0,
-        "docx_written": 0,
-        "leads_failed": 0,
-        # Issue #781 — LinkedIn scraper telemetry. `profiles_scraped`
-        # counts successful scrapes; `signed_out` counts attempts that
-        # returned None (typically the signed-out gate or a parse miss).
-        # Below-threshold candidates are NOT attempted and do not count
-        # toward either bucket.
-        "linkedin_profiles_scraped": 0,
-        "linkedin_signed_out": 0,
-    }
-    failures: list[dict] = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
@@ -486,61 +603,23 @@ def _run_batch_live(
                             profile_url=profile_url, page=page
                         )
 
-                total = len(leads)
-                for idx, lead in enumerate(leads, 1):
-                    try:
-                        enrichment = _run_enrichment(
-                            lead=lead,
-                            output_dir=output_dir,
-                            linkedin_scrape=scrape_fn,
-                            linkedin_scrape_min_confidence=(
-                                linkedin_scrape_min_confidence
-                            ),
-                        )
-                        if enrichment.docx_path:
-                            counters["docx_written"] += 1
-                        if enrichment.linkedin_scrape_attempted:
-                            if enrichment.profile is not None:
-                                counters["linkedin_profiles_scraped"] += 1
-                            else:
-                                counters["linkedin_signed_out"] += 1
-
-                        populated_lead = sf_client.populate_is_packaging(
-                            page=page,
-                            lead=lead,
-                            salesforce_org_url=salesforce_org_url,
-                        )
-
-                        write_result = write_note.write_note_to_lead(
-                            page=page,
-                            options=write_note.NoteWriteOptions(
-                                lead=populated_lead,
-                                note=enrichment.note,
-                                salesforce_org_url=salesforce_org_url,
-                            ),
-                            now=datetime.now(tz=timezone.utc),
-                            dry_run=False,
-                            ledger=ledger,
-                        )
-                        if write_result.status == "written":
-                            counters["notes_written"] += 1
-                        elif write_result.status == "skipped_non_pk":
-                            counters["notes_skipped_non_pk"] += 1
-                        elif write_result.status == "skipped_recent":
-                            counters["notes_skipped_recent"] += 1
-                    except Exception as exc:  # noqa: BLE001
-                        counters["leads_failed"] += 1
-                        failures.append(
-                            {"idx": idx, "lead": lead, "exc": exc}
-                        )
-                        print(
-                            f"[{idx}/{total}] FAILED "
-                            f"{lead.record_id} {lead.name}: {exc}",
-                            file=sys.stderr,
-                        )
+                counters, failures = _iterate_batch_writes(
+                    leads=leads,
+                    page=page,
+                    salesforce_org_url=salesforce_org_url,
+                    output_dir=output_dir,
+                    ledger=ledger,
+                    scrape_fn=scrape_fn,
+                    linkedin_scrape_min_confidence=(
+                        linkedin_scrape_min_confidence
+                    ),
+                    pause_between_notes_seconds=(
+                        pause_between_notes_seconds
+                    ),
+                )
 
                 return _BatchLiveResult(
-                    leads_evaluated=total,
+                    leads_evaluated=len(leads),
                     counters=counters,
                     failures=failures,
                 )
@@ -1079,6 +1158,16 @@ def main(argv: list[str] | None = None) -> int:
         inputs.get("linkedin_scrape_min_confidence", 70)
     )
 
+    # Issue #783 — ContentNote throttle. CLI flag wins; config wins
+    # over the default. Default is 90s — Salesforce's observed
+    # minimum window between sequential Note writes on Lightning.
+    if args.pause_between_notes is not None:
+        pause_between_notes_seconds = args.pause_between_notes
+    else:
+        pause_between_notes_seconds = int(
+            inputs.get("pause_between_notes_seconds", 90)
+        )
+
     if args.batch:
         # Bug 3 (issue #776): catch ZeroLeadsFoundError at the dispatch
         # boundary so the FLS-gap / empty-list case prints the
@@ -1100,6 +1189,9 @@ def main(argv: list[str] | None = None) -> int:
                     linkedin_scraping_enabled=linkedin_scraping_enabled,
                     linkedin_scrape_min_confidence=(
                         linkedin_scrape_min_confidence
+                    ),
+                    pause_between_notes_seconds=(
+                        pause_between_notes_seconds
                     ),
                 )
                 leads_evaluated = live_result.leads_evaluated

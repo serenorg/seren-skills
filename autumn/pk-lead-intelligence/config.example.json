@@ -8,7 +8,8 @@
     "google_drive_folder_id": "<paste-folder-id-from-google-drive>",
     "nathan_share_email": "<paste-share-recipient-email>",
     "linkedin_scraping_enabled": false,
-    "linkedin_scrape_min_confidence": 70
+    "linkedin_scrape_min_confidence": 70,
+    "pause_between_notes_seconds": 90
   },
   "perplexity": {
     "model": "sonar",
