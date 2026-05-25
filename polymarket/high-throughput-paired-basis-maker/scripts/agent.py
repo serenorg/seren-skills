@@ -435,7 +435,7 @@ def _extract_history_rows(payload: Any) -> list[Any]:
 
 
 def _coerce_unix_ts(value: Any) -> int:
-    if isinstance(value, int | float):
+    if isinstance(value, (int, float)):
         ts = int(value)
         if ts > 10_000_000_000:
             ts //= 1000
@@ -474,7 +474,7 @@ def _row_matches_token(row: dict[str, Any], token_id: str) -> bool:
 
 
 def _history_point_from_row(row: Any, token_id: str) -> tuple[int, float] | None:
-    if isinstance(row, list | tuple) and len(row) >= 2:
+    if isinstance(row, (list, tuple)) and len(row) >= 2:
         ts = _coerce_unix_ts(row[0])
         p = _normalize_probability(row[1])
         if ts < 0 or not (0.0 <= p <= 1.0):
