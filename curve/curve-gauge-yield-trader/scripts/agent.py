@@ -32,6 +32,7 @@ DEFAULT_API_BASE = "https://api.serendb.com"
 DEFAULT_WALLET_PATH = "state/wallet.local.json"
 DEFAULT_GAS_LIMIT_MULTIPLIER = 1.2
 DEFAULT_GAS_PRICE_MULTIPLIER = 1.1
+DRY_RUN_SIGNER_ADDRESS = "0x0000000000000000000000000000000000000000"
 DEFAULT_RPC_PROBES = (
     {
         "method": "POST",
@@ -367,6 +368,14 @@ def resolve_signer(
     return {
         "mode": "ledger",
         "address": _normalize_address(ledger_address, "ledger_address"),
+    }
+
+
+def dry_run_signer(wallet_mode: str) -> dict[str, Any]:
+    return {
+        "mode": f"{wallet_mode}-dry-run",
+        "address": DRY_RUN_SIGNER_ADDRESS,
+        "dry_run": True,
     }
 
 
@@ -1497,11 +1506,21 @@ def run_once(config: dict[str, Any], *, yes_live: bool, ledger_address: str) -> 
     ledger_from_config = str(wallet_config.get("ledger_address", ""))
     resolved_ledger = ledger_address or ledger_from_config
 
-    signer = resolve_signer(
-        wallet_mode=inputs["wallet_mode"],
-        wallet_path=wallet_path,
-        ledger_address=resolved_ledger,
-    )
+    live_requested = bool(inputs["live_mode"] and not dry_run)
+    if live_requested and not yes_live:
+        raise ConfigError(
+            "Live mode requested but --yes-live was not provided. "
+            "Dry-run is the safe default."
+        )
+
+    if live_requested:
+        signer = resolve_signer(
+            wallet_mode=inputs["wallet_mode"],
+            wallet_path=wallet_path,
+            ledger_address=resolved_ledger,
+        )
+    else:
+        signer = dry_run_signer(inputs["wallet_mode"])
     execution = _resolve_evm_execution(config)
     rpc_capability = check_rpc_capability(
         client,
@@ -1572,12 +1591,6 @@ def run_once(config: dict[str, Any], *, yes_live: bool, ledger_address: str) -> 
             "trade_plan": trade_plan,
             "preflight": preflight,
         }
-
-    if not yes_live:
-        raise ConfigError(
-            "Live mode requested but --yes-live was not provided. "
-            "Dry-run is the safe default."
-        )
 
     live_execution = execute_live_trade(
         client,

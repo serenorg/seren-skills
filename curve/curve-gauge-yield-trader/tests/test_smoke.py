@@ -17,6 +17,8 @@ def _read_fixture(name: str) -> dict:
 
 
 def _load_agent_module():
+    script_dir = str(SCRIPT_DIR)
+    sys.path[:] = [script_dir, *[path for path in sys.path if path != script_dir]]
     spec = importlib.util.spec_from_file_location(
         "curve_gauge_yield_trader_agent_test",
         SCRIPT_DIR / "agent.py",
@@ -130,3 +132,51 @@ def test_live_mode_requires_yes_live_confirmation(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(module.ConfigError, match="--yes-live was not provided"):
         module.run_once(config={"dry_run": False, "wallet": {"ledger_address": "0xabc"}}, yes_live=False, ledger_address="")
+
+
+def test_dry_run_does_not_require_local_wallet(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SEREN_API_KEY", "sb_test")
+    monkeypatch.setattr(module, "SerenPublisherClient", lambda api_key, base_url: {"api_key": api_key, "base_url": base_url})
+    monkeypatch.setattr(
+        module,
+        "_resolve_inputs",
+        lambda config: {
+            "live_mode": False,
+            "wallet_mode": "local",
+            "chain": "base",
+            "top_n_gauges": 3,
+            "deposit_token": "USDC",
+            "deposit_amount_usd": 100.0,
+        },
+    )
+    monkeypatch.setattr(module, "resolve_signer", lambda **kwargs: pytest.fail("dry-run should not load a local wallet"))
+    monkeypatch.setattr(
+        module,
+        "check_rpc_capability",
+        lambda client, chain, config: {
+            "publisher": "base-rpc",
+            "rpc_target": {"method": "POST", "path": "/"},
+            "publisher_source": "catalog",
+        },
+    )
+    monkeypatch.setattr(module, "fetch_top_gauges", lambda client, chain, limit: {"rows": [{"gauge": "0x1"}]})
+    monkeypatch.setattr(module, "choose_trade_plan", lambda gauges_response, token, amount_usd: {"gauge_address": "0x1", "amount_usd": amount_usd})
+    monkeypatch.setattr(module, "sync_positions", lambda client, signer, rpc_target, trade_plan: {"status": "ok", "owner": signer["address"]})
+
+    def _preflight(client, *, chain, signer, trade_plan, rpc_target, execution, strict_estimation):
+        assert signer["mode"] == "local-dry-run"
+        assert signer["address"] == module.DRY_RUN_SIGNER_ADDRESS
+        assert strict_estimation is False
+        return {"status": "ok", "transactions": []}
+
+    monkeypatch.setattr(module, "preflight_liquidity", _preflight)
+
+    result = module.run_once(
+        config={"dry_run": True, "wallet": {"path": str(tmp_path / "missing-wallet.json")}},
+        yes_live=False,
+        ledger_address="",
+    )
+
+    assert result["status"] == "ok"
+    assert result["mode"] == "dry-run"
+    assert result["signer_mode"] == "local-dry-run"
