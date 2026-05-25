@@ -48,9 +48,10 @@ Display the full dry-run results to the user. Only after results are displayed, 
 - Each run resolves the RPC publisher from the live Seren publisher catalog (`GET /publishers`) and performs an explicit probe before preflight/trade.
   - If probe fails, execution stops early with a clear unsupported-chain/RPC error.
 - Optional override: set `rpc_publishers` in config (`{ "ethereum": "<slug>" }`) to force a specific publisher slug per chain.
-- Transactions are prepared and signed locally.
-  - `wallet_mode=local`: agent signs with local private key.
+- Transactions are prepared and signed locally for live mode.
+  - `wallet_mode=local`: agent signs with local private key after `--yes-live`.
   - `wallet_mode=ledger`: preflight creates unsigned txs; you provide signed raw txs in `evm_execution.ledger.signed_raw_transactions` for broadcast.
+  - Dry-run uses a synthetic simulation address and does not require a local wallet file.
 
 ## Disclaimer
 
@@ -63,7 +64,7 @@ This skill can trade real money. Use at your own risk. Past performance does not
 
 ## Wallet Modes
 
-- `wallet_mode=local`: generate a local wallet with `--init-wallet`, then fund that address.
+- `wallet_mode=local`: for live mode, generate a local wallet with `--init-wallet`, then fund that address.
 - `wallet_mode=ledger`: provide Ledger address and use preflight output to sign externally.
 
 ## Local Execution Config
@@ -107,7 +108,7 @@ To stop trading immediately, run `python scripts/agent.py --config config.json -
 2. Copy `config.example.json` to `config.json`.
 3. Install dependencies:
    - `pip install -r requirements.txt`
-4. Generate local wallet (optional):
+4. Generate local wallet (optional for dry-run; required before live local signing):
    - `python scripts/agent.py --init-wallet --wallet-path state/wallet.local.json`
 5. Dry-run preflight:
    - `python scripts/agent.py --config config.json`
