@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -165,3 +166,62 @@ def test_halt_live_trading_cancels_and_clears_orders(tmp_path, monkeypatch) -> N
 def test_start_requires_allow_live_flag() -> None:
     with pytest.raises(SystemExit, match="--allow-live"):
         agent._require_live_confirmation("start", False)
+
+
+def _write_minimal_config(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "campaign_name": "test-grid",
+                "trading_pair": "XBTUSD",
+                "strategy": {
+                    "bankroll": 1000,
+                    "grid_levels": 4,
+                    "grid_spacing_percent": 1.0,
+                    "order_size_percent": 5.0,
+                    "price_range": {"min": 80000, "max": 120000},
+                    "scan_interval_seconds": 1,
+                },
+                "risk_management": {
+                    "stop_loss_bankroll": 900,
+                    "max_open_orders": 4,
+                },
+                "adaptive": {"enabled": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_dry_run_allows_in_memory_adaptive_state_without_serendb(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.json"
+    _write_minimal_config(config_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SEREN_API_KEY", "test-key")
+    monkeypatch.setattr(agent, "SerenClient", lambda api_key: object())
+    monkeypatch.setattr(
+        agent,
+        "_build_store_from_env",
+        lambda: (_ for _ in ()).throw(RuntimeError("seren-mcp not found")),
+    )
+
+    trader = KrakenGridTrader(str(config_path), dry_run=True)
+
+    assert trader.store is None
+    assert trader.adaptive_store.persistence is None
+
+
+def test_live_adaptive_runtime_still_requires_serendb(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.json"
+    _write_minimal_config(config_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SEREN_API_KEY", "test-key")
+    monkeypatch.setattr(agent, "SerenClient", lambda api_key: object())
+    monkeypatch.setattr(
+        agent,
+        "_build_store_from_env",
+        lambda: (_ for _ in ()).throw(RuntimeError("seren-mcp not found")),
+    )
+
+    with pytest.raises(ValueError, match="Adaptive runtime requires SerenDB persistence"):
+        KrakenGridTrader(str(config_path), dry_run=False)
