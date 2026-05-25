@@ -240,6 +240,63 @@ def test_market_feed_missing_seren_api_key_fails_closed(tmp_path: Path) -> None:
     assert result.error == "SEREN_API_KEY missing"
 
 
+def test_paper_sim_continues_with_degraded_required_feeds(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    engine.fetch_sec_features = lambda universe: module.FeedResult(ok=False, data={}, error="timeout")
+    engine.fetch_trends_features = lambda universe: module.FeedResult(ok=True, data={ticker: {} for ticker in universe})
+    engine.fetch_news_features = lambda universe: module.FeedResult(ok=True, data={"_source": "exa", **{ticker: {} for ticker in universe}})
+    engine.fetch_market_features = lambda universe: module.FeedResult(ok=True, data={ticker: {"price": 250.0} for ticker in universe})
+    engine.score_universe = lambda **kwargs: [{"ticker": "CRM", "selected": True}]
+    engine.build_orders = lambda selected, portfolio_notional_usd, is_simulated=True: [
+        {
+            "order_ref": "crm-paper-1",
+            "ticker": "CRM",
+            "side": "SELL",
+            "qty": 1.0,
+            "limit_price": 250.0,
+            "is_simulated": is_simulated,
+        }
+    ]
+    engine.simulate = lambda selected, orders: {
+        "mark_map": {},
+        "net_pnl_5d": 0.0,
+        "net_pnl_10d": 0.0,
+        "net_pnl_20d": 0.0,
+        "gross_exposure": 250.0,
+        "hit_rate_5d": 0.0,
+        "hit_rate_10d": 0.0,
+        "hit_rate_20d": 0.0,
+        "max_drawdown": 0.0,
+    }
+    engine.build_marks_from_orders = lambda orders, mark_map, run_id: []
+
+    result = engine.run_scan(mode="paper-sim", universe=["CRM"], max_names_scored=1, max_names_orders=1)
+
+    assert result["status"] == "completed"
+    assert result["partial_feeds"] == {
+        "enabled": True,
+        "degraded_sources": ["sec-filings-intelligence"],
+        "policy": "paper-sim_warn_live_fail_closed",
+    }
+    assert engine.storage.status_updates[-1]["status"] == "completed"
+    assert engine.storage.status_updates[-1]["metadata"]["partial_feeds"]["enabled"] is True
+
+
+def test_live_strict_required_feed_failure_stays_blocked(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    engine.fetch_sec_features = lambda universe: module.FeedResult(ok=False, data={}, error="timeout")
+    engine.fetch_trends_features = lambda universe: module.FeedResult(ok=True, data={ticker: {} for ticker in universe})
+    engine.fetch_news_features = lambda universe: module.FeedResult(ok=True, data={"_source": "exa", **{ticker: {} for ticker in universe}})
+    engine.fetch_market_features = lambda universe: module.FeedResult(ok=True, data={ticker: {"price": 250.0} for ticker in universe})
+
+    result = engine.run_scan(mode="live", universe=["CRM"], max_names_scored=1, max_names_orders=1)
+
+    assert result["status"] == "blocked"
+    assert result["partial_feeds"]["enabled"] is False
+    assert result["partial_feeds"]["degraded_sources"] == ["sec-filings-intelligence"]
+    assert engine.storage.status_updates[-1]["metadata"]["blocked_reason"] == "required_feed_failure"
+
+
 def test_live_scan_submits_orders_locally_without_simulated_marks(tmp_path: Path) -> None:
     engine = _build_engine(tmp_path)
     engine.broker = _FakeBroker(account={"equity": "100000", "buying_power": "50000"})
