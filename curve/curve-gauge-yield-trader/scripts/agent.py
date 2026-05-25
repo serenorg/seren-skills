@@ -1522,13 +1522,27 @@ def run_once(config: dict[str, Any], *, yes_live: bool, ledger_address: str) -> 
     else:
         signer = dry_run_signer(inputs["wallet_mode"])
     execution = _resolve_evm_execution(config)
-    rpc_capability = check_rpc_capability(
-        client,
-        chain=inputs["chain"],
-        config=config,
-    )
+    rpc_available = True
+    try:
+        rpc_capability = check_rpc_capability(
+            client,
+            chain=inputs["chain"],
+            config=config,
+        )
+    except ConfigError as exc:
+        if live_requested:
+            raise
+        rpc_available = False
+        rpc_capability = {
+            "status": "warning",
+            "required": True,
+            "connector": f"rpc_{inputs['chain']}",
+            "publisher": "",
+            "publisher_source": "unavailable",
+            "error": str(exc),
+        }
     rpc_target = {
-        "publisher": rpc_capability["publisher"],
+        "publisher": str(rpc_capability.get("publisher", "")),
         "method": str(rpc_capability.get("rpc_target", {}).get("method", "POST")),
         "path": str(rpc_capability.get("rpc_target", {}).get("path", "")),
         "publisher_source": rpc_capability.get("publisher_source", "unknown"),
@@ -1551,7 +1565,7 @@ def run_once(config: dict[str, Any], *, yes_live: bool, ledger_address: str) -> 
         position_sync_enabled = bool(position_sync_config.get("enabled", True))
 
     position_sync: dict[str, Any] = {"status": "skipped"}
-    if position_sync_enabled:
+    if position_sync_enabled and rpc_available:
         try:
             position_sync = sync_positions(
                 client,
@@ -1564,16 +1578,30 @@ def run_once(config: dict[str, Any], *, yes_live: bool, ledger_address: str) -> 
                 position_sync = {"status": "warning", "error": str(exc)}
             else:
                 raise ConfigError(f"Position sync failed before live trade: {exc}") from exc
+    elif position_sync_enabled:
+        position_sync = {
+            "status": "warning",
+            "error": "RPC probe unavailable; skipped position sync in dry-run.",
+        }
 
-    preflight = preflight_liquidity(
-        client,
-        chain=inputs["chain"],
-        signer=signer,
-        trade_plan=trade_plan,
-        rpc_target=rpc_target,
-        execution=execution,
-        strict_estimation=bool(inputs["live_mode"] and not dry_run and yes_live),
-    )
+    if rpc_available:
+        preflight = preflight_liquidity(
+            client,
+            chain=inputs["chain"],
+            signer=signer,
+            trade_plan=trade_plan,
+            rpc_target=rpc_target,
+            execution=execution,
+            strict_estimation=bool(inputs["live_mode"] and not dry_run and yes_live),
+        )
+    else:
+        preflight = {
+            "status": "warning",
+            "execution_mode": "dry_run_simulated_no_rpc",
+            "strict_estimation": False,
+            "transactions": [],
+            "error": rpc_capability["error"],
+        }
 
     if dry_run or not inputs["live_mode"]:
         return {
