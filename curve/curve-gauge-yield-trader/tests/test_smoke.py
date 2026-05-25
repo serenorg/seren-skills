@@ -218,3 +218,46 @@ def test_dry_run_degrades_when_rpc_probe_fails(monkeypatch: pytest.MonkeyPatch, 
     assert result["rpc_capability"]["status"] == "warning"
     assert result["position_sync"]["status"] == "warning"
     assert result["preflight"]["execution_mode"] == "dry_run_simulated_no_rpc"
+
+
+def test_dry_run_degrades_when_gauge_feed_is_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SEREN_API_KEY", "sb_test")
+    monkeypatch.setattr(module, "SerenPublisherClient", lambda api_key, base_url: {"api_key": api_key, "base_url": base_url})
+    monkeypatch.setattr(
+        module,
+        "_resolve_inputs",
+        lambda config: {
+            "live_mode": False,
+            "wallet_mode": "local",
+            "chain": "ethereum",
+            "top_n_gauges": 3,
+            "deposit_token": "USDC",
+            "deposit_amount_usd": 100.0,
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "check_rpc_capability",
+        lambda client, chain, config: {
+            "publisher": "ethereum-rpc",
+            "rpc_target": {"method": "POST", "path": "/"},
+            "publisher_source": "catalog",
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "fetch_top_gauges",
+        lambda client, chain, limit: (_ for _ in ()).throw(module.ConfigError("no gauges")),
+    )
+    monkeypatch.setattr(module, "sync_positions", lambda client, signer, rpc_target, trade_plan: {"status": "ok"})
+    monkeypatch.setattr(module, "preflight_liquidity", lambda *args, **kwargs: {"status": "ok", "transactions": []})
+
+    result = module.run_once(
+        config={"dry_run": True, "wallet": {"path": str(tmp_path / "missing-wallet.json")}},
+        yes_live=False,
+        ledger_address="",
+    )
+
+    assert result["status"] == "ok"
+    assert result["gauge_feed"] == {"status": "warning", "error": "no gauges"}
+    assert result["trade_plan"]["source"] == "dry-run-simulated-gauge"

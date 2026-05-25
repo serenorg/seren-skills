@@ -883,6 +883,26 @@ def fetch_top_gauges(
     }
 
 
+def dry_run_gauge_response(*, chain: str, limit: int, error: str) -> dict[str, Any]:
+    gauge = {
+        "name": f"simulated-{chain}-usdc-gauge",
+        "address": "0x0000000000000000000000000000000000000001",
+        "pool_address": "0x0000000000000000000000000000000000000002",
+        "lp_token_address": "0x0000000000000000000000000000000000000003",
+        "lp_token_price_usd": 1.0,
+        "reward_apy": 0.0,
+        "source_chain": chain,
+        "simulated": True,
+    }
+    return {
+        "gauges": [gauge][: max(limit, 1)],
+        "total_candidates": 0,
+        "source": "dry-run-simulated-gauge",
+        "status": "warning",
+        "error": error,
+    }
+
+
 def choose_trade_plan(
     gauges_response: dict[str, Any],
     *,
@@ -1548,11 +1568,22 @@ def run_once(config: dict[str, Any], *, yes_live: bool, ledger_address: str) -> 
         "publisher_source": rpc_capability.get("publisher_source", "unknown"),
     }
 
-    gauges_response = fetch_top_gauges(
-        client,
-        chain=inputs["chain"],
-        limit=inputs["top_n_gauges"],
-    )
+    gauge_feed: dict[str, Any] = {"status": "ok"}
+    try:
+        gauges_response = fetch_top_gauges(
+            client,
+            chain=inputs["chain"],
+            limit=inputs["top_n_gauges"],
+        )
+    except ConfigError as exc:
+        if live_requested:
+            raise
+        gauge_feed = {"status": "warning", "error": str(exc)}
+        gauges_response = dry_run_gauge_response(
+            chain=inputs["chain"],
+            limit=inputs["top_n_gauges"],
+            error=str(exc),
+        )
     trade_plan = choose_trade_plan(
         gauges_response,
         token=inputs["deposit_token"],
@@ -1615,6 +1646,7 @@ def run_once(config: dict[str, Any], *, yes_live: bool, ledger_address: str) -> 
             "signer_mode": signer["mode"],
             "signer_address": signer["address"],
             "rpc_capability": rpc_capability,
+            "gauge_feed": gauge_feed,
             "position_sync": position_sync,
             "trade_plan": trade_plan,
             "preflight": preflight,
