@@ -187,7 +187,7 @@ def _default_config() -> dict[str, Any]:
             "max_live_drawdown_pct": 0.0,
         },
         "seren": {
-            "auto_register_key": True,
+            "auto_register_key": False,
             "api_base_url": "https://api.serendb.com",
         },
         "backtest": {
@@ -618,7 +618,7 @@ def ensure_seren_api_key(config: dict[str, Any]) -> str:
         api_base_url=str(seren_cfg.get("api_base_url", "https://api.serendb.com")),
         env_file=".env",
     )
-    auto_register = bool(seren_cfg.get("auto_register_key", True))
+    auto_register = bool(seren_cfg.get("auto_register_key", False))
     return manager.ensure_api_key(auto_register=auto_register)
 
 

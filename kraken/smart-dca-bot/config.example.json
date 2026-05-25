@@ -57,7 +57,7 @@
     "max_live_drawdown_pct": 15.0
   },
   "seren": {
-    "auto_register_key": true,
+    "auto_register_key": false,
     "api_base_url": "https://api.serendb.com"
   },
   "backtest": {
