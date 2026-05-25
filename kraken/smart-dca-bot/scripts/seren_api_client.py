@@ -61,25 +61,34 @@ class SerenAPIKeyManager:
     def validate_existing_key(self, api_key: str) -> bool:
         if requests is None:
             return bool(api_key.strip())
-        url = f"{self.api_base_url}/api/keys/validate"
+        urls = [
+            f"{self.api_base_url}/auth/me",
+            f"{self.api_base_url}/api/keys/validate",
+        ]
         headers = {"Authorization": f"Bearer {api_key}"}
-        try:
-            response = requests.get(url, headers=headers, timeout=self.timeout_seconds)
-        except requests.RequestException:
-            # Offline-friendly fallback: preserve existing key when validator endpoint
-            # is temporarily unavailable.
-            return bool(api_key.strip())
-        if response.status_code >= 400:
-            return False
-        try:
-            body = response.json()
-        except ValueError:
+        saw_missing_validator = False
+        for url in urls:
+            try:
+                response = requests.get(url, headers=headers, timeout=self.timeout_seconds)
+            except requests.RequestException:
+                # Offline-friendly fallback: preserve existing key when validator endpoint
+                # is temporarily unavailable.
+                return bool(api_key.strip())
+            if response.status_code == 404:
+                saw_missing_validator = True
+                continue
+            if response.status_code >= 400:
+                return False
+            try:
+                body = response.json()
+            except ValueError:
+                return True
+            if isinstance(body, dict):
+                valid = body.get("valid")
+                if isinstance(valid, bool):
+                    return valid
             return True
-        if isinstance(body, dict):
-            valid = body.get("valid")
-            if isinstance(valid, bool):
-                return valid
-        return True
+        return saw_missing_validator and bool(api_key.strip())
 
     def create_api_key(self) -> str:
         bootstrap_token = (
