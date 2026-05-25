@@ -382,10 +382,38 @@ class KrakenGridTrader:
         }
 
     def _get_market_snapshot(self, pair: str) -> Dict[str, float]:
-        return self._call_with_timeout(
-            'get_market_snapshot',
-            lambda: self.seren.get_market_snapshot(pair),
-        )
+        try:
+            return self._call_with_timeout(
+                'get_market_snapshot',
+                lambda: self.seren.get_market_snapshot(pair),
+            )
+        except Exception:
+            if not self.is_dry_run:
+                raise
+            return self._dry_run_market_snapshot(pair)
+
+    def _dry_run_market_snapshot(self, pair: str) -> Dict[str, float]:
+        price_range = self.config.get('strategy', {}).get('price_range', {})
+        min_price = float(price_range.get('min') or 0.0)
+        max_price = float(price_range.get('max') or 0.0)
+        if min_price > 0 and max_price > min_price:
+            current_price = (min_price + max_price) / 2.0
+        else:
+            current_price = 100.0 + float(sum(ord(ch) for ch in pair.upper()) % 900)
+
+        bid = current_price * 0.999
+        ask = current_price * 1.001
+        return {
+            "current_price": current_price,
+            "bid": bid,
+            "ask": ask,
+            "high": current_price * 1.035,
+            "low": current_price * 0.965,
+            "volume": 10_000.0,
+            "mid_price": current_price,
+            "spread_pct": ((ask - bid) / current_price) * 100.0,
+            "market_data_source": "dry_run_fallback",
+        }
 
     def _apply_adaptive_grid(
         self,

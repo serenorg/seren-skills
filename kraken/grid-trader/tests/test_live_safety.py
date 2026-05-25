@@ -225,3 +225,28 @@ def test_live_adaptive_runtime_still_requires_serendb(tmp_path, monkeypatch) -> 
 
     with pytest.raises(ValueError, match="Adaptive runtime requires SerenDB persistence"):
         KrakenGridTrader(str(config_path), dry_run=False)
+
+
+def test_dry_run_uses_market_snapshot_fallback_when_publisher_unavailable(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.json"
+    _write_minimal_config(config_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SEREN_API_KEY", "test-key")
+
+    class _Seren:
+        def get_market_snapshot(self, pair):
+            raise RuntimeError(f"publisher unavailable for {pair}")
+
+    monkeypatch.setattr(agent, "SerenClient", lambda api_key: _Seren())
+    monkeypatch.setattr(
+        agent,
+        "_build_store_from_env",
+        lambda: (_ for _ in ()).throw(RuntimeError("seren-mcp not found")),
+    )
+
+    trader = KrakenGridTrader(str(config_path), dry_run=True)
+    snapshot = trader._get_market_snapshot("XBTUSD")
+
+    assert snapshot["market_data_source"] == "dry_run_fallback"
+    assert snapshot["current_price"] == 100000.0
+    assert snapshot["bid"] < snapshot["current_price"] < snapshot["ask"]
