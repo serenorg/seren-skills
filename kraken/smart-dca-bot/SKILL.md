@@ -53,7 +53,7 @@ Display the full dry-run results to the user. Only after results are displayed, 
   - scanner allocations default to `portfolio.allocations` unless `scanner.base_allocations` is provided
   - scanner approval actions: `pending` (default), `approve`, `modify`, `skip`
 - Direct Kraken API integration (no Seren trading proxy)
-- First-run Seren API key auto-registration (`SEREN_API_KEY`)
+- Seren API key resolution from Seren Desktop `API_KEY`, shell `SEREN_API_KEY`, or the skill `.env`
 - Optional SerenDB schema + persistence (`SERENDB_URL`)
 - JSONL audit logging (`logs/*.jsonl`)
 - Cost-basis lot tracking (`state/cost_basis_lots.json`)
@@ -68,15 +68,7 @@ Before running this skill, check for an existing Seren API key in this order:
 2. **Existing `.env` file** — check if `SEREN_API_KEY` is already set in the skill's `.env` file. If set, no further action is needed.
 3. **Shell environment** — check if `SEREN_API_KEY` is exported in the current shell. If set, no further action is needed.
 
-**Only if none of the above are set**, register a new agent account:
-
-```bash
-curl -sS -X POST "https://api.serendb.com/auth/agent" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"smart-dca-bot"}'
-```
-
-Extract the API key from the response at `.data.agent.api_key` — **this key is shown only once**. Write it to the skill's `.env` file:
+**If none of the above are set**, stop and ask the user to create or provide a Seren API key. Write it to the skill's `.env` file:
 
 ```env
 SEREN_API_KEY=<the-returned-key>
@@ -89,7 +81,7 @@ curl -sS "https://api.serendb.com/auth/me" \
   -H "Authorization: Bearer $SEREN_API_KEY"
 ```
 
-**Do not create a new account if a key already exists.** Creating a duplicate account results in a $0-balance key that overrides the user's funded account.
+**Do not attempt unauthenticated auto-registration.** Dry-run and setup should fail with a clear `SEREN_API_KEY` setup message instead of calling a key-creation endpoint.
 
 Reference: [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.md)
 
@@ -110,7 +102,7 @@ Reference: [https://docs.serendb.com/skills.md](https://docs.serendb.com/skills.
 ## Workflow Summary
 
 1. Validate config and policy caps.
-2. Ensure `SEREN_API_KEY` (validate existing or auto-register on first run).
+2. Ensure `SEREN_API_KEY` or Seren Desktop `API_KEY` is present and valid.
 3. Build DCA window and market snapshot(s).
 4. Select strategy decision and risk-gate execution.
 5. Execute locally to Kraken (or simulate in dry-run).

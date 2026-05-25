@@ -9,7 +9,7 @@ Trading is local-direct to Kraken REST API.
 
 ## Quick Start
 
-1. `cp .env.example .env`
+1. `cp .env.example .env` and set `SEREN_API_KEY` (or run inside Seren Desktop where `API_KEY` is injected)
 2. `cp config.example.json config.json`
 3. `pip install -r requirements.txt`
 4. Dry run:
@@ -29,7 +29,7 @@ Trading is local-direct to Kraken REST API.
   - `new_listing`
   - scanner allocations default to `portfolio.allocations` unless `scanner.base_allocations` is provided
   - scanner approval actions: `pending` (default), `approve`, `modify`, `skip`
-- Seren API key auto-registration (`SEREN_API_KEY`) on first run
+- Seren API key resolution from Seren Desktop `API_KEY`, shell `SEREN_API_KEY`, or `.env`
 - Optional SerenDB persistence (`SERENDB_URL`)
 - JSONL audit logs in `logs/`
 - Cost-basis lots in `state/cost_basis_lots.json`

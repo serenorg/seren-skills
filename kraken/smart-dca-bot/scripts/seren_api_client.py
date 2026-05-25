@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seren API key bootstrap/validation helper for first-run auto-registration."""
+"""Seren API key resolution and validation helper."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class SerenAPIError(RuntimeError):
 
 
 class SerenAPIKeyManager:
-    """Ensures SEREN_API_KEY exists and is valid, auto-registering when absent."""
+    """Ensures a Seren API key exists and is valid."""
 
     def __init__(
         self,
@@ -36,7 +36,7 @@ class SerenAPIKeyManager:
         if not self.env_file.exists():
             return None
         for line in self.env_file.read_text(encoding="utf-8").splitlines():
-            if line.startswith("SEREN_API_KEY="):
+            if line.startswith(("SEREN_API_KEY=", "API_KEY=")):
                 return line.split("=", 1)[1].strip()
         return None
 
@@ -82,20 +82,22 @@ class SerenAPIKeyManager:
         return True
 
     def create_api_key(self) -> str:
-        if requests is None:
-            raise SerenAPIError(
-                "requests dependency is required for SEREN_API_KEY auto-registration"
-            )
-        url = f"{self.api_base_url}/api/keys"
-        headers = {"Content-Type": "application/json"}
-
         bootstrap_token = (
             os.getenv("SEREN_BOOTSTRAP_TOKEN")
             or os.getenv("SEREN_AUTH_TOKEN")
             or ""
         ).strip()
-        if bootstrap_token:
-            headers["Authorization"] = f"Bearer {bootstrap_token}"
+        if not bootstrap_token:
+            raise SerenAPIError(self._manual_setup_message())
+        if requests is None:
+            raise SerenAPIError(
+                "requests dependency is required for Seren API key creation with a bootstrap token"
+            )
+        url = f"{self.api_base_url}/api/keys"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {bootstrap_token}",
+        }
 
         payload = {
             "name": "kraken-smart-dca-bot",
@@ -113,8 +115,7 @@ class SerenAPIKeyManager:
 
         if response.status_code >= 400:
             raise SerenAPIError(
-                "Seren API key auto-registration failed. "
-                "Set SEREN_BOOTSTRAP_TOKEN or provide SEREN_API_KEY manually. "
+                "Seren API key creation failed. Provide SEREN_API_KEY manually or refresh SEREN_BOOTSTRAP_TOKEN. "
                 f"status={response.status_code} body={response.text[:200]}"
             )
 
@@ -150,16 +151,28 @@ class SerenAPIKeyManager:
 
         raise SerenAPIError("Could not parse SEREN_API_KEY from Seren API response")
 
-    def ensure_api_key(self, auto_register: bool = True) -> str:
-        existing = (os.getenv("SEREN_API_KEY") or "").strip() or self._read_key_from_env_file()
+    def ensure_api_key(self, auto_register: bool = False) -> str:
+        existing = (
+            (os.getenv("SEREN_API_KEY") or "").strip()
+            or (os.getenv("API_KEY") or "").strip()
+            or self._read_key_from_env_file()
+        )
         if existing and self.validate_existing_key(existing):
             os.environ["SEREN_API_KEY"] = existing
             return existing
 
         if not auto_register:
-            raise SerenAPIError("SEREN_API_KEY missing or invalid and auto-registration disabled")
+            raise SerenAPIError(self._manual_setup_message())
 
         key = self.create_api_key()
         self._persist_key(key)
         os.environ["SEREN_API_KEY"] = key
         return key
+
+    def _manual_setup_message(self) -> str:
+        return (
+            "SEREN_API_KEY is required for Kraken Smart DCA dry-run and persistence setup. "
+            "Set SEREN_API_KEY in the environment or in the skill .env file. "
+            "Seren Desktop may provide API_KEY automatically; otherwise create a key in "
+            "Seren Console and see https://docs.serendb.com/skills.md."
+        )
