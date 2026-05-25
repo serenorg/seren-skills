@@ -219,6 +219,25 @@ def test_live_mode_requires_allow_live_flag() -> None:
         module._require_live_confirmation("live", False)
 
 
+def test_schema_setup_degrades_for_paper_sim(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    engine.ensure_schema = lambda: (_ for _ in ()).throw(RuntimeError("serendb unavailable"))
+
+    module._ensure_schema_for_mode(engine, "paper-sim")
+
+    assert engine.startup_persistence_warnings == [
+        {"operation": "ensure_schema", "error": "serendb unavailable"}
+    ]
+
+
+def test_schema_setup_fails_closed_for_live(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    engine.ensure_schema = lambda: (_ for _ in ()).throw(RuntimeError("serendb unavailable"))
+
+    with pytest.raises(RuntimeError, match="serendb unavailable"):
+        module._ensure_schema_for_mode(engine, "live")
+
+
 def test_cancel_all_live_orders_stops_trading(tmp_path: Path) -> None:
     engine = _build_engine(tmp_path)
     engine.storage = _FakeStorage(latest_orders=[{"order_ref": "crm-live-1"}])
