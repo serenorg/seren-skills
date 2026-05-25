@@ -180,3 +180,41 @@ def test_dry_run_does_not_require_local_wallet(monkeypatch: pytest.MonkeyPatch, 
     assert result["status"] == "ok"
     assert result["mode"] == "dry-run"
     assert result["signer_mode"] == "local-dry-run"
+
+
+def test_dry_run_degrades_when_rpc_probe_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SEREN_API_KEY", "sb_test")
+    monkeypatch.setattr(module, "SerenPublisherClient", lambda api_key, base_url: {"api_key": api_key, "base_url": base_url})
+    monkeypatch.setattr(
+        module,
+        "_resolve_inputs",
+        lambda config: {
+            "live_mode": False,
+            "wallet_mode": "local",
+            "chain": "ethereum",
+            "top_n_gauges": 3,
+            "deposit_token": "USDC",
+            "deposit_amount_usd": 100.0,
+        },
+    )
+    monkeypatch.setattr(module, "resolve_signer", lambda **kwargs: pytest.fail("dry-run should not load a local wallet"))
+    monkeypatch.setattr(
+        module,
+        "check_rpc_capability",
+        lambda client, chain, config: (_ for _ in ()).throw(module.ConfigError("RPC probe failed")),
+    )
+    monkeypatch.setattr(module, "fetch_top_gauges", lambda client, chain, limit: {"rows": [{"gauge": "0x1"}]})
+    monkeypatch.setattr(module, "choose_trade_plan", lambda gauges_response, token, amount_usd: {"gauge_address": "0x1", "amount_usd": amount_usd})
+    monkeypatch.setattr(module, "sync_positions", lambda *args, **kwargs: pytest.fail("position sync needs rpc"))
+    monkeypatch.setattr(module, "preflight_liquidity", lambda *args, **kwargs: pytest.fail("preflight needs rpc"))
+
+    result = module.run_once(
+        config={"dry_run": True, "wallet": {"path": str(tmp_path / "missing-wallet.json")}},
+        yes_live=False,
+        ledger_address="",
+    )
+
+    assert result["status"] == "ok"
+    assert result["rpc_capability"]["status"] == "warning"
+    assert result["position_sync"]["status"] == "warning"
+    assert result["preflight"]["execution_mode"] == "dry_run_simulated_no_rpc"
