@@ -10,6 +10,7 @@ import json
 import math
 import os
 import signal
+import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -137,6 +138,7 @@ class StrategyEngine:
         self.seren: Optional[SerenClient] = None
         self.live_controls = self._normalize_live_controls(live_controls)
         self.live_safety_state = self._load_live_safety_state()
+        self.startup_persistence_warnings: List[Dict[str, str]] = []
         self.persistence_warnings: List[Dict[str, str]] = []
         if self.api_key:
             self.seren = SerenClient(api_key=self.api_key)
@@ -535,7 +537,7 @@ class StrategyEngine:
         scheduled_window_start: Optional[str] = None,
     ) -> Dict[str, Any]:
         universe = (universe or DEFAULT_UNIVERSE)[:max_names_scored]
-        self.persistence_warnings = []
+        self.persistence_warnings = list(getattr(self, "startup_persistence_warnings", []))
         overlap_id = self._storage_call(
             mode,
             "check_overlap",
@@ -1593,6 +1595,22 @@ def _bootstrap_config_path(config_path: str) -> Path:
     return path
 
 
+def _ensure_schema_for_mode(engine: StrategyEngine, mode: str) -> None:
+    try:
+        engine.ensure_schema()
+    except Exception as exc:
+        if mode == "live":
+            raise
+        warning = {
+            "operation": "ensure_schema",
+            "error": str(exc),
+        }
+        if not hasattr(engine, "startup_persistence_warnings"):
+            engine.startup_persistence_warnings = []
+        engine.startup_persistence_warnings.append(warning)
+        print(f"WARNING: SerenDB schema setup unavailable in {mode}: {exc}", file=sys.stderr)
+
+
 def main() -> None:
     args = parse_args()
     config: Dict[str, Any] = {}
@@ -1613,9 +1631,8 @@ def main() -> None:
         strict_required_feeds=bool(args.strict_required_feeds or config.get("strict_required_feeds", False)),
         live_controls=config.get("live_controls"),
     )
-    engine.ensure_schema()
-
     mode = args.mode or config.get("mode", "paper-sim")
+    _ensure_schema_for_mode(engine, mode)
     if args.stop_trading:
         print(json.dumps(engine.cancel_all_live_orders(mode="live"), indent=2, default=str))
         return
