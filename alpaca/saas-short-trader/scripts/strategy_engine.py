@@ -546,13 +546,20 @@ class StrategyEngine:
             run_type=run_type,
         )
         if overlap_id:
-            return {
-                "status": "blocked_overlap",
-                "mode": mode,
-                "run_type": run_type,
-                "blocking_run_id": overlap_id,
-            }
-
+            if mode != "live":
+                self.persistence_warnings.append(
+                    {
+                        "operation": "check_overlap",
+                        "error": f"ignored non-live overlap {overlap_id}",
+                    }
+                )
+            else:
+                return {
+                    "status": "blocked_overlap",
+                    "mode": mode,
+                    "run_type": run_type,
+                    "blocking_run_id": overlap_id,
+                }
         metadata = {
             "run_type": run_type,
             "run_profile": run_profile,
