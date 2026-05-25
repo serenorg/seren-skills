@@ -51,6 +51,14 @@ def _build_history_and_orderbooks(
     return history, orderbooks
 
 
+def _loads_final_json(stdout: str) -> dict:
+    for line in reversed(stdout.splitlines()):
+        text = line.strip()
+        if text.startswith("{"):
+            return json.loads(text)
+    raise AssertionError(f"no JSON object found in stdout: {stdout}")
+
+
 def _base_backtest_payload(now_ts: int, telemetry_path: Path) -> dict:
     history, orderbooks = _build_history_and_orderbooks(now_ts)
     return {
@@ -121,7 +129,7 @@ def _run_backtest(tmp_path: Path, payload: dict) -> dict:
         text=True,
     )
     assert result.stdout, result.stderr
-    output = json.loads(result.stdout)
+    output = _loads_final_json(result.stdout)
     assert result.returncode == (0 if output["status"] == "ok" else 1), result.stderr
     return output
 
@@ -239,6 +247,43 @@ def test_check_serenbucks_balance_uses_nested_funded_balance(monkeypatch) -> Non
     assert agent._check_serenbucks_balance("test-key") == 20.33
 
 
+def test_nested_seren_gateway_payload_unwraps_to_market_list() -> None:
+    agent = _load_agent_module()
+
+    assert agent._unwrap_seren_response({"data": {"body": [{"id": "m1"}], "status": 200}}) == [{"id": "m1"}]
+
+
+def test_no_backtest_markets_reports_filter_diagnostics(monkeypatch) -> None:
+    agent = _load_agent_module()
+
+    def _empty_fetch(**kwargs):
+        del kwargs
+        agent.BACKTEST_LOAD_DIAGNOSTICS["raw_universe"] = 5
+        agent.BACKTEST_LOAD_DIAGNOSTICS["after_midpoint_filter"] = 2
+        agent.BACKTEST_LOAD_DIAGNOSTICS["after_volume_filter"] = 1
+        agent.BACKTEST_LOAD_DIAGNOSTICS["after_resolution_buffer"] = 3
+        agent.BACKTEST_LOAD_DIAGNOSTICS["with_sufficient_history"] = 0
+        return []
+
+    monkeypatch.setattr(agent, "_fetch_live_markets", _empty_fetch)
+
+    output = agent.run_backtest({}, None, None)
+
+    assert output["status"] == "error"
+    assert output["error_code"] == "no_backtest_markets"
+    assert output["diagnostics"]["raw_universe"] == 5
+    assert output["diagnostics"]["after_midpoint_filter"] == 2
+    assert output["diagnostics"]["after_volume_filter"] == 1
+    assert output["diagnostics"]["after_resolution_buffer"] == 3
+    assert output["diagnostics"]["with_sufficient_history"] == 0
+
+
+def test_volume_filter_accepts_current_gamma_volume_aliases() -> None:
+    agent = _load_agent_module()
+
+    assert agent._market_daily_volume_usd({"volume24hr": 0, "volumeNum": "1234.5"}) == 1234.5
+
+
 def test_live_guard_fixture_blocks_execution() -> None:
     payload = _read_fixture("live_guard.json")
     assert payload["status"] == "error"
@@ -254,7 +299,7 @@ def test_backtest_run_type_returns_stateful_result_and_telemetry(tmp_path: Path)
 
     assert output["status"] == "ok"
     assert output["mode"] == "backtest"
-    assert output["backtest_summary"]["source"] == "config"
+    assert output["backtest_summary"]["source"].startswith("config")
     assert output["backtest_summary"]["markets_selected"] == 1
     assert output["backtest_summary"]["orderbook_mode"] == "historical"
     assert output["results"]["starting_bankroll_usd"] == 100
@@ -376,7 +421,7 @@ def test_config_example_uses_seren_polymarket_publisher_urls() -> None:
     assert agent.to_backtest_params({}).bankroll_usd == backtest.get("bankroll_usd") == 100
     assert defaults.min_mid_price == strategy.get("min_mid_price") == 0.30
     assert defaults.max_mid_price == strategy.get("max_mid_price") == 0.70
-    assert defaults.min_daily_volume_usd == strategy.get("min_daily_volume_usd") == 5000
+    assert defaults.min_daily_volume_usd == strategy.get("min_daily_volume_usd") == 100
     assert defaults.max_inventory_hold_cycles == strategy.get("max_inventory_hold_cycles") == 3
     assert agent.to_optimization_params({}).max_iterations == backtest["optimization"]["max_iterations"] == 15
     assert backtest.get("gamma_markets_url", "").startswith(
@@ -452,7 +497,7 @@ def test_backtest_rejects_non_seren_polymarket_data_source(tmp_path: Path) -> No
     )
 
     assert result.returncode == 1, result.stderr
-    output = json.loads(result.stdout)
+    output = _loads_final_json(result.stdout)
     assert output["status"] == "error"
     assert output["error_code"] == "backtest_data_load_failed"
     assert "Seren Polymarket Publisher" in output["message"]
