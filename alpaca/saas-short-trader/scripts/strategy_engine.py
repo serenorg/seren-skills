@@ -9,8 +9,10 @@ import argparse
 import json
 import math
 import os
+import queue
 import signal
 import sys
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -123,6 +125,27 @@ class LiveSafetyTimeout(TimeoutError):
     """Raised when a live safety operation exceeds the configured timeout."""
 
 
+def _call_in_daemon_thread(label: str, fn, timeout_seconds: float):
+    result_queue: "queue.Queue[Tuple[bool, Any]]" = queue.Queue(maxsize=1)
+
+    def _target() -> None:
+        try:
+            result_queue.put((True, fn()))
+        except BaseException as exc:  # noqa: BLE001
+            result_queue.put((False, exc))
+
+    thread = threading.Thread(target=_target, name=f"{label}-timeout-guard", daemon=True)
+    thread.start()
+    thread.join(timeout=max(float(timeout_seconds), 0.0))
+    if thread.is_alive():
+        raise LiveSafetyTimeout(f"{label} timed out after {timeout_seconds:.2f}s")
+
+    ok, value = result_queue.get_nowait()
+    if ok:
+        return value
+    raise value
+
+
 class StrategyEngine:
     def __init__(
         self,
@@ -140,6 +163,8 @@ class StrategyEngine:
         self.live_safety_state = self._load_live_safety_state()
         self.startup_persistence_warnings: List[Dict[str, str]] = []
         self.persistence_warnings: List[Dict[str, str]] = []
+        self.persistence_disabled = False
+        self.scan_feed_cache: Dict[Tuple[str, ...], Dict[str, FeedResult]] = {}
         if self.api_key:
             self.seren = SerenClient(api_key=self.api_key)
 
@@ -189,11 +214,28 @@ class StrategyEngine:
         default: Any = None,
         **kwargs: Any,
     ) -> Any:
+        if run_mode != "live" and getattr(self, "persistence_disabled", False):
+            return default
         try:
-            return getattr(self.storage, operation)(*args, **kwargs)
+            storage_fn = getattr(self.storage, operation)
+            if run_mode != "live":
+                return _call_in_daemon_thread(
+                    f"storage_{operation}",
+                    lambda: storage_fn(*args, **kwargs),
+                    self._publisher_feed_timeout_seconds(run_mode),
+                )
+            return self._call_with_timeout(
+                f"storage_{operation}",
+                lambda: storage_fn(*args, **kwargs),
+                timeout_seconds=self._publisher_feed_timeout_seconds(run_mode),
+            )
         except Exception as exc:
             if run_mode == "live":
                 raise
+            if not hasattr(self, "persistence_warnings"):
+                self.persistence_warnings = []
+            if isinstance(exc, LiveSafetyTimeout):
+                self.persistence_disabled = True
             self.persistence_warnings.append(
                 {
                     "operation": operation,
@@ -209,6 +251,60 @@ class StrategyEngine:
             "status": "degraded",
             "warnings": list(self.persistence_warnings),
         }
+
+    def _scan_feed_cache(self) -> Dict[Tuple[str, ...], Dict[str, FeedResult]]:
+        cache = getattr(self, "scan_feed_cache", None)
+        if cache is None:
+            cache = {}
+            self.scan_feed_cache = cache
+        return cache
+
+    def _publisher_feed_timeout_seconds(self, mode: str) -> float:
+        timeout = self._live_operation_timeout_seconds()
+        if mode != "live":
+            return max(1.0, min(timeout, 8.0))
+        return timeout
+
+    @staticmethod
+    def _default_market_features(tickers: List[str]) -> Dict[str, Dict[str, Any]]:
+        return {
+            ticker: {
+                "price": 50.0,
+                "return_1d": 0.0,
+                "adv_usd": 5_000_000.0,
+                "shortable": True,
+                "shortable_source": "timeout-fallback",
+            }
+            for ticker in tickers
+        }
+
+    def _fetch_feed_result(self, mode: str, name: str, tickers: List[str], fetcher) -> FeedResult:
+        try:
+            label = f"{name}_feed"
+            timeout = self._publisher_feed_timeout_seconds(mode)
+            if mode != "live":
+                return _call_in_daemon_thread(label, lambda: fetcher(tickers), timeout)
+            return self._call_with_timeout(label, lambda: fetcher(tickers), timeout_seconds=timeout)
+        except Exception as exc:
+            if mode != "live" and name == "alpaca":
+                return FeedResult(ok=True, data=self._default_market_features(tickers), error=str(exc))
+            return FeedResult(ok=False, data={}, error=str(exc))
+
+    def _fetch_scan_feeds(self, mode: str, universe: List[str]) -> Dict[str, FeedResult]:
+        cache_key = tuple(universe)
+        cache = self._scan_feed_cache()
+        if mode != "live" and cache_key in cache:
+            return cache[cache_key]
+
+        feeds = {
+            "sec-filings-intelligence": self._fetch_feed_result(mode, "sec-filings-intelligence", universe, self.fetch_sec_features),
+            "google-trends": self._fetch_feed_result(mode, "google-trends", universe, self.fetch_trends_features),
+            "news-search": self._fetch_feed_result(mode, "news-search", universe, self.fetch_news_features),
+            "alpaca": self._fetch_feed_result(mode, "alpaca", universe, self.fetch_market_features),
+        }
+        if mode != "live":
+            cache[cache_key] = feeds
+        return feeds
 
     def _live_operation_timeout_seconds(self) -> float:
         return max(safe_float(self.live_controls.get("operation_timeout_seconds"), 30.0), 0.0)
@@ -585,10 +681,11 @@ class StrategyEngine:
         orders: List[Dict[str, Any]] = []
         live_risk: Optional[Dict[str, Any]] = None
         try:
-            sec_result = self.fetch_sec_features(universe)
-            trends_result = self.fetch_trends_features(universe)
-            news_result = self.fetch_news_features(universe)
-            market_result = self.fetch_market_features(universe)
+            feed_results = self._fetch_scan_feeds(mode, universe)
+            sec_result = feed_results["sec-filings-intelligence"]
+            trends_result = feed_results["google-trends"]
+            news_result = feed_results["news-search"]
+            market_result = feed_results["alpaca"]
 
             feed_status = {
                 "sec-filings-intelligence": sec_result.ok,
@@ -1106,6 +1203,8 @@ class StrategyEngine:
             rows = self.seren.extract_rows(resp)
             data = {r["ticker"]: r for r in rows if r.get("ticker")}
             return FeedResult(ok=len(data) > 0, data=data, error="" if data else "no_rows")
+        except LiveSafetyTimeout:
+            raise
         except Exception as exc:
             return FeedResult(ok=False, data={}, error=str(exc))
 
@@ -1137,6 +1236,8 @@ class StrategyEngine:
                             result.update(parsed)
                             ok = True
                             break
+                    except LiveSafetyTimeout:
+                        raise
                     except Exception as exc:
                         errors.append(str(exc))
             if not ok:
@@ -1203,6 +1304,8 @@ class StrategyEngine:
                 body = self.seren.unwrap_body(resp)
                 text = self.extract_text(body)
                 source = "perplexity"
+            except LiveSafetyTimeout:
+                raise
             except Exception as exc:
                 errors.append(str(exc))
                 try:
@@ -1210,6 +1313,8 @@ class StrategyEngine:
                     body = self.seren.unwrap_body(resp)
                     text = self.extract_text(body)
                     source = "exa"
+                except LiveSafetyTimeout:
+                    raise
                 except Exception as exc2:
                     errors.append(str(exc2))
                     text = ""
@@ -1276,6 +1381,8 @@ class StrategyEngine:
                 for t in chunk:
                     if t in parsed:
                         data[t] = parsed[t]
+            except LiveSafetyTimeout:
+                raise
             except Exception as exc:
                 errors.append(str(exc))
 
@@ -1604,7 +1711,14 @@ def _bootstrap_config_path(config_path: str) -> Path:
 
 def _ensure_schema_for_mode(engine: StrategyEngine, mode: str) -> None:
     try:
-        engine.ensure_schema()
+        if mode == "live":
+            engine.ensure_schema()
+        else:
+            _call_in_daemon_thread(
+                "ensure_schema",
+                engine.ensure_schema,
+                engine._publisher_feed_timeout_seconds(mode),
+            )
     except Exception as exc:
         if mode == "live":
             raise
@@ -1615,6 +1729,7 @@ def _ensure_schema_for_mode(engine: StrategyEngine, mode: str) -> None:
         if not hasattr(engine, "startup_persistence_warnings"):
             engine.startup_persistence_warnings = []
         engine.startup_persistence_warnings.append(warning)
+        engine.persistence_disabled = True
         print(f"WARNING: SerenDB schema setup unavailable in {mode}: {exc}", file=sys.stderr)
 
 

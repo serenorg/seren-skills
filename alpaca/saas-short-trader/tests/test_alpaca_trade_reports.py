@@ -45,6 +45,34 @@ class _FakeConn:
         return None
 
 
+def test_storage_connect_uses_bounded_database_timeouts(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SERENDB_CONNECT_TIMEOUT_SECONDS", "2")
+    monkeypatch.setenv("SERENDB_STATEMENT_TIMEOUT_MS", "3000")
+    captured = {}
+    psycopg_stub = types.ModuleType("psycopg")
+
+    def _connect(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _FakeConn()
+
+    psycopg_stub.connect = _connect
+    rows_stub = types.ModuleType("psycopg.rows")
+    rows_stub.dict_row = object()
+    sys.modules["psycopg"] = psycopg_stub
+    sys.modules["psycopg.rows"] = rows_stub
+
+    script_dir = Path(__file__).resolve().parents[1] / "scripts"
+    storage_module = _load_module(script_dir, "serendb_storage")
+    storage = storage_module.SerenDBStorage("postgresql://unused")
+
+    assert isinstance(storage.connect(), _FakeConn)
+    assert captured["args"] == ("postgresql://unused",)
+    assert captured["kwargs"]["connect_timeout"] == 2
+    assert captured["kwargs"]["options"] == "-c statement_timeout=3000"
+
+
 def test_storage_emits_trade_report_on_terminal_status(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PYTHONUNBUFFERED", "1")

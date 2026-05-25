@@ -225,6 +225,8 @@ def test_schema_setup_degrades_for_paper_sim(tmp_path: Path) -> None:
 
     module._ensure_schema_for_mode(engine, "paper-sim")
 
+    assert engine.persistence_disabled is True
+    assert engine._storage_call("paper-sim", "insert_run", default="fallback") == "fallback"
     assert engine.startup_persistence_warnings == [
         {"operation": "ensure_schema", "error": "serendb unavailable"}
     ]
@@ -396,6 +398,84 @@ def test_paper_sim_ignores_stale_overlap_rows(tmp_path: Path) -> None:
         and "stale-paper-run" in warning["error"]
         for warning in result["persistence"]["warnings"]
     )
+
+
+def test_paper_sim_feed_timeout_degrades_and_caches(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    calls = {"sec": 0, "trends": 0, "news": 0, "market": 0}
+
+    def _timeout_sec(universe):
+        del universe
+        calls["sec"] += 1
+        raise module.LiveSafetyTimeout("sec feed timed out")
+
+    def _trends(universe):
+        calls["trends"] += 1
+        return module.FeedResult(ok=True, data={ticker: {} for ticker in universe})
+
+    def _news(universe):
+        calls["news"] += 1
+        return module.FeedResult(ok=True, data={"_source": "exa", **{ticker: {} for ticker in universe}})
+
+    def _market(universe):
+        calls["market"] += 1
+        return module.FeedResult(ok=True, data={ticker: {"price": 250.0} for ticker in universe})
+
+    engine.fetch_sec_features = _timeout_sec
+    engine.fetch_trends_features = _trends
+    engine.fetch_news_features = _news
+    engine.fetch_market_features = _market
+    engine.score_universe = lambda **kwargs: [{"ticker": "CRM", "selected": True}]
+    engine.build_orders = lambda selected, portfolio_notional_usd, is_simulated=True: []
+    engine.simulate = lambda selected, orders: {
+        "mark_map": {},
+        "net_pnl_5d": 0.0,
+        "net_pnl_10d": 0.0,
+        "net_pnl_20d": 0.0,
+        "gross_exposure": 0.0,
+        "hit_rate_5d": 0.0,
+        "hit_rate_10d": 0.0,
+        "hit_rate_20d": 0.0,
+        "max_drawdown": 0.0,
+    }
+    engine.build_marks_from_orders = lambda orders, mark_map, run_id: []
+
+    first = engine.run_scan(mode="paper-sim", universe=["CRM"], max_names_scored=1, max_names_orders=1)
+    second = engine.run_scan(mode="paper-sim", universe=["CRM"], max_names_scored=1, max_names_orders=1)
+
+    assert first["status"] == "completed"
+    assert first["feed_status"]["sec-filings-intelligence"] is False
+    assert first["partial_feeds"]["degraded_sources"] == ["sec-filings-intelligence"]
+    assert second["status"] == "completed"
+    assert calls == {"sec": 1, "trends": 1, "news": 1, "market": 1}
+
+
+def test_paper_sim_storage_call_timeout_degrades(tmp_path: Path) -> None:
+    engine = _build_engine(tmp_path)
+    original_timeout_guard = module._call_in_daemon_thread
+    module._call_in_daemon_thread = lambda label, fn, timeout_seconds=None: (_ for _ in ()).throw(
+        module.LiveSafetyTimeout(f"{label} timed out")
+    )
+
+    try:
+        result = engine._storage_call(
+            "paper-sim",
+            "insert_candidate_scores",
+            "run-timeout-test",
+            [],
+            default="fallback",
+        )
+    finally:
+        module._call_in_daemon_thread = original_timeout_guard
+
+    assert result == "fallback"
+    assert engine.persistence_disabled is True
+    assert engine.persistence_warnings == [
+        {
+            "operation": "insert_candidate_scores",
+            "error": "storage_insert_candidate_scores timed out",
+        }
+    ]
 
 
 def test_live_strict_required_feed_failure_stays_blocked(tmp_path: Path) -> None:

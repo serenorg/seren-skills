@@ -6,6 +6,7 @@ SerenDB persistence helpers for SaaS short strategy bot.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -21,16 +22,31 @@ SKILL_SLUG = "alpaca-saas-short-trader"
 STRATEGY_NAME = "saas-short-trader"
 
 
+def _env_int(name: str, default: int, minimum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
 class SerenDBStorage:
     def __init__(self, dsn: str):
         self.dsn = dsn
+        self.connect_timeout_seconds = _env_int("SERENDB_CONNECT_TIMEOUT_SECONDS", 5, 1)
+        self.statement_timeout_ms = _env_int("SERENDB_STATEMENT_TIMEOUT_MS", 5000, 1000)
         self.reporter = ShortTradeReportEmitter(
             skill_slug=SKILL_SLUG,
             strategy_name=STRATEGY_NAME,
         )
 
     def connect(self) -> psycopg.Connection:
-        return psycopg.connect(self.dsn, row_factory=dict_row)
+        return psycopg.connect(
+            self.dsn,
+            row_factory=dict_row,
+            connect_timeout=self.connect_timeout_seconds,
+            options=f"-c statement_timeout={self.statement_timeout_ms}",
+        )
 
     def apply_sql_file(self, sql_file: Path) -> None:
         sql_text = sql_file.read_text(encoding="utf-8")
