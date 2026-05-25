@@ -366,3 +366,10 @@ def test_no_backtest_markets_reports_filter_diagnostics(monkeypatch) -> None:
     assert output["diagnostics"]["after_liquidity_filter"] == 2
     assert output["diagnostics"]["after_history_filter"] == 0
     assert output["diagnostics"]["paired_count"] == 0
+
+
+def test_history_helpers_are_python39_runtime_compatible() -> None:
+    module = _load_agent_module()
+
+    assert module._coerce_unix_ts(123.0) == 123
+    assert module._history_point_from_row([123, 0.42], "") == (123, 0.42)
