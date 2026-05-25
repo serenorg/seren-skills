@@ -137,6 +137,7 @@ class StrategyEngine:
         self.seren: Optional[SerenClient] = None
         self.live_controls = self._normalize_live_controls(live_controls)
         self.live_safety_state = self._load_live_safety_state()
+        self.persistence_warnings: List[Dict[str, str]] = []
         if self.api_key:
             self.seren = SerenClient(api_key=self.api_key)
 
@@ -177,6 +178,35 @@ class StrategyEngine:
         payload["runtime_version"] = LIVE_SAFETY_VERSION
         LIVE_SAFETY_STATE_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         self.live_safety_state = payload
+
+    def _storage_call(
+        self,
+        run_mode: str,
+        operation: str,
+        *args: Any,
+        default: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        try:
+            return getattr(self.storage, operation)(*args, **kwargs)
+        except Exception as exc:
+            if run_mode == "live":
+                raise
+            self.persistence_warnings.append(
+                {
+                    "operation": operation,
+                    "error": str(exc),
+                }
+            )
+            return default
+
+    def _persistence_status(self) -> Dict[str, Any]:
+        if not self.persistence_warnings:
+            return {"status": "ok"}
+        return {
+            "status": "degraded",
+            "warnings": list(self.persistence_warnings),
+        }
 
     def _live_operation_timeout_seconds(self) -> float:
         return max(safe_float(self.live_controls.get("operation_timeout_seconds"), 30.0), 0.0)
@@ -505,7 +535,14 @@ class StrategyEngine:
         scheduled_window_start: Optional[str] = None,
     ) -> Dict[str, Any]:
         universe = (universe or DEFAULT_UNIVERSE)[:max_names_scored]
-        overlap_id = self.storage.check_overlap(mode=mode, run_type=run_type)
+        self.persistence_warnings = []
+        overlap_id = self._storage_call(
+            mode,
+            "check_overlap",
+            default=None,
+            mode=mode,
+            run_type=run_type,
+        )
         if overlap_id:
             return {
                 "status": "blocked_overlap",
@@ -521,7 +558,9 @@ class StrategyEngine:
             "scheduled_window_start": scheduled_window_start or datetime.now(timezone.utc).isoformat(),
             "idempotency_key": f"saas-short-trader:{mode}:{run_type}:{scheduled_window_start or date.today()}",
         }
-        run_id = self.storage.insert_run(
+        run_id = self._storage_call(
+            mode,
+            "insert_run",
             mode=mode,
             universe=universe,
             max_names_scored=max_names_scored,
@@ -529,7 +568,10 @@ class StrategyEngine:
             min_conviction=min_conviction,
             status="running",
             metadata=metadata,
+            default=None,
         )
+        if not run_id:
+            run_id = f"paper-sim-{date.today().isoformat()}"
 
         orders: List[Dict[str, Any]] = []
         live_risk: Optional[Dict[str, Any]] = None
@@ -567,7 +609,9 @@ class StrategyEngine:
             }
 
             if self.strict_required_feeds and mode == "live" and required_feed_failures:
-                self.storage.update_run_status(
+                self._storage_call(
+                    mode,
+                    "update_run_status",
                     run_id,
                     "blocked",
                     {
@@ -588,7 +632,9 @@ class StrategyEngine:
                 }
 
             if mode == "live" and not market_result.ok:
-                self.storage.update_run_status(
+                self._storage_call(
+                    mode,
+                    "update_run_status",
                     run_id,
                     "blocked",
                     {
@@ -616,7 +662,7 @@ class StrategyEngine:
                 min_conviction=min_conviction,
                 max_names_orders=max_names_orders,
             )
-            self.storage.insert_candidate_scores(run_id, scored_rows)
+            self._storage_call(mode, "insert_candidate_scores", run_id, scored_rows)
 
             selected = [r for r in scored_rows if r["selected"]]
             orders = self.build_orders(
@@ -635,7 +681,7 @@ class StrategyEngine:
                     lambda: self._submit_live_orders(orders),
                     timeout_seconds=self._live_run_timeout_seconds(),
                 )
-                self.storage.insert_order_events(run_id, mode, submitted_orders)
+                self._storage_call(mode, "insert_order_events", run_id, mode, submitted_orders)
                 metadata_patch = {
                     "feed_status": feed_status,
                     "feed_errors": feed_errors,
@@ -649,7 +695,7 @@ class StrategyEngine:
                     "submitted_count": len(submitted_orders),
                     "data_sources": ["alpaca", "sec-filings-intelligence", "google-trends", news_result.data.get("_source", "exa")],
                 }
-                self.storage.update_run_status(run_id, "completed", metadata_patch)
+                self._storage_call(mode, "update_run_status", run_id, "completed", metadata_patch)
                 return {
                     "status": "completed",
                     "run_id": run_id,
@@ -661,11 +707,13 @@ class StrategyEngine:
                     "live_risk": live_risk,
                     "submitted_orders": submitted_orders,
                 }
-            self.storage.insert_order_events(run_id, mode, orders)
+            self._storage_call(mode, "insert_order_events", run_id, mode, orders)
 
             sim = self.simulate(selected, orders)
             marks = self.build_marks_from_orders(orders, sim["mark_map"], run_id)
-            self.storage.upsert_position_marks(
+            self._storage_call(
+                mode,
+                "upsert_position_marks",
                 date.today(),
                 mode,
                 marks,
@@ -673,7 +721,9 @@ class StrategyEngine:
                 scan_run_id=run_id,
             )
 
-            self.storage.upsert_pnl_daily(
+            self._storage_call(
+                mode,
+                "upsert_pnl_daily",
                 as_of_date=date.today(),
                 mode=mode,
                 realized_pnl=0.0,
@@ -687,7 +737,9 @@ class StrategyEngine:
             )
             # Keep reporting rows aligned across paper/paper-sim/live.
             if mode == "paper-sim":
-                self.storage.upsert_pnl_daily(
+                self._storage_call(
+                    mode,
+                    "upsert_pnl_daily",
                     as_of_date=date.today(),
                     mode="paper",
                     realized_pnl=0.0,
@@ -699,7 +751,9 @@ class StrategyEngine:
                     scan_run_id=run_id,
                     source_run_id=run_id,
                 )
-            self.storage.upsert_pnl_daily(
+            self._storage_call(
+                mode,
+                "upsert_pnl_daily",
                 as_of_date=date.today(),
                 mode="live",
                 realized_pnl=0.0,
@@ -712,10 +766,12 @@ class StrategyEngine:
                 source_run_id=run_id,
             )
 
+            persistence = self._persistence_status()
             metadata_patch = {
                 "feed_status": feed_status,
                 "feed_errors": feed_errors,
                 "partial_feeds": partial_feeds,
+                "persistence": persistence,
                 "sim_windows": {
                     "5D_net_pnl": round(sim["net_pnl_5d"], 2),
                     "10D_net_pnl": round(sim["net_pnl_10d"], 2),
@@ -729,7 +785,8 @@ class StrategyEngine:
                 "live_risk": live_risk,
                 "data_sources": ["alpaca", "sec-filings-intelligence", "google-trends", news_result.data.get("_source", "exa")],
             }
-            self.storage.update_run_status(run_id, "completed", metadata_patch)
+            self._storage_call(mode, "update_run_status", run_id, "completed", metadata_patch)
+            persistence = self._persistence_status()
             return {
                 "status": "completed",
                 "run_id": run_id,
@@ -739,6 +796,7 @@ class StrategyEngine:
                 "sim": sim,
                 "feed_status": feed_status,
                 "partial_feeds": partial_feeds,
+                "persistence": persistence,
                 "live_risk": live_risk,
             }
         except Exception as exc:
@@ -751,7 +809,7 @@ class StrategyEngine:
                     live_risk=live_risk,
                 )
             else:
-                self.storage.update_run_status(run_id, "failed", {"error": str(exc)})
+                self._storage_call(mode, "update_run_status", run_id, "failed", {"error": str(exc)})
             raise
 
     def run_monitor(
