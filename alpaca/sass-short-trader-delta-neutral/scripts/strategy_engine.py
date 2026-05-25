@@ -568,6 +568,20 @@ class StrategyEngine:
                 "news-search": news_result.error,
                 "alpaca": market_result.error,
             }
+            required_feed_failures = [
+                name
+                for name, ok in (
+                    ("sec-filings-intelligence", sec_result.ok),
+                    ("google-trends", trends_result.ok),
+                    ("news-search", news_result.ok),
+                )
+                if not ok
+            ]
+            partial_feeds = {
+                "enabled": bool(mode != "live" and required_feed_failures),
+                "degraded_sources": required_feed_failures,
+                "policy": "paper-sim_warn_live_fail_closed",
+            }
             if hedge_ticker and hedge_ticker not in market_result.data:
                 hedge_market = self.fetch_market_features([hedge_ticker])
                 if hedge_market.data:
@@ -576,13 +590,14 @@ class StrategyEngine:
                     err = hedge_market.error or "hedge_market_fetch_failed"
                     feed_errors["alpaca"] = f"{feed_errors.get('alpaca')}; {err}" if feed_errors.get("alpaca") else err
 
-            if self.strict_required_feeds and (not sec_result.ok or not trends_result.ok or not news_result.ok):
+            if self.strict_required_feeds and mode == "live" and required_feed_failures:
                 self.storage.update_run_status(
                     run_id,
                     "blocked",
                     {
                         "feed_status": feed_status,
                         "feed_errors": feed_errors,
+                        "partial_feeds": partial_feeds,
                         "blocked_reason": "required_feed_failure",
                     },
                 )
@@ -593,6 +608,7 @@ class StrategyEngine:
                     "run_type": run_type,
                     "feed_status": feed_status,
                     "feed_errors": feed_errors,
+                    "partial_feeds": partial_feeds,
                 }
 
             if mode == "live" and not market_result.ok:
@@ -650,6 +666,7 @@ class StrategyEngine:
                 metadata_patch = {
                     "feed_status": feed_status,
                     "feed_errors": feed_errors,
+                    "partial_feeds": partial_feeds,
                     "selected_count": len(selected),
                     "hedge_ticker": hedge_ticker,
                     "hedge_ratio": round(clamp(hedge_ratio, 0.0, 2.0), 4),
@@ -670,6 +687,7 @@ class StrategyEngine:
                     "selected": [r["ticker"] for r in selected],
                     "hedge_ticker": hedge_ticker,
                     "feed_status": feed_status,
+                    "partial_feeds": partial_feeds,
                     "live_risk": live_risk,
                     "submitted_orders": submitted_orders,
                 }
@@ -727,6 +745,7 @@ class StrategyEngine:
             metadata_patch = {
                 "feed_status": feed_status,
                 "feed_errors": feed_errors,
+                "partial_feeds": partial_feeds,
                 "sim_windows": {
                     "5D_net_pnl": round(sim["net_pnl_5d"], 2),
                     "10D_net_pnl": round(sim["net_pnl_10d"], 2),
@@ -754,6 +773,7 @@ class StrategyEngine:
                 "hedge_ticker": hedge_ticker,
                 "sim": sim,
                 "feed_status": feed_status,
+                "partial_feeds": partial_feeds,
                 "live_risk": live_risk,
             }
         except Exception as exc:
