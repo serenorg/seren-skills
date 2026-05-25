@@ -35,6 +35,34 @@ def _extract_event_id(raw_market: Dict[str, Any]) -> str:
     return ""
 
 
+def _coerce_market_list(response: Any) -> List[Dict[str, Any]]:
+    """Return the market list from the publisher's possible response envelopes."""
+    payload = response
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            return []
+
+    for _ in range(4):
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        for key in ("body", "markets", "results", "items"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        data = payload.get("data")
+        if data is payload:
+            return []
+        if data is not None:
+            payload = data
+            continue
+        return []
+    return []
+
+
 class PolymarketClient:
     """Client for Polymarket CLOB API.
 
@@ -110,9 +138,7 @@ class PolymarketClient:
 
         markets: List[Dict] = []
 
-        market_list = response.get('body', [])
-        if not market_list and 'data' in response:
-            market_list = response.get('data', [])
+        market_list = _coerce_market_list(response)
 
         for market_data in market_list:
             if market_data.get('closed', False):

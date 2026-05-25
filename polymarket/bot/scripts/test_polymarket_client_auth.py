@@ -39,6 +39,34 @@ class TestPolymarketClientInit:
         call_kwargs = seren.call_publisher.call_args.kwargs
         assert call_kwargs["publisher"] == "polymarket-data"
 
+    def test_get_markets_accepts_nested_seren_gateway_payload(self):
+        seren = _mock_seren()
+        seren.call_publisher.return_value = {
+            "data": {
+                "body": [
+                    {
+                        "id": "market-1",
+                        "conditionId": "cond-1",
+                        "question": "Will parser handle this market?",
+                        "clobTokenIds": '["yes-token", "no-token"]',
+                        "outcomePrices": '["0.63", "0.37"]',
+                        "volume": "1200",
+                        "liquidity": "450",
+                        "closed": False,
+                    }
+                ],
+                "status": 200,
+            }
+        }
+        client = PolymarketClient(seren_client=seren, dry_run=True)
+
+        markets = client.get_markets(limit=5)
+
+        assert len(markets) == 1
+        assert markets[0]["market_id"] == "cond-1"
+        assert markets[0]["token_id"] == "yes-token"
+        assert markets[0]["price"] == 0.63
+
     def test_get_balance_returns_zero_without_trader(self):
         seren = _mock_seren()
         client = PolymarketClient(seren_client=seren, dry_run=True)
