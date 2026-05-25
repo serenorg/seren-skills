@@ -80,7 +80,7 @@ class StrategyParams:
     min_seconds_to_resolution: int = 14 * 24 * 60 * 60
     min_mid_price: float = 0.30
     max_mid_price: float = 0.70
-    min_daily_volume_usd: float = 5000.0
+    min_daily_volume_usd: float = 100.0
     max_inventory_hold_cycles: int = 3
     min_edge_bps: float = 2.0
     default_rebate_bps: float = 3.0
@@ -105,7 +105,7 @@ class BacktestParams:
     fidelity_minutes: int = 60
     participation_rate: float = 0.6
     volatility_window_points: int = 24
-    min_liquidity_usd: float = 25000.0
+    min_liquidity_usd: float = 500.0
     markets_fetch_limit: int = 500
     min_history_points: int = 480
     require_orderbook_history: bool = False
@@ -344,7 +344,7 @@ def to_params(config: dict[str, Any]) -> StrategyParams:
         ),
         min_mid_price=clamp(_safe_float(strategy.get("min_mid_price"), 0.30), 0.001, 0.999),
         max_mid_price=clamp(_safe_float(strategy.get("max_mid_price"), 0.70), 0.001, 0.999),
-        min_daily_volume_usd=max(0.0, _safe_float(strategy.get("min_daily_volume_usd"), 5000.0)),
+        min_daily_volume_usd=max(0.0, _safe_float(strategy.get("min_daily_volume_usd"), 100.0)),
         max_inventory_hold_cycles=max(1, _safe_int(strategy.get("max_inventory_hold_cycles"), 3)),
         min_edge_bps=_safe_float(strategy.get("min_edge_bps"), 2.0),
         default_rebate_bps=_safe_float(strategy.get("default_rebate_bps"), 3.0),
@@ -378,7 +378,7 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
             1.0,
         ),
         volatility_window_points=max(3, _safe_int(backtest.get("volatility_window_points"), 24)),
-        min_liquidity_usd=max(0.0, _safe_float(backtest.get("min_liquidity_usd"), 25000.0)),
+        min_liquidity_usd=max(0.0, _safe_float(backtest.get("min_liquidity_usd"), 500.0)),
         markets_fetch_limit=max(1, _safe_int(backtest.get("markets_fetch_limit"), 500)),
         min_history_points=max(10, _safe_int(backtest.get("min_history_points"), 480)),
         require_orderbook_history=bool(backtest.get("require_orderbook_history", False)),
@@ -452,10 +452,13 @@ def _mid_price_in_band(mid_price: float, p: StrategyParams) -> bool:
 
 
 def _market_daily_volume_usd(market: dict[str, Any]) -> float | None:
-    for key in ("volume24hr", "daily_volume_usd", "volume_24h_usd"):
+    candidates: list[float] = []
+    for key in ("volume24hr", "daily_volume_usd", "volume_24h_usd", "volume", "volumeNum", "volumeClob"):
         if key in market and market.get(key) is not None:
-            return max(0.0, _safe_float(market.get(key), 0.0))
-    return None
+            candidates.append(max(0.0, _safe_float(market.get(key), 0.0)))
+    if not candidates:
+        return None
+    return max(candidates)
 
 
 def _compute_mvl_regime(market: dict[str, Any], p: StrategyParams) -> tuple[bool, str]:
@@ -897,11 +900,46 @@ def _runtime_api_key() -> str:
     return ""
 
 
+BACKTEST_LOAD_DIAGNOSTICS: dict[str, Any] = {}
+
+
+def _reset_backtest_load_diagnostics() -> None:
+    global BACKTEST_LOAD_DIAGNOSTICS
+    BACKTEST_LOAD_DIAGNOSTICS = {
+        "raw_universe": 0,
+        "after_liquidity_filter": 0,
+        "after_resolution_buffer": 0,
+        "after_token_filter": 0,
+        "after_midpoint_filter": 0,
+        "after_volume_filter": 0,
+        "with_sufficient_history": 0,
+        "selected_count": 0,
+    }
+
+
+def _inc_backtest_diag(key: str, amount: int = 1) -> None:
+    BACKTEST_LOAD_DIAGNOSTICS[key] = int(BACKTEST_LOAD_DIAGNOSTICS.get(key, 0)) + amount
+
+
+def _current_backtest_load_diagnostics() -> dict[str, Any]:
+    return dict(BACKTEST_LOAD_DIAGNOSTICS)
+
+
 def _unwrap_seren_response(data: dict[str, Any] | list[Any]) -> dict[str, Any] | list[Any]:
-    """Unwrap Seren gateway response envelope {status, body, ...} -> body."""
-    if isinstance(data, dict) and "body" in data and "status" in data:
-        return data["body"]
-    return data
+    """Unwrap Seren gateway response envelopes into the upstream payload."""
+    payload: Any = data
+    for _ in range(4):
+        if not isinstance(payload, dict):
+            return payload
+        if "body" in payload and "status" in payload:
+            payload = payload["body"]
+            continue
+        nested = payload.get("data")
+        if nested is not None and nested is not payload:
+            payload = nested
+            continue
+        return payload
+    return payload
 
 
 def _http_get_json_via_api_key(url: str, api_key: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
@@ -1276,6 +1314,7 @@ def _fetch_live_markets(
     raw = _http_get_json(f"{backtest_params.gamma_markets_url}?{query}")
     if not isinstance(raw, list):
         return []
+    _inc_backtest_diag("raw_universe", len([row for row in raw if isinstance(row, dict)]))
 
     candidates: list[dict[str, Any]] = []
     for market in raw:
@@ -1284,24 +1323,29 @@ def _fetch_live_markets(
         liquidity = _safe_float(market.get("liquidity"), 0.0)
         if liquidity < backtest_params.min_liquidity_usd:
             continue
+        _inc_backtest_diag("after_liquidity_filter")
         end_market = _parse_iso_ts(market.get("endDate")) or 0
         if end_market <= start_ts + strategy_params.min_seconds_to_resolution:
             continue
+        _inc_backtest_diag("after_resolution_buffer")
         token_ids = _json_to_list(market.get("clobTokenIds"))
         if not token_ids:
             continue
         token_id = _safe_str(token_ids[0], "")
         if not token_id:
             continue
+        _inc_backtest_diag("after_token_filter")
         mid_price = _extract_live_mid_price(market)
         if not (0.0 < mid_price < 1.0):
             continue
-        spread = _safe_float(market.get("spread"), 1.0)
-        volume24hr = _safe_float(market.get("volume24hr"), 0.0)
-        if volume24hr < strategy_params.min_daily_volume_usd:
-            continue
         if not _mid_price_in_band(mid_price, strategy_params):
             continue
+        _inc_backtest_diag("after_midpoint_filter")
+        spread = _safe_float(market.get("spread"), 1.0)
+        volume24hr = _market_daily_volume_usd(market) or 0.0
+        if volume24hr < strategy_params.min_daily_volume_usd:
+            continue
+        _inc_backtest_diag("after_volume_filter")
         # Score: prefer price near 0.5 (two-way flow), high volume, tight spread
         price_score = 1.0 - abs(mid_price - 0.5) * 2.0  # 1.0 at 0.50, 0.0 at 0.0/1.0
         spread_score = max(0.0, 1.0 - spread * 10.0)     # penalise wide spreads
@@ -1358,6 +1402,7 @@ def _fetch_live_markets(
             result = future.result()
             if result is not None:
                 enriched.append(result)
+    BACKTEST_LOAD_DIAGNOSTICS["with_sufficient_history"] = len(enriched)
 
     # Fetch Seren Predictions intelligence to boost scoring (costs SerenBucks)
     predictions = _fetch_predictions_signals(
@@ -1377,7 +1422,9 @@ def _fetch_live_markets(
 
     # Re-sort enriched candidates by mm_score and return top N
     enriched.sort(key=lambda c: c.get("mm_score", 0.0), reverse=True)
-    return enriched[: strategy_params.markets_max]
+    selected = enriched[: strategy_params.markets_max]
+    BACKTEST_LOAD_DIAGNOSTICS["selected_count"] = len(selected)
+    return selected
 
 
 def _fetch_live_quote_markets(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1424,7 +1471,7 @@ def _fetch_live_quote_markets(config: dict[str, Any]) -> list[dict[str, Any]]:
         mid_price = _extract_live_mid_price(market)
         if not (0.0 < mid_price < 1.0):
             continue
-        volume24hr = _safe_float(market.get("volume24hr"), 0.0)
+        volume24hr = _market_daily_volume_usd(market) or 0.0
         if volume24hr < strategy_params.min_daily_volume_usd:
             continue
         if not _mid_price_in_band(mid_price, strategy_params):
@@ -2480,6 +2527,7 @@ def run_backtest(
     days = max(1, backtest_days_override or backtest_params.days)
     end_ts = int(time.time())
     start_ts = end_ts - (days * 24 * 3600)
+    _reset_backtest_load_diagnostics()
 
     try:
         if backtest_file:
@@ -2524,6 +2572,7 @@ def run_backtest(
             "status": "error",
             "error_code": "no_backtest_markets",
             "message": "No markets with sufficient history were available for backtest.",
+            "diagnostics": _current_backtest_load_diagnostics(),
             "dry_run": True,
         }
 
