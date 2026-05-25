@@ -240,7 +240,7 @@ When `seren-mcp` is available, the bot persists to SerenDB:
 - `trading.runtime_events`
 - `trading.runtime_locks`
 
-Adaptive mode requires SerenDB persistence. If the MCP-backed store is unavailable, the adaptive runtime fails closed instead of silently falling back to local state files, runtime lock files, or local review/alert telemetry artifacts.
+Adaptive mode requires SerenDB persistence for live `start`, `cycle`, scheduled runs, safety checks, and reviews. Dry-run may use in-memory adaptive state when the MCP-backed store is unavailable because it places no orders and does not acquire the shared runtime lock.
 
 ## Safety Features
 

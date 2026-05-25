@@ -120,7 +120,7 @@ Set these optional environment variables in `.env`:
 - `SERENDB_AUTO_CREATE` (default: `true`)
 - `SEREN_MCP_COMMAND` (default: `seren-mcp`)
 
-Adaptive mode requires SerenDB/MCP. If the persistence layer is unavailable, the runtime fails closed rather than falling back to local adaptive state files, runtime lock files, or local review/alert telemetry files.
+Adaptive mode requires SerenDB/MCP for live `start`, `cycle`, scheduled runs, safety checks, and reviews. Dry-run may use in-memory adaptive state when the MCP-backed persistence layer is unavailable because it places no orders and does not acquire the shared runtime lock.
 
 ## Configuration
 

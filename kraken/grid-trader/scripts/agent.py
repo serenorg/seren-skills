@@ -124,9 +124,9 @@ class KrakenGridTrader:
         self.backtest_optimization: Optional[Dict[str, Any]] = None
 
         # Initialize clients
-        api_key = os.getenv('SEREN_API_KEY')
+        api_key = _get_seren_api_key()
         if not api_key:
-            raise ValueError("SEREN_API_KEY environment variable is required")
+            raise ValueError("SEREN_API_KEY environment variable is required (or API_KEY when launched by Seren Desktop)")
 
         self.seren = SerenClient(api_key=api_key)
         self.logger = GridTraderLogger(logs_dir='logs')
@@ -148,10 +148,11 @@ class KrakenGridTrader:
             print(f"WARNING: SerenDB persistence unavailable: {exc}", file=sys.stderr)
             self.store = None
 
-        if self.adaptive_settings.get('enabled', True) and self.store is None:
+        if self.adaptive_settings.get('enabled', True) and self.store is None and not self._allow_local_adaptive_state():
             raise ValueError(
                 "Adaptive runtime requires SerenDB persistence. "
-                "Set SEREN_API_KEY and ensure seren-mcp can reach SerenDB."
+                "Set SEREN_API_KEY and ensure seren-mcp can reach SerenDB. "
+                "Dry-run mode can use local in-memory adaptive state."
             )
 
         self.adaptive_store = self._build_adaptive_store()
@@ -194,13 +195,18 @@ class KrakenGridTrader:
         persistence = None
         if self.adaptive_settings.get('enabled', True):
             if self.store is None:
-                raise ValueError("Adaptive runtime requires SerenDB persistence.")
+                if not self._allow_local_adaptive_state():
+                    raise ValueError("Adaptive runtime requires SerenDB persistence.")
+                return AdaptiveStateStore(self.adaptive_settings, persistence=None)
             if pair:
                 persistence = self.store.adaptive_runtime(
                     runtime_key=self._adaptive_runtime_key(pair),
                     lock_key=self._adaptive_lock_key(pair),
                 )
         return AdaptiveStateStore(self.adaptive_settings, persistence=persistence)
+
+    def _allow_local_adaptive_state(self) -> bool:
+        return bool(self.is_dry_run)
 
     def _refresh_adaptive_store(self) -> None:
         self.adaptive_store.save()
