@@ -179,3 +179,33 @@ def test_check_serenbucks_balance_uses_nested_funded_balance(monkeypatch) -> Non
     monkeypatch.setattr(module, "urlopen", lambda request, timeout=10: _Response())
 
     assert module._check_serenbucks_balance("test-key") == 20.33
+
+
+def test_nested_seren_gateway_payload_unwraps_to_market_list() -> None:
+    module = _load_agent_module()
+
+    assert module._unwrap_seren_response({"data": {"body": [{"id": "m1"}], "status": 200}}) == [{"id": "m1"}]
+
+
+def test_no_backtest_markets_reports_filter_diagnostics(monkeypatch) -> None:
+    module = _load_agent_module()
+
+    def _empty_load(**kwargs):
+        del kwargs
+        module._reset_backtest_load_diagnostics()
+        module.BACKTEST_LOAD_DIAGNOSTICS["raw_markets"] = 4
+        module.BACKTEST_LOAD_DIAGNOSTICS["after_liquidity_filter"] = 1
+        module.BACKTEST_LOAD_DIAGNOSTICS["after_history_filter"] = 0
+        module.BACKTEST_LOAD_DIAGNOSTICS["paired_count"] = 0
+        return [], "live-seren-publisher"
+
+    monkeypatch.setattr(module, "_load_backtest_markets", _empty_load)
+
+    output = module.run_backtest({"backtest": {"min_events": 1}}, None)
+
+    assert output["status"] == "error"
+    assert output["error_code"] == "no_backtest_markets"
+    assert output["diagnostics"]["raw_markets"] == 4
+    assert output["diagnostics"]["after_liquidity_filter"] == 1
+    assert output["diagnostics"]["after_history_filter"] == 0
+    assert output["diagnostics"]["paired_count"] == 0

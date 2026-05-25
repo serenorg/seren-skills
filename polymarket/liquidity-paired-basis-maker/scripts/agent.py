@@ -123,7 +123,7 @@ class BacktestParams:
     synthetic_orderbook_half_spread_bps: float = 18.0
     synthetic_orderbook_depth_usd: float = 125.0
     telemetry_path: str = ""
-    min_liquidity_usd: float = 5000.0
+    min_liquidity_usd: float = 500.0
     markets_fetch_page_size: int = 120
     max_markets: int = 80
     history_interval: str = "max"
@@ -321,7 +321,7 @@ def to_backtest_params(config: dict[str, Any]) -> BacktestParams:
             _safe_float(raw.get("synthetic_orderbook_depth_usd"), 125.0),
         ),
         telemetry_path=_safe_str(raw.get("telemetry_path"), ""),
-        min_liquidity_usd=max(0.0, _safe_float(raw.get("min_liquidity_usd"), 5000.0)),
+        min_liquidity_usd=max(0.0, _safe_float(raw.get("min_liquidity_usd"), 500.0)),
         markets_fetch_page_size=max(25, _safe_int(raw.get("markets_fetch_page_size"), 120)),
         max_markets=max(0, _safe_int(raw.get("max_markets"), 80)),
         history_interval=_safe_str(raw.get("history_interval"), "max"),
@@ -590,11 +590,46 @@ def _runtime_api_key() -> str:
     return ""
 
 
+BACKTEST_LOAD_DIAGNOSTICS: dict[str, Any] = {}
+
+
+def _reset_backtest_load_diagnostics() -> None:
+    global BACKTEST_LOAD_DIAGNOSTICS
+    BACKTEST_LOAD_DIAGNOSTICS = {
+        "pages": 0,
+        "raw_markets": 0,
+        "after_liquidity_filter": 0,
+        "after_resolution_filter": 0,
+        "after_token_filter": 0,
+        "after_midpoint_filter": 0,
+        "after_history_filter": 0,
+        "paired_count": 0,
+    }
+
+
+def _inc_backtest_diag(key: str, amount: int = 1) -> None:
+    BACKTEST_LOAD_DIAGNOSTICS[key] = int(BACKTEST_LOAD_DIAGNOSTICS.get(key, 0)) + amount
+
+
+def _current_backtest_load_diagnostics() -> dict[str, Any]:
+    return dict(BACKTEST_LOAD_DIAGNOSTICS)
+
+
 def _unwrap_seren_response(data: dict[str, Any] | list[Any]) -> dict[str, Any] | list[Any]:
-    """Unwrap Seren gateway response envelope {status, body, ...} -> body."""
-    if isinstance(data, dict) and "body" in data and "status" in data:
-        return data["body"]
-    return data
+    """Unwrap Seren gateway response envelopes into the upstream payload."""
+    payload: Any = data
+    for _ in range(4):
+        if not isinstance(payload, dict):
+            return payload
+        if "body" in payload and "status" in payload:
+            payload = payload["body"]
+            continue
+        nested = payload.get("data")
+        if nested is not None and nested is not payload:
+            payload = nested
+            continue
+        return payload
+    return payload
 
 
 def _http_get_json_via_api_key(url: str, api_key: str, timeout: int = 30) -> dict[str, Any] | list[Any]:
@@ -664,6 +699,7 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
     pages = 0
     while True:
         pages += 1
+        BACKTEST_LOAD_DIAGNOSTICS["pages"] = pages
         if pages > 200:
             break
         query = urlencode(
@@ -679,6 +715,7 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
         raw = _http_get_json(f"{bt.gamma_markets_url}?{query}")
         if not isinstance(raw, list) or not raw:
             break
+        _inc_backtest_diag("raw_markets", len([row for row in raw if isinstance(row, dict)]))
 
         added_on_page = 0
         for market in raw:
@@ -687,10 +724,12 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
             liquidity = _safe_float(market.get("liquidity"), 0.0)
             if liquidity < bt.min_liquidity_usd:
                 continue
+            _inc_backtest_diag("after_liquidity_filter")
 
             end_market = _parse_iso_ts(market.get("endDate")) or _safe_int(market.get("end_ts"), end_ts + 86400)
             if end_market <= start_ts + p.min_seconds_to_resolution:
                 continue
+            _inc_backtest_diag("after_resolution_filter")
 
             token_ids = _json_to_list(market.get("clobTokenIds"))
             if not token_ids:
@@ -699,6 +738,7 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
             if not token_id or token_id in seen_token_ids:
                 continue
             seen_token_ids.add(token_id)
+            _inc_backtest_diag("after_token_filter")
 
             events = _json_to_list(market.get("events"))
             event_id = ""
@@ -713,6 +753,7 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
             # Score by market-making quality for ranking
             outcome_prices = _json_to_list(market.get("outcomePrices"))
             mid_price = _safe_float(outcome_prices[0] if outcome_prices else None, 0.5)
+            _inc_backtest_diag("after_midpoint_filter")
             spread = _safe_float(market.get("spread"), 1.0)
             volume24hr = _safe_float(market.get("volume24hr"), 0.0)
             price_score = 1.0 - abs(mid_price - 0.5) * 2.0
@@ -733,14 +774,13 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
             )
             added_on_page += 1
 
-        if added_on_page == 0:
-            break
         offset += len(raw)
-        if len(raw) < bt.markets_fetch_page_size:
+        if len(raw) < bt.markets_fetch_page_size or len(candidates) >= bt.max_markets:
             break
 
     # Sort candidates by mm_score before fetching history for all of them
     candidates.sort(key=lambda c: c.get("mm_score", 0.0), reverse=True)
+    candidates = candidates[: bt.max_markets]
 
     def _fetch_candidate_history(candidate: dict[str, Any]) -> dict[str, Any] | None:
         history_limit = max(bt.min_history_points * 12, 1000)
@@ -791,6 +831,7 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
             row = future.result()
             if row:
                 with_history.append(row)
+    BACKTEST_LOAD_DIAGNOSTICS["after_history_filter"] = len(with_history)
 
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in with_history:
@@ -833,6 +874,7 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
             )
 
     if pairs:
+        BACKTEST_LOAD_DIAGNOSTICS["paired_count"] = len(pairs)
         return pairs
 
     # Fallback when event-level metadata is sparse: pair adjacent markets by liquidity.
@@ -868,6 +910,7 @@ def _fetch_live_backtest_pairs(p: StrategyParams, bt: BacktestParams, start_ts: 
             }
         )
 
+    BACKTEST_LOAD_DIAGNOSTICS["paired_count"] = len(pairs)
     return pairs
 
 
@@ -953,6 +996,7 @@ def _load_backtest_markets(
     end_ts: int,
     backtest_file: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
+    _reset_backtest_load_diagnostics()
     if backtest_file:
         fixture_path = Path(backtest_file)
         if not fixture_path.exists():
@@ -1702,6 +1746,7 @@ def run_backtest(
             "status": "error",
             "error_code": "no_backtest_markets",
             "message": "No paired historical markets were available for backtest.",
+            "diagnostics": _current_backtest_load_diagnostics(),
             "disclaimer": DISCLAIMER,
             "dry_run": True,
         }
