@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Optional, Protocol
 
 from scripts.auth.op_service_account import SalesforceCredentials
 from scripts.sf import selectors

@@ -15,6 +15,7 @@ this test suite cannot catch by design.
 
 from __future__ import annotations
 
+import typing
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,6 +24,26 @@ import pytest
 from scripts.auth import microsoft_sso
 from scripts.auth.op_service_account import SalesforceCredentials
 from scripts.sf import selectors
+
+
+# --------------------------------------------------------------------- #
+# Regression: issue #833 — F821 Optional on _drive_fresh_login          #
+# --------------------------------------------------------------------- #
+
+
+def test_drive_fresh_login_annotations_resolve():
+    """Return annotation must resolve at runtime.
+
+    `_drive_fresh_login` is annotated `-> Optional[str]` under
+    `from __future__ import annotations`. The annotation is stored as
+    a string and only evaluated when something (Pydantic, dataclasses,
+    `typing.get_type_hints`, a downstream tool) asks for the resolved
+    hints. If `Optional` is not in the module namespace, that
+    resolution raises `NameError` and the production SSO path
+    silently carries a latent F821.
+    """
+    hints = typing.get_type_hints(microsoft_sso._drive_fresh_login)
+    assert hints["return"] == typing.Optional[str]
 
 
 # --------------------------------------------------------------------- #
