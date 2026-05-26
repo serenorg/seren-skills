@@ -19,7 +19,7 @@ remains a unit-test contract.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Protocol
 
 
 # --------------------------------------------------------------------- #
