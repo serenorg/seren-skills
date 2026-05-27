@@ -3,6 +3,7 @@
 Thin wrapper around an authenticated Playwright Page. Two surfaces:
 
 * `fetch_first_lead` — list-view read for the dry-run probe.
+* `fetch_all_sources_pk_leads` — pinned PK report read for batch runs.
 * `read_project_business_unit` / `populate_is_packaging` — per-Lead
   detail-page read of the `Project Business Unit` field, which is
   the cross-division gate the Phase 4 Note-write path enforces.
@@ -19,6 +20,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Optional, Protocol
 
+from scripts.sf import build_all_sources_leads_report as all_leads_report
 from scripts.sf import selectors
 
 # Playwright's TimeoutError is what `page.wait_for_selector` raises when
@@ -147,6 +149,15 @@ _LIST_LOAD_TIMEOUT_MS = 30_000
 # the highlights/key-fields panel asynchronously.
 _DETAIL_LOAD_TIMEOUT_MS = 30_000
 
+# Report viewer hydrates through Lightning/Aura and is slower than the
+# stock list view. Match the pinned-artifact validator's timeout.
+_REPORT_LOAD_TIMEOUT_MS = 45_000
+
+# The top-level report page usually has no row links; the data lives in
+# a Lightning report iframe. Probe the top page briefly, then spend the
+# real wait budget on frame scopes.
+_REPORT_TOP_PAGE_PROBE_TIMEOUT_MS = 1_000
+
 
 def _record_id_from_href(href: str) -> str:
     """Extract the Salesforce record id from a Lightning record URL.
@@ -196,6 +207,99 @@ def _build_lead_detail_url(salesforce_org_url: str, record_id: str) -> str:
     return f"{base}{path}"
 
 
+def _lead_rows_from_record_links(
+    *,
+    links: list[_Locator],
+    source_url: str,
+    limit: int,
+    source_label: str,
+) -> list[LeadRow]:
+    """Extract readable Lead rows from Lightning record anchors."""
+
+    rows: list[LeadRow] = []
+    seen_record_ids: set[str] = set()
+    placeholder_rows = 0
+    missing_href = 0
+    blank_text = 0
+    non_lead_rows = 0
+    for link in links:
+        if len(rows) >= limit:
+            break
+        href = link.get_attribute("href")
+        if not href:
+            missing_href += 1
+            continue
+        name = link.inner_text().strip()
+        if not name:
+            blank_text += 1
+            continue
+        if _LIGHTNING_NO_VALUE_PATTERN.match(name):
+            placeholder_rows += 1
+            continue
+        record_id = _record_id_from_href(href)
+        # The same broad anchor selector can match Owner/User links.
+        # Filter to Lead ObjectPrefix `00Q` before downstream enrichment.
+        if not record_id.startswith("00Q"):
+            non_lead_rows += 1
+            continue
+        if record_id in seen_record_ids:
+            continue
+        seen_record_ids.add(record_id)
+        rows.append(
+            LeadRow(
+                record_id=record_id,
+                name=name,
+                source_url=source_url,
+            )
+        )
+
+    if not rows:
+        raise ZeroLeadsFoundError(
+            f"No Lead row with a readable name found in the {source_label} "
+            f"(rows scanned={len(links)}, "
+            f"missing href={missing_href}, "
+            f"blank text={blank_text}, "
+            f"Lightning placeholder `[[…]]`={placeholder_rows}, "
+            f"non-Lead record (`005`/etc.)={non_lead_rows}). "
+            "If placeholder count is non-zero, the running SSO user likely "
+            "lacks field-level read access to Lead.Name or the source data "
+            "contains placeholder values — escalate to the Salesforce admin."
+        )
+    return rows
+
+
+def _collect_report_record_links(page: _Page) -> list[_Locator]:
+    """Collect report record anchors from the page and report frames."""
+
+    try:
+        page.wait_for_selector(
+            selectors.SF_REPORT_VIEWER_IFRAME,
+            timeout=_REPORT_LOAD_TIMEOUT_MS,
+        )
+    except _PlaywrightTimeoutError:
+        # Some orgs may render report rows directly in the top page.
+        # Keep going and probe whatever scopes are available.
+        pass
+
+    scopes = [page, *list(getattr(page, "frames", []))]
+    links: list[_Locator] = []
+    for idx, scope in enumerate(scopes):
+        timeout = (
+            _REPORT_TOP_PAGE_PROBE_TIMEOUT_MS
+            if idx == 0
+            else _REPORT_LOAD_TIMEOUT_MS
+        )
+        try:
+            scope.wait_for_selector(
+                selectors.SF_REPORT_RECORD_LINK,
+                timeout=timeout,
+            )
+        except _PlaywrightTimeoutError:
+            continue
+        links.extend(scope.locator(selectors.SF_REPORT_RECORD_LINK).all())
+    return links
+
+
 # --------------------------------------------------------------------- #
 # Public surface                                                        #
 # --------------------------------------------------------------------- #
@@ -235,55 +339,52 @@ def fetch_open_leads(
         f"{selectors.SF_LEAD_LIST_FIRST_ROW} {selectors.SF_LEAD_ROW_NAME_LINK}"
     ).all()
 
-    rows: list[LeadRow] = []
-    placeholder_rows = 0
-    missing_href = 0
-    blank_text = 0
-    non_lead_rows = 0
-    for link in links:
-        if len(rows) >= limit:
-            break
-        href = link.get_attribute("href")
-        if not href:
-            missing_href += 1
-            continue
-        name = link.inner_text().strip()
-        if not name:
-            blank_text += 1
-            continue
-        if _LIGHTNING_NO_VALUE_PATTERN.match(name):
-            placeholder_rows += 1
-            continue
-        record_id = _record_id_from_href(href)
-        # The combined `LIST_FIRST_ROW + ROW_NAME_LINK` selector also
-        # matches the Lead Owner avatar anchor (a User reference, prefix
-        # `005`). Filter to the Lead ObjectPrefix `00Q` — a documented
-        # Salesforce invariant — so batch mode doesn't pipe User
-        # profiles into the Perplexity / Claude pipeline. Issue #774.
-        if not record_id.startswith("00Q"):
-            non_lead_rows += 1
-            continue
-        rows.append(
-            LeadRow(
-                record_id=record_id,
-                name=name,
-                source_url=list_url,
-            )
+    return _lead_rows_from_record_links(
+        links=links,
+        source_url=list_url,
+        limit=limit,
+        source_label="list view",
+    )
+
+
+def fetch_all_sources_pk_leads(
+    *,
+    page: _Page,
+    limit: int,
+) -> list[LeadRow]:
+    """Read up to `limit` Leads from the pinned All Sources PK Leads report.
+
+    The report is operator-owned and filtered in Salesforce for
+    `Project Business Unit = PACKAGING`. Live batch still performs a
+    per-Lead detail-page PK gate before writing Notes; this source just
+    prevents the cron from spending research/model budget on the generic
+    AllOpenLeads list view. Issue #838.
+    """
+
+    if limit < 1:
+        raise ValueError(f"limit must be >= 1, got {limit}")
+
+    report_url = all_leads_report.PINNED_REPORT_URL
+    page.goto(report_url, timeout=_REPORT_LOAD_TIMEOUT_MS)
+    links = _collect_report_record_links(page)
+    if not links:
+        raise ZeroLeadsFoundError(
+            "No Lead row with a readable name found in the "
+            "All Sources PK Leads report (rows scanned=0, "
+            "missing href=0, blank text=0, "
+            "Lightning placeholder `[[…]]`=0, "
+            "non-Lead record (`005`/etc.)=0). "
+            "If this report should contain PK Leads, confirm the pinned "
+            "report still loads and exposes Lead Name links to the running "
+            "Salesforce user."
         )
 
-    if not rows:
-        raise ZeroLeadsFoundError(
-            "No Lead row with a readable name found in the list view "
-            f"(rows scanned={len(links)}, "
-            f"missing href={missing_href}, "
-            f"blank text={blank_text}, "
-            f"Lightning placeholder `[[…]]`={placeholder_rows}, "
-            f"non-Lead record (`005`/etc.)={non_lead_rows}). "
-            "If placeholder count is non-zero, the running SSO user likely "
-            "lacks field-level read access to Lead.Name or the source data "
-            "contains placeholder values — escalate to the Salesforce admin."
-        )
-    return rows
+    return _lead_rows_from_record_links(
+        links=links,
+        source_url=report_url,
+        limit=limit,
+        source_label="All Sources PK Leads report",
+    )
 
 
 def fetch_first_lead(

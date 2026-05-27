@@ -358,14 +358,14 @@ def _run_batch_fetch(
     op_item: str,
     limit: int,
 ) -> list[sf_client.LeadRow]:
-    """Drive the op → SSO → list-N-leads flow once.
+    """Drive the op → SSO → PK-report-N-leads flow once.
 
     Mirrors `_run_dry_run`'s Playwright lifecycle but returns up to
-    `limit` rows from the AllOpenLeads list view instead of stopping at
-    one. Used by `--batch`. Enrichment and (optional) live-write run
-    against the returned list in `main` — this function deliberately
-    does no per-lead work so the browser closes before any Perplexity
-    or Claude call fires.
+    `limit` rows from the pinned All Sources PK Leads report instead
+    of the generic AllOpenLeads list view. Used by `--batch --dry-run`.
+    Enrichment runs against the returned list in `main` — this function
+    deliberately does no per-lead work so the browser closes before any
+    Perplexity or Claude call fires.
     """
 
     creds = op_service_account.read_salesforce_credentials(
@@ -388,15 +388,25 @@ def _run_batch_fetch(
                     creds=creds,
                     storage_path=storage_path,
                 )
-                return sf_client.fetch_open_leads(
+                return sf_client.fetch_all_sources_pk_leads(
                     page=result.page,
-                    salesforce_org_url=salesforce_org_url,
                     limit=limit,
                 )
             finally:
                 context.close()
         finally:
             browser.close()
+
+
+def _fetch_live_batch_candidates(
+    *,
+    page,
+    salesforce_org_url: str,
+    limit: int,
+) -> list[sf_client.LeadRow]:
+    """Fetch the live batch candidate set from the PK-filtered source."""
+
+    return sf_client.fetch_all_sources_pk_leads(page=page, limit=limit)
 
 
 @dataclass(frozen=True)
@@ -426,7 +436,7 @@ def _iterate_batch_writes(
     pause_between_notes_seconds: int,
     sleep_fn=time.sleep,
 ):
-    """Per-lead enrich → populate_is_packaging → write-Note loop.
+    """Per-lead populate_is_packaging → enrich → write-Note loop.
 
     Pulled out of `_run_batch_live` so the throttle behavior is
     testable without standing up Playwright. The Playwright lifecycle
@@ -462,8 +472,17 @@ def _iterate_batch_writes(
 
     for idx, lead in enumerate(leads, 1):
         try:
-            enrichment = _run_enrichment(
+            populated_lead = sf_client.populate_is_packaging(
+                page=page,
                 lead=lead,
+                salesforce_org_url=salesforce_org_url,
+            )
+            if not enrich_lead.is_packaging_lead(populated_lead):
+                counters["notes_skipped_non_pk"] += 1
+                continue
+
+            enrichment = _run_enrichment(
+                lead=populated_lead,
                 output_dir=output_dir,
                 linkedin_scrape=scrape_fn,
                 linkedin_scrape_min_confidence=(
@@ -477,12 +496,6 @@ def _iterate_batch_writes(
                     counters["linkedin_profiles_scraped"] += 1
                 else:
                     counters["linkedin_signed_out"] += 1
-
-            populated_lead = sf_client.populate_is_packaging(
-                page=page,
-                lead=lead,
-                salesforce_org_url=salesforce_org_url,
-            )
 
             write_result = write_note.write_note_to_lead(
                 page=page,
@@ -580,7 +593,7 @@ def _run_batch_live(
 
                 # ZeroLeadsFoundError propagates to the caller, which
                 # renders the operator-readable empty-list summary.
-                leads = sf_client.fetch_open_leads(
+                leads = _fetch_live_batch_candidates(
                     page=page,
                     salesforce_org_url=salesforce_org_url,
                     limit=limit,

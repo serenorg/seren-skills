@@ -133,6 +133,7 @@ class FakePage:
     locator_for: dict[str, FakeLocator] = field(default_factory=dict)
     call_log: list[tuple[str, tuple]] = field(default_factory=list)
     url: str = ""
+    frames: list["FakePage"] = field(default_factory=list)
     # Per-selector exception map: when `wait_for_selector(sel)` is
     # called and `sel` is a key here, raise the stored exception.
     # Lets tests model Playwright's `TimeoutError` for selectors that
@@ -309,6 +310,79 @@ def test_fetch_open_leads_filters_non_lead_record_ids():
     )
 
     assert [r.record_id for r in rows] == ["00Q5g00000XYZAbc", "00Q5g00000ABCdef"]
+
+
+def test_fetch_all_sources_pk_leads_uses_pinned_report_and_filters_lead_links():
+    """The PK batch source is the pinned report, not AllOpenLeads."""
+
+    from scripts.sf import build_all_sources_leads_report as all_leads_report
+
+    page = FakePage(
+        locator_for={
+            selectors.SF_REPORT_RECORD_LINK: FakeRowList(
+                rows=[
+                    (FakeLocator(
+                        href="/lightning/r/Lead/00Q5g00000XYZAbc/view",
+                        text="PK Lead",
+                    )),
+                    (FakeLocator(
+                        href="/lightning/r/005S700000ClEZ3IAN/view",
+                        text="Lead Owner",
+                    )),
+                    (FakeLocator(
+                        href="/lightning/r/Lead/00Q5g00000ABCdef/view",
+                        text="Second PK Lead",
+                    )),
+                ]
+            )
+        }
+    )
+
+    rows = sf_client.fetch_all_sources_pk_leads(page=page, limit=10)
+
+    assert page.call_log[0] == ("goto", (all_leads_report.PINNED_REPORT_URL,))
+    assert [r.record_id for r in rows] == ["00Q5g00000XYZAbc", "00Q5g00000ABCdef"]
+    assert all(r.source_url == all_leads_report.PINNED_REPORT_URL for r in rows)
+
+
+def test_fetch_all_sources_pk_leads_reads_report_iframe_links():
+    """Lightning report rows render inside the report app iframe."""
+
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    from scripts.sf import build_all_sources_leads_report as all_leads_report
+
+    frame = FakePage(
+        locator_for={
+            selectors.SF_REPORT_RECORD_LINK: FakeRowList(
+                rows=[
+                    FakeLocator(
+                        href="/lightning/r/Lead/00Q5g00000XYZAbc/view",
+                        text="PK Lead",
+                    )
+                ]
+            )
+        },
+        url=(
+            "https://acme.lightning.force.com/reports/"
+            "lightningReportApp.app?reportId=00OS700000IzEBlMAN"
+        ),
+    )
+    page = FakePage(
+        locator_for={
+            selectors.SF_REPORT_RECORD_LINK: FakeRowList(rows=[]),
+        },
+        frames=[frame],
+        wait_for_selector_raises_for={
+            selectors.SF_REPORT_RECORD_LINK: PlaywrightTimeoutError(
+                "Page.wait_for_selector: Timeout 45000ms exceeded."
+            )
+        },
+    )
+
+    rows = sf_client.fetch_all_sources_pk_leads(page=page, limit=10)
+
+    assert page.call_log[0] == ("goto", (all_leads_report.PINNED_REPORT_URL,))
+    assert [r.record_id for r in rows] == ["00Q5g00000XYZAbc"]
 
 
 # --------------------------------------------------------------------- #

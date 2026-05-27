@@ -589,8 +589,8 @@ def test_batch_zero_leads_renders_summary_not_traceback(
 ):
     """Empty list view must render a structured summary, not a stack trace.
 
-    Operator scenario: AllOpenLeads loads but every row is a Lightning
-    placeholder (FLS gap on Lead.Name). fetch_open_leads raises
+    Operator scenario: the batch source loads but every row is a Lightning
+    placeholder (FLS gap on Lead.Name). The source reader raises
     ZeroLeadsFoundError. main() must catch, print a LEAD LIST IS EMPTY
     block with the diagnostic message, print the cron-parseable summary
     with leads_evaluated=0 leads_failed=0, and return 0. A Python
@@ -755,9 +755,105 @@ def test_batch_live_dispatches_to_single_session_runner(
     assert len(batch_fetch_called) == 1
 
 
+def test_live_batch_candidate_source_uses_pk_report_not_all_open_leads(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Live batch candidates must come from the pinned PK report.
+
+    Issue #838: `--batch --allow-live` was sourcing the generic
+    AllOpenLeads list view, then paying enrichment cost for non-PK rows
+    that the write gate later rejected. The production live candidate
+    seam must use the PK-filtered All Sources PK Leads report instead.
+    """
+
+    calls: list[str] = []
+    expected = [_fake_lead("00Q000000000001", "PK Lead")]
+
+    def fake_pk_report_fetch(**_kwargs):
+        calls.append("pk_report")
+        return expected
+
+    def fail_open_leads(**_kwargs):
+        raise AssertionError("live batch must not source AllOpenLeads")
+
+    monkeypatch.setattr(
+        agent.sf_client, "fetch_all_sources_pk_leads", fake_pk_report_fetch
+    )
+    monkeypatch.setattr(agent.sf_client, "fetch_open_leads", fail_open_leads)
+
+    result = agent._fetch_live_batch_candidates(
+        page=object(),
+        salesforce_org_url="https://acme.lightning.force.com",
+        limit=10,
+    )
+
+    assert result == expected
+    assert calls == ["pk_report"]
+
+
 # --------------------------------------------------------------------- #
 # ContentNote throttle (issue #783)                                     #
 # --------------------------------------------------------------------- #
+
+
+def test_iterate_batch_writes_skips_non_pk_before_enrichment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Non-PK rows must not trigger Perplexity/Claude/docx work.
+
+    The live write gate already prevented bad Salesforce Notes. The bug
+    in #838 was earlier in the flow: batch mode enriched non-PK rows
+    before discovering they were not Packaging. The PK detail-page gate
+    must run first so non-PK candidates are cheap skips.
+    """
+
+    from dataclasses import replace
+
+    from scripts.sf import client as sf_client
+    from scripts.sf import write_note
+
+    non_pk = _fake_lead("00Q000000000001", "Non PK")
+    pk = _fake_lead("00Q000000000002", "PK")
+    enrich_calls: list[str] = []
+    write_calls: list[str] = []
+
+    def fake_populate(**kwargs):
+        lead = kwargs["lead"]
+        return replace(lead, is_packaging=(lead.record_id == pk.record_id))
+
+    def fake_enrichment(**kwargs):
+        lead = kwargs["lead"]
+        enrich_calls.append(lead.record_id)
+        return _fake_enrichment(tmp_path)
+
+    def fake_write(**kwargs):
+        write_calls.append(kwargs["options"].lead.record_id)
+        return write_note.NoteWriteResult(
+            status="written", last_enriched_at="2026-05-21T10:30:00Z"
+        )
+
+    monkeypatch.setattr(sf_client, "populate_is_packaging", fake_populate)
+    monkeypatch.setattr(agent, "_run_enrichment", fake_enrichment)
+    monkeypatch.setattr(write_note, "write_note_to_lead", fake_write)
+
+    counters, failures = agent._iterate_batch_writes(
+        leads=[non_pk, pk],
+        page=object(),
+        salesforce_org_url="https://acme.lightning.force.com",
+        output_dir=tmp_path,
+        ledger=object(),
+        scrape_fn=None,
+        linkedin_scrape_min_confidence=70,
+        pause_between_notes_seconds=90,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert failures == []
+    assert enrich_calls == [pk.record_id]
+    assert write_calls == [pk.record_id]
+    assert counters["notes_skipped_non_pk"] == 1
+    assert counters["notes_written"] == 1
+    assert counters["docx_written"] == 1
 
 
 def test_iterate_batch_writes_sleeps_pause_seconds_only_between_writes(
@@ -784,6 +880,8 @@ def test_iterate_batch_writes_sleeps_pause_seconds_only_between_writes(
     record calls without actually blocking.
     """
 
+    from dataclasses import replace
+
     from scripts.sf import client as sf_client
     from scripts.sf import write_note
 
@@ -797,7 +895,7 @@ def test_iterate_batch_writes_sleeps_pause_seconds_only_between_writes(
     monkeypatch.setattr(
         sf_client,
         "populate_is_packaging",
-        lambda **k: k["lead"],
+        lambda **k: replace(k["lead"], is_packaging=True),
     )
 
     # -- Scenario A: every write returns `written` -------------------- #

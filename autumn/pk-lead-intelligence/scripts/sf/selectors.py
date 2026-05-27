@@ -105,6 +105,18 @@ SF_LEAD_LIST_FIRST_ROW = (
 SF_LEAD_ROW_NAME_LINK = 'a[href^="/lightning/r/"][href$="/view"]'
 
 
+# Report viewer links to the record detail pages for cells such as Lead
+# Name and Owner. Client code filters the matched anchors down to Lead
+# ObjectPrefix `00Q`; the selector deliberately remains broad enough to
+# tolerate both `/lightning/r/Lead/<id>/view` and HU's modern
+# `/lightning/r/<id>/view` shape.
+SF_REPORT_RECORD_LINK = 'a[href^="/lightning/r/"][href$="/view"]'
+
+# Lightning report data hydrates inside this report-app iframe in HU.
+# We wait for the frame before scanning both top-page and frame scopes.
+SF_REPORT_VIEWER_IFRAME = 'iframe[src*="lightningReportApp.app"]'
+
+
 # --------------------------------------------------------------------- #
 # Lead detail page — Project Business Unit read (cross-division gate)    #
 # --------------------------------------------------------------------- #
