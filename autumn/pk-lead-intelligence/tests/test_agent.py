@@ -519,6 +519,75 @@ def test_run_dry_run_uses_pk_report_gate_not_generic_first_lead(
     }
 
 
+def test_run_dry_run_defers_credential_read_to_authenticate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    """Valid storage reuse must not be blocked by an eager `op` read."""
+
+    fake_page = object()
+    fake_lead = _fake_lead("00Q000000000002", "Packaging Lead")
+
+    class FakeContext:
+        def close(self):
+            pass
+
+    class FakeBrowser:
+        def new_context(self, **_kwargs):
+            return FakeContext()
+
+        def close(self):
+            pass
+
+    class FakeChromium:
+        def launch(self, *, headless):
+            assert headless is True
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+    class FakeSyncPlaywright:
+        def __enter__(self):
+            return FakePlaywright()
+
+        def __exit__(self, *_args):
+            return None
+
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: FakeSyncPlaywright()
+    monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+
+    monkeypatch.setattr(
+        agent.op_service_account,
+        "read_salesforce_credentials",
+        lambda **_k: (_ for _ in ()).throw(
+            AssertionError("credential read must be lazy")
+        ),
+    )
+
+    def fake_authenticate(**kwargs):
+        assert callable(kwargs["creds"])
+        return types.SimpleNamespace(page=fake_page)
+
+    monkeypatch.setattr(agent.microsoft_sso, "authenticate", fake_authenticate)
+    monkeypatch.setattr(
+        agent, "_select_packaging_leads_from_report", lambda **_k: [fake_lead]
+    )
+
+    result = agent._run_dry_run(
+        salesforce_org_url="https://acme.lightning.force.com",
+        storage_path=tmp_path / "missing-storage.json",
+        headless=True,
+        op_vault="vault",
+        op_item="item",
+        candidate_limit=7,
+    )
+
+    assert result is fake_lead
+
+
 def test_main_single_dry_run_renders_summary_when_no_pk_candidate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

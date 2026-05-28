@@ -21,6 +21,7 @@ to a Salesforce record without spinning up a second context.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol
@@ -42,6 +43,10 @@ DEFAULT_SSO_DISCOVERY_PATH = Path("state/sso_discovery.json")
 # bootstrap, which routinely takes 8–12 seconds even on a fast network.
 DEFAULT_NAVIGATION_TIMEOUT_MS = 30_000
 DEFAULT_SELECTOR_TIMEOUT_MS = 15_000
+
+SalesforceCredentialsProvider = (
+    SalesforceCredentials | Callable[[], SalesforceCredentials]
+)
 
 
 # --------------------------------------------------------------------- #
@@ -132,6 +137,16 @@ def _persist_sso_discovery(
     discovery_path.write_text(
         json.dumps({"microsoft_tenant_url": microsoft_tenant_url}, indent=2)
     )
+
+
+def _resolve_credentials(
+    creds: SalesforceCredentialsProvider,
+) -> SalesforceCredentials:
+    """Resolve a concrete credentials object only when fresh login needs it."""
+
+    if callable(creds):
+        return creds()
+    return creds
 
 
 # --------------------------------------------------------------------- #
@@ -275,7 +290,7 @@ def authenticate(
     *,
     context: _Context,
     salesforce_org_url: str,
-    creds: SalesforceCredentials,
+    creds: SalesforceCredentialsProvider,
     storage_path: Path = DEFAULT_STORAGE_PATH,
     discovery_path: Path = DEFAULT_SSO_DISCOVERY_PATH,
 ) -> AuthenticationResult:
@@ -311,11 +326,13 @@ def authenticate(
             microsoft_tenant_url=None,
         )
 
-    # Fresh login path.
+    # Fresh login path. Resolve credentials only after storage reuse
+    # fails; a valid storage_state should not be blocked by 1Password.
+    resolved_creds = _resolve_credentials(creds)
     microsoft_tenant_url = _drive_fresh_login(
         page=page,
         salesforce_org_url=salesforce_org_url,
-        creds=creds,
+        creds=resolved_creds,
         discovery_path=discovery_path,
     )
 
