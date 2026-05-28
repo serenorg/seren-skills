@@ -73,6 +73,7 @@ from typing import Optional  # noqa: E402
 from scripts.auth import microsoft_sso  # noqa: E402
 from scripts.auth import op_service_account  # noqa: E402
 from scripts.integrations import google_drive  # noqa: E402
+from scripts.output import batch_progress  # noqa: E402
 from scripts.output import weekly_status  # noqa: E402
 from scripts.research import claude_angles  # noqa: E402
 from scripts.research import linkedin_search  # noqa: E402
@@ -536,6 +537,7 @@ def _iterate_batch_writes(
     linkedin_scrape_min_confidence: int,
     pause_between_notes_seconds: int,
     sleep_fn=time.sleep,
+    progress=batch_progress.NULL,
 ):
     """Per-lead populate_is_packaging → enrich → write-Note loop.
 
@@ -572,6 +574,9 @@ def _iterate_batch_writes(
     total = len(leads)
 
     for idx, lead in enumerate(leads, 1):
+        progress.lead_start(
+            idx=idx, total=total, record_id=lead.record_id, name=lead.name
+        )
         try:
             populated_lead = sf_client.populate_is_packaging(
                 page=page,
@@ -580,6 +585,13 @@ def _iterate_batch_writes(
             )
             if not enrich_lead.is_packaging_lead(populated_lead):
                 counters["notes_skipped_non_pk"] += 1
+                progress.lead_done(
+                    idx=idx,
+                    total=total,
+                    record_id=lead.record_id,
+                    name=lead.name,
+                    status="skipped_non_pk",
+                )
                 continue
 
             enrichment = _run_enrichment(
@@ -611,23 +623,52 @@ def _iterate_batch_writes(
             )
             if write_result.status == "written":
                 counters["notes_written"] += 1
+                progress.lead_done(
+                    idx=idx,
+                    total=total,
+                    record_id=lead.record_id,
+                    name=lead.name,
+                    status="written",
+                )
                 # Issue #783 — pause to respect the ContentNote
                 # throttle, but only between writes. The last Lead
                 # in the batch never gets a trailing sleep (the
                 # cron tick ends, nothing else hits the throttle).
                 if idx < total and pause_between_notes_seconds > 0:
+                    progress.pause(
+                        idx=idx,
+                        total=total,
+                        seconds=pause_between_notes_seconds,
+                    )
                     sleep_fn(pause_between_notes_seconds)
             elif write_result.status == "skipped_non_pk":
                 counters["notes_skipped_non_pk"] += 1
+                progress.lead_done(
+                    idx=idx,
+                    total=total,
+                    record_id=lead.record_id,
+                    name=lead.name,
+                    status="skipped_non_pk",
+                )
             elif write_result.status == "skipped_recent":
                 counters["notes_skipped_recent"] += 1
+                progress.lead_done(
+                    idx=idx,
+                    total=total,
+                    record_id=lead.record_id,
+                    name=lead.name,
+                    status="skipped_recent",
+                )
         except Exception as exc:  # noqa: BLE001
             counters["leads_failed"] += 1
             failures.append({"idx": idx, "lead": lead, "exc": exc})
-            print(
-                f"[{idx}/{total}] FAILED "
-                f"{lead.record_id} {lead.name}: {exc}",
-                file=sys.stderr,
+            progress.lead_done(
+                idx=idx,
+                total=total,
+                record_id=lead.record_id,
+                name=lead.name,
+                status="failed",
+                detail=str(exc),
             )
 
     return counters, failures
@@ -646,6 +687,7 @@ def _run_batch_live(
     linkedin_scraping_enabled: bool = False,
     linkedin_scrape_min_confidence: int = 70,
     pause_between_notes_seconds: int = 90,
+    progress=batch_progress.NULL,
 ) -> _BatchLiveResult:  # pragma: no cover
     """Drive `--batch --allow-live` in ONE Playwright session. Issue #776.
 
@@ -697,8 +739,10 @@ def _run_batch_live(
                     salesforce_org_url=salesforce_org_url,
                     limit=limit,
                 )
-                # Echo for parity with the dry-run path.
-                print(f"batch_fetch: leads={len(leads)} cap={limit}")
+                # Echo for parity with the dry-run path. Flushed so the
+                # first sign of life reaches a redirected log immediately
+                # rather than block-buffering until exit (issue #850).
+                print(f"batch_fetch: leads={len(leads)} cap={limit}", flush=True)
 
                 # Build the LinkedIn scrape closure once. The closure
                 # captures the shared Page so each enrichment in the
@@ -728,6 +772,7 @@ def _run_batch_live(
                     pause_between_notes_seconds=(
                         pause_between_notes_seconds
                     ),
+                    progress=progress,
                 )
 
                 return _BatchLiveResult(
@@ -1291,6 +1336,20 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.batch:
+        # Issue #850 — a batch cycle runs minutes (the ContentNote
+        # throttle times every Lead). Build a progress sink that streams
+        # a flushed per-Lead line to stderr AND appends an incremental
+        # JSONL run-log under state/runs, so the run is observable live
+        # and a run killed mid-cycle still records every Lead touched.
+        run_started = datetime.now(tz=timezone.utc)
+        progress = batch_progress.BatchProgress(
+            jsonl_path=(
+                args.state_dir
+                / "runs"
+                / f"batch_progress_{run_started.strftime('%Y%m%d_%H%M%S')}.jsonl"
+            )
+        )
+
         # Bug 3 (issue #776): catch ZeroLeadsFoundError at the dispatch
         # boundary so the FLS-gap / empty-list case prints the
         # cron-parseable summary instead of a Python traceback. Bug 4
@@ -1315,6 +1374,7 @@ def main(argv: list[str] | None = None) -> int:
                     pause_between_notes_seconds=(
                         pause_between_notes_seconds
                     ),
+                    progress=progress,
                 )
                 leads_evaluated = live_result.leads_evaluated
                 counters = live_result.counters
@@ -1328,7 +1388,10 @@ def main(argv: list[str] | None = None) -> int:
                     op_item=op_item,
                     limit=args.max_leads,
                 )
-                print(f"batch_fetch: leads={len(leads)} cap={args.max_leads}")
+                print(
+                    f"batch_fetch: leads={len(leads)} cap={args.max_leads}",
+                    flush=True,
+                )
 
                 counters = {
                     "notes_written": 0,
@@ -1338,27 +1401,44 @@ def main(argv: list[str] | None = None) -> int:
                     "leads_failed": 0,
                 }
                 # Collect per-lead failures for the FAILED LEADS block
-                # on stdout (issue #774). stderr still gets the per-line
-                # print for log-collection symmetry — it's free and
-                # machine-readable.
+                # on stdout (issue #774). Per-lead progress (start +
+                # terminal status) streams to stderr and the JSONL log
+                # via `progress` (issue #850).
                 failures = []
+                total = len(leads)
 
                 for idx, lead in enumerate(leads, 1):
+                    progress.lead_start(
+                        idx=idx,
+                        total=total,
+                        record_id=lead.record_id,
+                        name=lead.name,
+                    )
                     try:
                         enrichment = _run_enrichment(
                             lead=lead, output_dir=args.output_dir
                         )
                         if enrichment.docx_path:
                             counters["docx_written"] += 1
+                        progress.lead_done(
+                            idx=idx,
+                            total=total,
+                            record_id=lead.record_id,
+                            name=lead.name,
+                            status="enriched",
+                        )
                     except Exception as exc:  # noqa: BLE001
                         counters["leads_failed"] += 1
                         failures.append(
                             {"idx": idx, "lead": lead, "exc": exc}
                         )
-                        print(
-                            f"[{idx}/{len(leads)}] FAILED "
-                            f"{lead.record_id} {lead.name}: {exc}",
-                            file=sys.stderr,
+                        progress.lead_done(
+                            idx=idx,
+                            total=total,
+                            record_id=lead.record_id,
+                            name=lead.name,
+                            status="failed",
+                            detail=str(exc),
                         )
 
                 leads_evaluated = len(leads)
