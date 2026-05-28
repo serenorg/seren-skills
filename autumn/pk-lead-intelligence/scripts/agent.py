@@ -293,6 +293,23 @@ def _build_parser() -> argparse.ArgumentParser:
 # --------------------------------------------------------------------- #
 
 
+def _salesforce_credentials_provider(*, op_vault: str, op_item: str):
+    """Build a lazy credentials reader for Microsoft SSO.
+
+    `microsoft_sso.authenticate` tries Playwright storage reuse before
+    fresh login. Returning a provider instead of concrete credentials
+    prevents valid saved sessions from blocking on 1Password.
+    """
+
+    def _read_credentials():
+        return op_service_account.read_salesforce_credentials(
+            vault=op_vault,
+            item=op_item,
+        )
+
+    return _read_credentials
+
+
 def _run_dry_run(
     *,
     salesforce_org_url: str,
@@ -315,9 +332,7 @@ def _run_dry_run(
     publisher call runs.
     """
 
-    creds = op_service_account.read_salesforce_credentials(
-        vault=op_vault, item=op_item
-    )
+    creds = _salesforce_credentials_provider(op_vault=op_vault, op_item=op_item)
 
     # Import inside the function so unit tests can stub the module
     # without needing Playwright installed in the test environment.
@@ -408,9 +423,7 @@ def _run_batch_fetch(
     browser closes before any Perplexity or Claude call fires.
     """
 
-    creds = op_service_account.read_salesforce_credentials(
-        vault=op_vault, item=op_item
-    )
+    creds = _salesforce_credentials_provider(op_vault=op_vault, op_item=op_item)
 
     from playwright.sync_api import sync_playwright  # noqa: PLC0415
 
@@ -610,9 +623,7 @@ def _run_batch_live(
     `--batch --allow-live` → `_run_batch_live` contract test.
     """
 
-    creds = op_service_account.read_salesforce_credentials(
-        vault=op_vault, item=op_item
-    )
+    creds = _salesforce_credentials_provider(op_vault=op_vault, op_item=op_item)
 
     from playwright.sync_api import sync_playwright  # noqa: PLC0415
 
@@ -724,9 +735,7 @@ def _run_provision(
     seam to assert the CLI print contract.
     """
 
-    creds = op_service_account.read_salesforce_credentials(
-        vault=op_vault, item=op_item
-    )
+    creds = _salesforce_credentials_provider(op_vault=op_vault, op_item=op_item)
 
     # Lazy import — same reasoning as `_run_dry_run`.
     from playwright.sync_api import sync_playwright  # noqa: PLC0415
@@ -909,9 +918,7 @@ def _run_live_note_write(
     Phase 4 operator checkpoint. Tests monkeypatch this seam.
     """
 
-    creds = op_service_account.read_salesforce_credentials(
-        vault=op_vault, item=op_item
-    )
+    creds = _salesforce_credentials_provider(op_vault=op_vault, op_item=op_item)
 
     from playwright.sync_api import sync_playwright  # noqa: PLC0415
 

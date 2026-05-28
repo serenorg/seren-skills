@@ -237,6 +237,40 @@ def test_fresh_login_fills_email_password_and_totp_in_order(
     ]
 
 
+def test_fresh_login_resolves_lazy_credential_provider(
+    creds, storage_path, discovery_path
+):
+    """Fresh login still reads credentials when storage reuse fails."""
+
+    calls = 0
+
+    def creds_provider() -> SalesforceCredentials:
+        nonlocal calls
+        calls += 1
+        return creds
+
+    page = FakePage(
+        wait_for_url_returns=["https://login.microsoftonline.com/tenant/oauth2/authorize"],
+    )
+    context = FakeContext(page=page)
+
+    microsoft_sso.authenticate(
+        context=context,
+        salesforce_org_url="https://acme.lightning.force.com",
+        creds=creds_provider,
+        storage_path=storage_path,
+        discovery_path=discovery_path,
+    )
+
+    assert calls == 1
+    fills = [call for call in page.call_log if call[0] == "fill"]
+    assert [call[1][1] for call in fills] == [
+        creds.username,
+        creds.password,
+        creds.totp_code,
+    ]
+
+
 def test_fresh_login_captures_microsoft_tenant_url(
     creds, storage_path, discovery_path
 ):
