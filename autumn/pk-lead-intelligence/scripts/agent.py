@@ -87,8 +87,48 @@ from scripts.storage import enrichment_ledger  # noqa: E402
 
 
 # --------------------------------------------------------------------- #
-# Config loading                                                        #
+# Config + .env location (issue #848)                                   #
 # --------------------------------------------------------------------- #
+
+# Stable, launch-independent user-config dir. Deliberately a *sibling*
+# of the synced skill bundle (`~/.config/seren/skills/...`), not inside
+# it: the bundle is rewritten on every skill re-sync, which would wipe
+# an operator's `config.json` / `.env`. This dir is never managed by
+# the sync, so config placed here survives updates.
+_STABLE_CONFIG_DIR = Path.home() / ".config" / "seren" / "pk-lead-intelligence"
+
+
+def _config_search_dirs() -> list[Path]:
+    """Directories searched (in order) for `config.json` and `.env`
+    when no explicit `--config` is given.
+
+    Precedence: the stable user-config dir (survives skill re-sync) →
+    the skill root (the repo working copy) → the current working
+    directory (back-compat for the old cwd-relative behaviour).
+    """
+
+    return [_STABLE_CONFIG_DIR, Path(_SKILL_ROOT), Path.cwd()]
+
+
+def _resolve_config_path(cli_config: Optional[Path]) -> Path:
+    """Resolve the `config.json` path independent of launch directory.
+
+    An explicit `--config` always wins and is returned verbatim (even
+    if missing) so `_load_config` raises a clear error rather than
+    silently falling back. Otherwise the first search dir that
+    actually contains a `config.json` wins; if none do, the first
+    (stable) dir's path is returned so the downstream error names the
+    recommended location.
+    """
+
+    if cli_config is not None:
+        return cli_config
+    dirs = _config_search_dirs()
+    for directory in dirs:
+        candidate = directory / "config.json"
+        if candidate.exists():
+            return candidate
+    return dirs[0] / "config.json"
 
 
 def _load_config(config_path: Path) -> dict:
@@ -100,10 +140,12 @@ def _load_config(config_path: Path) -> dict:
     """
 
     if not config_path.exists():
+        searched = ", ".join(str(d / "config.json") for d in _config_search_dirs())
         raise FileNotFoundError(
             f"config.json not found at {config_path}. "
             "Copy config.example.json to config.json and fill in "
-            "inputs.salesforce_org_url before running."
+            "inputs.salesforce_org_url before running. "
+            f"Searched (in order): {searched}."
         )
     return json.loads(config_path.read_text())
 
@@ -188,8 +230,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("config.json"),
-        help="Path to config.json. Defaults to ./config.json.",
+        default=None,
+        help=(
+            "Path to config.json. If omitted, the skill searches a "
+            "stable, launch-independent set of locations (see "
+            "_config_search_dirs): ~/.config/seren/pk-lead-intelligence/, "
+            "then the skill root, then the cwd."
+        ),
     )
     parser.add_argument(
         "--storage-path",
@@ -1057,6 +1104,20 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry. Returns a process exit code."""
 
     args = _build_parser().parse_args(argv)
+
+    # Issue #848 — make the skill run identically regardless of launch
+    # directory. (1) Load the whole `.env` into os.environ from a
+    # stable location before any credential read, so the 1Password
+    # path (OP_SERVICE_ACCOUNT_TOKEN / OP_VAULT / OP_ITEM) and Path-A
+    # SF_* vars resolve without `set -a; . ./.env`. (2) Resolve
+    # config.json from the same launch-independent search order. Both
+    # run before any command branch touches config or credentials.
+    from scripts import seren_client  # noqa: PLC0415
+
+    seren_client.load_dotenv_into_environ(
+        [directory / ".env" for directory in _config_search_dirs()]
+    )
+    args.config = _resolve_config_path(args.config)
 
     # `run` command — Phase 2 dry-run + Phase 4 live Note write.
     # `--dry-run` is required when `--allow-live` is absent (we

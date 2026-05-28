@@ -16,6 +16,8 @@ else depends on.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from scripts import seren_client as sc
@@ -413,3 +415,74 @@ def test_call_publisher_unwraps_model_routing_gateway_envelope() -> None:
     choices = result.get("choices") or []
     assert len(choices) == 1
     assert choices[0]["message"]["content"] == "PONG"
+
+
+# --------------------------------------------------------------------- #
+# Full .env load into os.environ (issue #848)                           #
+# --------------------------------------------------------------------- #
+
+
+def test_load_dotenv_into_environ_loads_all_vars(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Every key in `.env` must land in os.environ — not just
+    SEREN_API_KEY. The 1Password path needs OP_SERVICE_ACCOUNT_TOKEN /
+    OP_VAULT and Path-A needs SF_* to resolve without the operator
+    exporting `.env` by hand.
+    """
+
+    for var in ("OP_SERVICE_ACCOUNT_TOKEN", "OP_VAULT", "SF_USERNAME"):
+        monkeypatch.delenv(var, raising=False)
+    (tmp_path / ".env").write_text(
+        "# a comment\n"
+        "OP_SERVICE_ACCOUNT_TOKEN=tok-123\n"
+        "OP_VAULT=PK Salesforce Skill\n"
+        '\n'
+        'SF_USERNAME="jill@example.com"\n',
+        encoding="utf-8",
+    )
+
+    loaded = sc.load_dotenv_into_environ([tmp_path / ".env"])
+
+    assert os.environ["OP_SERVICE_ACCOUNT_TOKEN"] == "tok-123"
+    assert os.environ["OP_VAULT"] == "PK Salesforce Skill"
+    assert os.environ["SF_USERNAME"] == "jill@example.com"
+    assert loaded["OP_SERVICE_ACCOUNT_TOKEN"] == "tok-123"
+
+
+def test_load_dotenv_into_environ_does_not_overwrite_real_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """A variable already set in the real environment wins over `.env`
+    — env beats file, matching resolve_api_key's precedence.
+    """
+
+    monkeypatch.setenv("OP_VAULT", "real-vault")
+    (tmp_path / ".env").write_text("OP_VAULT=from-file\n", encoding="utf-8")
+
+    sc.load_dotenv_into_environ([tmp_path / ".env"])
+
+    assert os.environ["OP_VAULT"] == "real-vault"
+
+
+def test_load_dotenv_into_environ_loads_first_existing_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Search order matters: the first existing `.env` wins and later
+    candidates are not consulted. A missing earlier path is skipped.
+    """
+
+    monkeypatch.delenv("TOKEN_X", raising=False)
+    stable = tmp_path / "stable"
+    skillroot = tmp_path / "skillroot"
+    stable.mkdir()
+    skillroot.mkdir()
+    # stable/.env does not exist -> falls through to skillroot/.env.
+    (skillroot / ".env").write_text("TOKEN_X=from-skillroot\n", encoding="utf-8")
+
+    sc.load_dotenv_into_environ([stable / ".env", skillroot / ".env"])
+
+    assert os.environ["TOKEN_X"] == "from-skillroot"

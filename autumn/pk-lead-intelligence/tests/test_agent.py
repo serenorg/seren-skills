@@ -1416,3 +1416,61 @@ def test_print_run_summary_includes_linkedin_counters(
     # Existing keys still present in the same line.
     assert "leads_evaluated=3" in out
     assert "notes_written=2" in out
+
+
+# --------------------------------------------------------------------- #
+# config.json path resolution (issue #848)                              #
+# --------------------------------------------------------------------- #
+
+
+def test_resolve_config_path_explicit_flag_wins(tmp_path: Path):
+    """An explicit `--config` path is returned verbatim, even when it
+    does not exist, so `_load_config` raises a clear error instead of
+    silently falling back to a different file behind the operator's
+    back.
+    """
+
+    explicit = tmp_path / "does-not-exist.json"
+    assert agent._resolve_config_path(explicit) == explicit
+
+
+def test_resolve_config_path_prefers_earlier_existing_search_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """With no `--config`, the first search dir that actually contains
+    a config.json wins. Stable user-config dir is searched before the
+    skill root, which is searched before cwd.
+    """
+
+    stable = tmp_path / "stable"
+    skillroot = tmp_path / "skillroot"
+    cwd = tmp_path / "cwd"
+    for d in (stable, skillroot, cwd):
+        d.mkdir()
+    # config absent in `stable`, present in `skillroot` and `cwd`.
+    (skillroot / "config.json").write_text("{}", encoding="utf-8")
+    (cwd / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        agent, "_config_search_dirs", lambda: [stable, skillroot, cwd]
+    )
+
+    assert agent._resolve_config_path(None) == skillroot / "config.json"
+
+
+def test_resolve_config_path_falls_back_to_first_dir_when_none_exist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """When no config.json exists in any search dir, the first
+    (stable) dir's path is returned so the downstream FileNotFoundError
+    names the recommended location.
+    """
+
+    stable = tmp_path / "stable"
+    skillroot = tmp_path / "skillroot"
+    for d in (stable, skillroot):
+        d.mkdir()
+    monkeypatch.setattr(
+        agent, "_config_search_dirs", lambda: [stable, skillroot]
+    )
+
+    assert agent._resolve_config_path(None) == stable / "config.json"
