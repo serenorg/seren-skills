@@ -118,45 +118,60 @@ SF_REPORT_VIEWER_IFRAME = 'iframe[src*="lightningReportApp.app"]'
 
 
 # --------------------------------------------------------------------- #
-# Lead detail page — Project Business Unit read (cross-division gate)    #
+# Record detail page — Business Unit checkbox read (PK gate)             #
 # --------------------------------------------------------------------- #
 
-# HU's `Lead.Project_Business_Unit__c` field renders in the Lightning
-# Details tab as a label/value pair inside a `slds-form-element`. The
-# label text "Project Business Unit" is anchored on the label span;
-# the value renders in a sibling `test-id__field-value` span. We pick
-# the form-element wrapper by label text via Playwright's `:has()`
-# extension, then drop into the value span. Verified live on
-# 2026-05-21 (issue #563): Dan Coats Lead returned "PACKAGING".
-SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_VALUE = (
-    'div.slds-form-element:has('
-    'span.test-id__field-label:has-text("Project Business Unit")'
-    ') span.test-id__field-value'
-)
+# Build a record detail URL relative to the org root. HU report links
+# usually start as Lead records (`00Q`) but converted records can land
+# on Contact detail pages (`003`) after Lightning resolves redirects.
+SF_RECORD_DETAIL_PATH_TEMPLATE = "/lightning/r/{object_name}/{record_id}/view"
 
-# Anchor selector for the Project Business Unit field WRAPPER. Lightning
-# always renders the form-element wrapper + label span when the field is
-# on the page layout, even for Leads whose value is unset; only the
-# inner value span is omitted. Waiting on the wrapper instead of the
-# value lets `read_project_business_unit` cleanly return `None` for a
-# legitimately empty field (legal-services Lead, etc.) without timing
-# out for 30s on a selector that will never resolve. Issue #759.
-SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_FIELD = (
-    'div.slds-form-element:has('
-    'span.test-id__field-label:has-text("Project Business Unit")'
-    ')'
-)
-
-# Build a Lead detail URL relative to the org root. HU's modern
-# Lightning emits both shapes; `/lightning/r/Lead/<id>/view` is the
-# stable canonical that always resolves regardless of org routing.
+# Note writes remain Lead-oriented. Converted Lead redirects are handled
+# by Lightning after navigation, but the write path keeps the Lead URL
+# shape because the skill only sources Lead report rows.
 SF_LEAD_DETAIL_PATH_TEMPLATE = "/lightning/r/Lead/{record_id}/view"
 
-# The "PACKAGING" string is what the Lightning Details tab renders
-# for the PK division. Match must be exact (case-sensitive) so a
-# stray "Packaging" value (different division code) does not pass
-# the gate.
-SF_PROJECT_BUSINESS_UNIT_PK_VALUE = "PACKAGING"
+SF_BUSINESS_UNIT_PACKAGING_LABEL = "PACKAGING"
+
+# HU renders a "Business Unit" section with checkbox-style boolean
+# fields (`PLASTICS`, `PACKAGING`, `NONWOVENS`, `METALS`). The PK gate
+# is the PACKAGING field inside that section. Keep the selector variants
+# narrow to record-layout sections so a stray "PACKAGING" elsewhere on
+# the Details tab cannot pass the gate.
+SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD_SELECTORS = (
+    'records-record-layout-section:has-text("Business Unit") '
+    'div.slds-form-element:has('
+    'span.test-id__field-label:has-text("PACKAGING"))',
+    'div.slds-section:has(.slds-section__title:has-text("Business Unit")) '
+    'div.slds-form-element:has('
+    'span.test-id__field-label:has-text("PACKAGING"))',
+    'div.slds-section:has(button:has-text("Business Unit")) '
+    'div.slds-form-element:has('
+    'span.test-id__field-label:has-text("PACKAGING"))',
+)
+SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD = ", ".join(
+    SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD_SELECTORS
+)
+
+SF_RECORD_DETAIL_BUSINESS_UNIT_SECTION_LABEL = (
+    'div.slds-section .slds-section__title:has-text("Business Unit"), '
+    'records-record-layout-section:has-text("Business Unit")'
+)
+
+# Boolean display has varied across Salesforce renderers. Prefer native
+# checkbox states, then Lightning's checked icon/image affordances.
+SF_RECORD_DETAIL_BOOLEAN_TRUE_MARKERS = (
+    'input[type="checkbox"]:checked',
+    'input[type="checkbox"][checked]',
+    '[aria-checked="true"]',
+    'lightning-input[checked]',
+    'lightning-icon[icon-name="utility:check"]',
+    'lightning-primitive-icon[data-key="check"]',
+    'svg[data-key="check"]',
+    'img[alt="Checked"]',
+    'img[title="Checked"]',
+    '[title="Checked"]',
+)
 
 
 # --------------------------------------------------------------------- #

@@ -85,11 +85,11 @@ class FakeLocator:
     href: str | None = None
     text: str = ""
     match_count: int = 1
+    scroll_calls: int = 0
 
     @property
     def first(self):
-        # `read_project_business_unit` uses `.first` for single-cell
-        # reads. Single-row tests inherit this identity behavior.
+        # Single-field reads inherit this identity behavior.
         return self
 
     def all(self):
@@ -98,10 +98,9 @@ class FakeLocator:
         return [self]
 
     def count(self):
-        # `read_project_business_unit` calls `.count()` on the value
-        # span locator to detect a legitimately empty PBU field (#759).
-        # Default is 1 so existing fixtures keep behaving like a
-        # single-match locator without tracking match counts.
+        # Checkbox-marker reads call `.count()` to distinguish checked
+        # from unchecked fields. Default is 1 so existing fixtures keep
+        # behaving like a single-match locator without tracking counts.
         return self.match_count
 
     def get_attribute(self, name):
@@ -110,6 +109,9 @@ class FakeLocator:
 
     def inner_text(self):
         return self.text
+
+    def scroll_into_view_if_needed(self, *, timeout: int = 0):
+        self.scroll_calls += 1
 
 
 @dataclass
@@ -137,8 +139,7 @@ class FakePage:
     # Per-selector exception map: when `wait_for_selector(sel)` is
     # called and `sel` is a key here, raise the stored exception.
     # Lets tests model Playwright's `TimeoutError` for selectors that
-    # would never resolve in production (PBU field absent from a Lead's
-    # page layout — issue #764).
+    # would never resolve in production (Business Unit section absent).
     wait_for_selector_raises_for: dict[str, BaseException] = field(
         default_factory=dict
     )
@@ -386,56 +387,147 @@ def test_fetch_all_sources_pk_leads_reads_report_iframe_links():
 
 
 # --------------------------------------------------------------------- #
-# read_project_business_unit                                            #
+# Business Unit PK gate                                                 #
 # --------------------------------------------------------------------- #
 
 
-def test_read_project_business_unit_returns_none_when_value_span_absent():
-    """When the Lead's Project Business Unit is unset, Lightning renders
-    the field WRAPPER + label but omits the inner value span. The
-    function must wait on the wrapper (always present) and treat a
-    missing value span as `None` — not raise a 30s Playwright timeout
-    against the value selector that never resolves. Regression for
-    issue #759, surfaced by the Daniel Valdez legal-services Lead.
-    """
+def test_populate_is_packaging_passes_when_lead_business_unit_packaging_checked():
+    """Issue #841: PK eligibility comes from Business Unit -> PACKAGING."""
 
-    field_sel = selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_FIELD
-    value_sel = selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_VALUE
+    field_sel = selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD
+    checked_sel = sf_client._business_unit_packaging_checked_selector()
     page = FakePage(
-        locator_for={value_sel: FakeLocator(match_count=0)},
+        locator_for={
+            field_sel: FakeLocator(text="PACKAGING"),
+            checked_sel: FakeLocator(match_count=1),
+        },
+    )
+    lead = sf_client.LeadRow(
+        record_id="00Q5g00000XYZAbc",
+        name="PK Lead",
+        source_url="https://acme.lightning.force.com/report",
     )
 
-    result = sf_client.read_project_business_unit(
+    result = sf_client.populate_is_packaging(
         page=page,
-        record_id="00Q5g00000XYZAbc",
+        lead=lead,
         salesforce_org_url="https://acme.lightning.force.com",
     )
 
-    assert result is None
-    waits = [c[1][0] for c in page.call_log if c[0] == "wait_for_selector"]
-    assert field_sel in waits, (
-        "wait_for_selector must anchor on the field wrapper, not the value"
-    )
-    assert value_sel not in waits, (
-        "waiting on the value span is the bug — must not regress"
+    assert result.is_packaging is True
+    assert page.call_log[0][0] == "goto"
+    assert page.call_log[0][1][0] == (
+        "https://acme.lightning.force.com/lightning/r/Lead/"
+        "00Q5g00000XYZAbc/view"
     )
 
 
-def test_read_project_business_unit_returns_none_when_pbu_field_not_on_layout():
-    """When the Lead's page layout omits the PBU field entirely (a
-    non-PK Record Type, e.g. HU's legal-services Lead Record Type),
-    the field WRAPPER never renders either. The wait on the wrapper
-    times out — Playwright raises TimeoutError. The function must
-    catch that and return `None` so the caller's cross-division gate
-    fails closed instead of crashing the entire `--allow-live` cycle.
+def test_populate_is_packaging_fails_when_lead_business_unit_packaging_unchecked():
+    """A readable but unchecked PACKAGING field must fail the PK gate."""
 
-    Regression for issue #764, surfaced by the Daniel Valdez Lead
-    after #759 / #763 unblocked SSO and Lead-list navigation.
-    """
+    field_sel = selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD
+    checked_sel = sf_client._business_unit_packaging_checked_selector()
+    page = FakePage(
+        locator_for={
+            field_sel: FakeLocator(text="PACKAGING"),
+            checked_sel: FakeLocator(match_count=0),
+        },
+    )
+    lead = sf_client.LeadRow(
+        record_id="00Q5g00000XYZAbc",
+        name="Non PK Lead",
+        source_url="https://acme.lightning.force.com/report",
+    )
+
+    result = sf_client.populate_is_packaging(
+        page=page,
+        lead=lead,
+        salesforce_org_url="https://acme.lightning.force.com",
+    )
+
+    assert result.is_packaging is False
+
+
+def test_read_business_unit_packaging_checked_supports_contact_detail_page():
+    """Converted Lead redirects can land on Contact detail with same shape."""
+
+    field_sel = selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD
+    checked_sel = sf_client._business_unit_packaging_checked_selector()
+    page = FakePage(
+        locator_for={
+            field_sel: FakeLocator(text="PACKAGING"),
+            checked_sel: FakeLocator(match_count=1),
+        },
+    )
+
+    result = sf_client.read_business_unit_packaging_checked(
+        page=page,
+        record_id="003S700000Qmss6IAB",
+        salesforce_org_url="https://acme.lightning.force.com",
+    )
+
+    assert result is True
+    assert page.call_log[0][0] == "goto"
+    assert page.call_log[0][1][0] == (
+        "https://acme.lightning.force.com/lightning/r/Contact/"
+        "003S700000Qmss6IAB/view"
+    )
+
+
+def test_populate_is_packaging_scrolls_lazy_business_unit_section():
+    """Lower Lightning sections may not render fields until scrolled."""
 
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-    field_sel = selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_FIELD
+    field_sel = selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD
+    checked_sel = sf_client._business_unit_packaging_checked_selector()
+    section_sel = selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_SECTION_LABEL
+    section_locator = FakeLocator(text="Business Unit")
+
+    @dataclass
+    class LazyBusinessUnitPage(FakePage):
+        field_waits: int = 0
+
+        def wait_for_selector(self, selector, *, timeout: int = 0):
+            self.call_log.append(("wait_for_selector", (selector,)))
+            if selector == field_sel:
+                self.field_waits += 1
+                if self.field_waits == 1:
+                    raise PlaywrightTimeoutError(
+                        "Business Unit fields not rendered until scroll"
+                    )
+
+    page = LazyBusinessUnitPage(
+        locator_for={
+            section_sel: section_locator,
+            field_sel: FakeLocator(text="PACKAGING"),
+            checked_sel: FakeLocator(match_count=1),
+        },
+    )
+    lead = sf_client.LeadRow(
+        record_id="00Q5g00000XYZAbc",
+        name="Lazy BU Lead",
+        source_url="https://acme.lightning.force.com/report",
+    )
+
+    result = sf_client.populate_is_packaging(
+        page=page,
+        lead=lead,
+        salesforce_org_url="https://acme.lightning.force.com",
+    )
+
+    assert result.is_packaging is True
+    assert section_locator.scroll_calls == 1
+    waits = [c[1][0] for c in page.call_log if c[0] == "wait_for_selector"]
+    assert waits == [field_sel, field_sel]
+
+
+def test_populate_is_packaging_fails_closed_when_business_unit_section_missing():
+    """Missing/unreadable Business Unit section must not enrich or write."""
+
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    field_sel = selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD
     page = FakePage(
         wait_for_selector_raises_for={
             field_sel: PlaywrightTimeoutError(
@@ -443,17 +535,21 @@ def test_read_project_business_unit_returns_none_when_pbu_field_not_on_layout():
             ),
         },
     )
-
-    result = sf_client.read_project_business_unit(
-        page=page,
+    lead = sf_client.LeadRow(
         record_id="00Q5g00000XYZAbc",
+        name="Unknown BU Lead",
+        source_url="https://acme.lightning.force.com/report",
+    )
+
+    result = sf_client.populate_is_packaging(
+        page=page,
+        lead=lead,
         salesforce_org_url="https://acme.lightning.force.com",
     )
 
-    assert result is None
-    # The wrapper wait happened (and timed out) but the function did
-    # NOT proceed to read the value locator — wrapper missing means
-    # field absent, no value to read.
+    assert result.is_packaging is False
     waits = [c[1][0] for c in page.call_log if c[0] == "wait_for_selector"]
-    assert waits == [field_sel]
-    assert not any(c[0] == "locator" for c in page.call_log)
+    assert waits == [field_sel, field_sel]
+    assert not any(
+        c == ("locator", (field_sel,)) for c in page.call_log
+    ), "missing section must not read the PACKAGING field value"

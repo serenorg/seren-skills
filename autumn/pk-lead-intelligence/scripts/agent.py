@@ -18,15 +18,15 @@ The `run` command:
    Perplexity research, LinkedIn discovery, Claude hypothesis — and
    writes a local `.docx` Note for operator review.
 5. (Phase 4, `--allow-live`) Populates `is_packaging` from the
-   Lead's "Project Business Unit" Details field, then writes the
-   rendered Note to the Lead's Related tab gated by
+   Business Unit -> PACKAGING checkbox on the record detail page,
+   then writes the rendered Note to the Lead's Related tab gated by
    `is_packaging_lead` + a SerenDB-backed recency ledger
    (`pk_lead_enrichment_log`).
 
 The `provision` command (Phase 3) validates the three
 operator-owned Salesforce artifacts the cron reads:
 
-* `All Sources PK Leads` report — filter Project Business Unit = PACKAGING.
+* `All Sources PK Leads` report — candidate source for daily PK work.
 * `PK Inbound Web Lead and Activity Tracking - SerenAI` dashboard.
 * `PK Inbound Web Lead and Opportunity Tracking - SerenAI` dashboard.
 
@@ -853,12 +853,12 @@ def _run_live_note_write(
 
     Two Playwright passes on the same browser context:
 
-    1. `populate_is_packaging` navigates to the Lead detail page,
-       reads `Project Business Unit`, and returns a LeadRow whose
-       `is_packaging` is True iff the value is "PACKAGING". This is
-       the cross-division gate (P0 per SKILL.md) — performed before
-       any write attempt so a non-PK Lead never reaches the Note
-       form at all.
+    1. `populate_is_packaging` navigates to the record detail page,
+       reads Business Unit -> PACKAGING, and returns a LeadRow whose
+       `is_packaging` is True iff the checkbox is checked. This is the
+       cross-division gate (P0 per SKILL.md) — performed before any
+       write attempt so a non-PK Lead never reaches the Note form at
+       all.
 
     2. `write_note_to_lead` runs the recency-and-write path against
        the populated lead, using the injected SerenDB ledger as the

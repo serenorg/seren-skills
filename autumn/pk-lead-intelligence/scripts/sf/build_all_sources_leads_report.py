@@ -85,10 +85,10 @@ class ReportSpec:
 
 
 # Locked Phase 3 contract — matches what the operator configured on
-# `00OS700000IzEBlMAN`. The cross-division filter is the load-bearing
-# one; if Nathan removes it the cron will mis-route. The cron asserts
-# this contract on every tick by `validate_report` simply navigating
-# and proving the report still exists/is accessible.
+# `00OS700000IzEBlMAN`. This report scopes the candidate pool; the
+# write gate still reads Business Unit -> PACKAGING from each record's
+# detail page before enrichment or Note write. The cron validates the
+# report by navigating to it and proving it is accessible.
 ALL_SOURCES_PK_LEADS_REPORT_SPEC = ReportSpec(
     title="All Sources PK Leads",
     report_type="Leads",
