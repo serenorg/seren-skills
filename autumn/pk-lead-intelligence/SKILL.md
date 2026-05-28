@@ -30,7 +30,7 @@ end-to-end against the production org, not stubbed.
 | 1 — auth + storage | ✅ live | Microsoft SSO + 1Password Service Account; storage-state reuse |
 | 2 — enrichment dry-run | ✅ live | Lead fetch, Perplexity + Claude + LinkedIn research, `.docx` render |
 | 3 — reporting validation | ✅ live (2026-05-21) | Validate-only navigation to three operator-owned artifacts: `All Sources PK Leads` report (`00OS700000IzEBlMAN`), `PK Inbound Web Lead and Activity Tracking - SerenAI` dashboard (`01ZS7000004KhcnMAC`), `PK Inbound Web Lead and Opportunity Tracking - SerenAI` dashboard (`01ZS7000004KhePMAS`). Spec contracts unit-tested. |
-| 4 — live Note write | ✅ live (2026-05-21) | Per-Lead Project Business Unit DOM read (cross-division gate); SerenDB `pk_lead_enrichment_log` ledger (24h recency); Quill-editor Note-form driver; load-bearing write-then-stamp order; `--allow-live` × `live_mode=true` dual gate; weekly doc renderer + Drive share. |
+| 4 — live Note write | ✅ live (2026-05-21) | Per-record Business Unit -> PACKAGING checkbox DOM read (cross-division gate); SerenDB `pk_lead_enrichment_log` ledger (24h recency); Quill-editor Note-form driver; load-bearing write-then-stamp order; `--allow-live` × `live_mode=true` dual gate; weekly doc renderer + Drive share. |
 | 5 — cron + slash command | ✅ live (2026-05-21) | `scripts/setup_cron.py` (daily + weekly local-pull jobs via seren-cron), `scripts/run_local_pull_runner.py` (claims due ticks, dispatches to `agent.py`, auto-pauses on publisher 402), `scripts/slash/pk_status.py` (reads `state/weekly_status_runs.jsonl`, surfaces latest doc URL or offers on-demand `--command weekly` run). JSON envelope on `--command run` and `docs/failure_modes.md` remain v1 follow-ups. |
 
 ### Architectural notes (issue #563 closeout)
@@ -42,10 +42,11 @@ constrained to a regular-user role (no Setup access):
 1. **Custom Lead fields were not created.** `PACKAGING__c`,
    `Last_Enrichment_At__c`, and `Activity_Gap_Days__c` from the
    original spec do not exist and never will. The cross-division
-   gate reads HU's existing `Project Business Unit` field instead
-   (value `PACKAGING` for the PK division). Recency moved to a
-   SerenDB-owned `pk_lead_enrichment_log` table because Salesforce
-   does not need to know when the skill last touched a Lead.
+   gate reads HU's existing `Business Unit` section instead and
+   admits only records where `PACKAGING` is checked. Recency moved
+   to a SerenDB-owned `pk_lead_enrichment_log` table because
+   Salesforce does not need to know when the skill last touched a
+   Lead.
 
 2. **Reports + dashboards are operator-owned, not skill-created.**
    The Lightning Report Builder and Dashboard Builder live inside
@@ -54,12 +55,13 @@ constrained to a regular-user role (no Setup access):
    skill validates each is still reachable on every provision tick
    but does not edit them.
 
-3. **Per-Lead detail-page read for the division gate.** The original
+3. **Per-record detail-page read for the division gate.** The original
    spec assumed the All Sources PK Leads report would surface
    `PACKAGING__c` as a column the cron could read from the list
-   view. With the field gone, the cron now navigates to each Lead's
-   detail page to read `Project Business Unit` directly. One extra
-   page-load per Lead per cycle is acceptable at the skill's volume.
+   view. With the field gone, the cron now navigates to each record's
+   detail page and reads the `Business Unit -> PACKAGING` checkbox.
+   One extra page-load per Lead per cycle is acceptable at the
+   skill's volume.
 
 ### How to tell what state you are in
 

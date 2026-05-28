@@ -25,8 +25,8 @@ phase-by-phase breakdown.
 Phases 3 and 4 are live against the production HU Salesforce org as of
 the [#563](https://github.com/serenorg/seren-skills/issues/563) closeout
 (2026-05-21). Live Note writes run behind the `live_mode = true` +
-`--allow-live` double gate and the Project Business Unit cross-division
-check. The earlier `# pragma: no cover` stubs that raised
+`--allow-live` double gate and the Business Unit -> PACKAGING
+cross-division check. The earlier `# pragma: no cover` stubs that raised
 `NotImplementedError` have been replaced by the real Lightning DOM
 drivers; `SKILL.md` § "Status by Phase" is the canonical state table.
 

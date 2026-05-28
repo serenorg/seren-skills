@@ -4,9 +4,10 @@ Thin wrapper around an authenticated Playwright Page. Two surfaces:
 
 * `fetch_first_lead` — list-view read for the dry-run probe.
 * `fetch_all_sources_pk_leads` — pinned PK report read for batch runs.
-* `read_project_business_unit` / `populate_is_packaging` — per-Lead
-  detail-page read of the `Project Business Unit` field, which is
-  the cross-division gate the Phase 4 Note-write path enforces.
+* `read_business_unit_packaging_checked` / `populate_is_packaging` —
+  per-record detail-page read of the Business Unit -> PACKAGING
+  checkbox, which is the cross-division gate the Phase 4 Note-write
+  path enforces.
 
 The whole skill is constrained to Lightning UI automation; this
 module is the choke point that enforces it. There is no REST/SOQL/
@@ -25,8 +26,8 @@ from scripts.sf import selectors
 
 # Playwright's TimeoutError is what `page.wait_for_selector` raises when
 # the selector never resolves within the timeout. We catch it by class
-# in `read_project_business_unit` so a Lead whose layout omits the PBU
-# field altogether returns `None` instead of crashing the cycle. The
+# in `read_business_unit_packaging_checked` so a record whose layout
+# omits the Business Unit section returns `None` instead of crashing. The
 # import is wrapped because client.py is also exercised in unit tests
 # that mock the Playwright surface — those tests still get a usable
 # class to raise via the fallback. Issue #764.
@@ -72,7 +73,7 @@ class _Locator(Protocol):
     """Subset of `playwright.sync_api.Locator` that this module uses."""
 
     # `.first` returns a Locator resolved to the first DOM match. Used
-    # by `read_project_business_unit` for single-row label/value reads.
+    # by the Business Unit checkbox reader for single-field reads.
     @property
     def first(self) -> "_Locator": ...
 
@@ -82,8 +83,8 @@ class _Locator(Protocol):
     def all(self) -> list["_Locator"]: ...
 
     # `.count()` returns the number of DOM matches without raising.
-    # `read_project_business_unit` uses this to detect a legitimately
-    # empty PBU field (label rendered, value span omitted) — see #759.
+    # `read_business_unit_packaging_checked` uses this to distinguish
+    # checked and unchecked boolean renderers.
     def count(self) -> int: ...
 
     def get_attribute(self, name: str) -> str | None: ...
@@ -116,9 +117,8 @@ class LeadRow:
     `is_packaging` is a tri-state:
       * `None` — not yet read from the Lead detail page (default
         for list-view rows).
-      * `True` — Project Business Unit == "PACKAGING".
-      * `False` — Project Business Unit was anything else (PL / MD /
-        NW / blank).
+      * `True` — Business Unit -> PACKAGING is checked.
+      * `False` — PACKAGING is unchecked or the section cannot be read.
 
     The cross-division gate (`enrich_lead.is_packaging_lead`) reads
     this via `getattr` with a False default, so a `None` value (not
@@ -148,6 +148,12 @@ _LIST_LOAD_TIMEOUT_MS = 30_000
 # they render a single record, but the Details tab still pulls down
 # the highlights/key-fields panel asynchronously.
 _DETAIL_LOAD_TIMEOUT_MS = 30_000
+
+# Some lower Salesforce record-layout sections do not materialize their
+# field rows until the section is scrolled into view. Probe briefly, then
+# scroll the Business Unit header and retry with the full detail budget.
+_DETAIL_INITIAL_FIELD_PROBE_TIMEOUT_MS = 5_000
+_DETAIL_SECTION_SCROLL_TIMEOUT_MS = 5_000
 
 # Report viewer hydrates through Lightning/Aura and is slower than the
 # stock list view. Match the pinned-artifact validator's timeout.
@@ -199,12 +205,60 @@ def _build_lead_list_url(salesforce_org_url: str) -> str:
     return f"{base}{selectors.SF_LEAD_LIST_PATH}"
 
 
-def _build_lead_detail_url(salesforce_org_url: str, record_id: str) -> str:
-    """Compose the absolute Lead detail URL for one record id."""
+def _record_object_name(record_id: str) -> str:
+    """Return the Lightning object API name for supported record ids."""
+
+    if record_id.startswith("003"):
+        return "Contact"
+    return "Lead"
+
+
+def _build_record_detail_url(salesforce_org_url: str, record_id: str) -> str:
+    """Compose the absolute Lightning detail URL for one record id."""
 
     base = salesforce_org_url.rstrip("/")
-    path = selectors.SF_LEAD_DETAIL_PATH_TEMPLATE.format(record_id=record_id)
+    path = selectors.SF_RECORD_DETAIL_PATH_TEMPLATE.format(
+        object_name=_record_object_name(record_id),
+        record_id=record_id,
+    )
     return f"{base}{path}"
+
+
+def _scoped_selector(
+    parent_selectors: tuple[str, ...], child_selectors: tuple[str, ...]
+) -> str:
+    """Build a comma-joined selector that scopes every child to a parent."""
+
+    return ", ".join(
+        f"{parent} {child}"
+        for parent in parent_selectors
+        for child in child_selectors
+    )
+
+
+def _business_unit_packaging_checked_selector() -> str:
+    """Selector for checked-state markers inside the PACKAGING field."""
+
+    return _scoped_selector(
+        selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD_SELECTORS,
+        selectors.SF_RECORD_DETAIL_BOOLEAN_TRUE_MARKERS,
+    )
+
+
+def _scroll_business_unit_section_into_view(page: _Page) -> None:
+    """Best-effort scroll for lazily rendered lower detail sections."""
+
+    try:
+        section = page.locator(
+            selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_SECTION_LABEL
+        ).first
+        scroll = getattr(section, "scroll_into_view_if_needed")
+        scroll(timeout=_DETAIL_SECTION_SCROLL_TIMEOUT_MS)
+    except Exception:  # noqa: BLE001
+        # Absence still fails closed when the PACKAGING field wait below
+        # times out. This helper only nudges virtualized sections to
+        # render; it must not turn a missing section into a hard crash.
+        return
 
 
 def _lead_rows_from_record_links(
@@ -315,7 +369,7 @@ def fetch_open_leads(
 
     Skips Lightning's `[[…]]` placeholder rows the same way
     `fetch_first_lead` does. Each `LeadRow.is_packaging` is None — the
-    list view does not surface the Project Business Unit column, so
+    list view does not expose the Business Unit checkbox state, so
     callers must invoke `populate_is_packaging` per Lead before any
     live-write decision.
 
@@ -354,11 +408,11 @@ def fetch_all_sources_pk_leads(
 ) -> list[LeadRow]:
     """Read up to `limit` Leads from the pinned All Sources PK Leads report.
 
-    The report is operator-owned and filtered in Salesforce for
-    `Project Business Unit = PACKAGING`. Live batch still performs a
-    per-Lead detail-page PK gate before writing Notes; this source just
-    prevents the cron from spending research/model budget on the generic
-    AllOpenLeads list view. Issue #838.
+    The report is operator-owned and acts as a candidate source. Live
+    batch still performs the Business Unit -> PACKAGING detail-page
+    gate before writing Notes; this source just prevents the cron from
+    spending research/model budget on the generic AllOpenLeads list
+    view. Issue #838.
     """
 
     if limit < 1:
@@ -404,59 +458,53 @@ def fetch_first_lead(
     )[0]
 
 
-def read_project_business_unit(
+def read_business_unit_packaging_checked(
     *,
     page: _Page,
     record_id: str,
     salesforce_org_url: str,
-) -> Optional[str]:
-    """Navigate to the Lead detail page and read the field value.
+) -> Optional[bool]:
+    """Return the Business Unit -> PACKAGING checkbox state.
 
-    Returns the inner text of the Project Business Unit value cell,
-    stripped. Returns `None` when the field is present on the page
-    but its value cell is empty (a Lead that has not yet been
-    classified) — the caller treats `None` as "not PK".
-
-    Raises `RuntimeError` when the detail page never renders the
-    field at all — that points at either a permissions issue or a
-    selector rotation, both of which need operator attention rather
-    than silent fail-closed behavior.
+    Returns:
+      * `True` when the PACKAGING row/field is present and checked.
+      * `False` when the row/field is present and readable but unchecked.
+      * `None` when the Business Unit section or PACKAGING field cannot
+        be read. Callers convert this to the same fail-closed behavior
+        as unchecked.
     """
 
-    detail_url = _build_lead_detail_url(salesforce_org_url, record_id)
+    detail_url = _build_record_detail_url(salesforce_org_url, record_id)
     page.goto(detail_url, timeout=_DETAIL_LOAD_TIMEOUT_MS)
 
-    # Wait on the FIELD WRAPPER, not the value span. Lightning renders
-    # the wrapper + label whenever the field is on the layout, even for
-    # Leads whose PBU is unset; the value span is only emitted when a
-    # value exists. Waiting on the value span timed out for 30s on
-    # legitimately empty fields (legal-services Lead, etc.) and crashed
-    # the `--allow-live` cycle — see #759.
-    #
-    # HU runs multiple Lead Record Types with different page layouts —
-    # the PBU field is only on the PK-routed layouts. For Leads on a
-    # different layout the wrapper itself never renders, so the wait
-    # times out. Treat that as "PBU not on this layout" → return `None`
-    # (caller's cross-division gate then fails closed). Issue #764.
     try:
         page.wait_for_selector(
-            selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_FIELD,
-            timeout=_DETAIL_LOAD_TIMEOUT_MS,
+            selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD,
+            timeout=_DETAIL_INITIAL_FIELD_PROBE_TIMEOUT_MS,
         )
     except _PlaywrightTimeoutError:
-        return None
+        _scroll_business_unit_section_into_view(page)
+        try:
+            page.wait_for_selector(
+                selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD,
+                timeout=_DETAIL_LOAD_TIMEOUT_MS,
+            )
+        except _PlaywrightTimeoutError:
+            return None
 
-    value_locator = page.locator(
-        selectors.SF_LEAD_DETAIL_PROJECT_BUSINESS_UNIT_VALUE
+    checked_locator = page.locator(_business_unit_packaging_checked_selector())
+    if checked_locator.count() > 0:
+        return True
+
+    field_text = page.locator(
+        selectors.SF_RECORD_DETAIL_BUSINESS_UNIT_PACKAGING_FIELD
+    ).first.inner_text()
+    normalized_lines = {
+        line.strip().lower() for line in field_text.splitlines() if line.strip()
+    }
+    return "true" in normalized_lines or any(
+        mark in field_text for mark in ("✓", "✔", "☑")
     )
-    if value_locator.count() == 0:
-        # Wrapper rendered but value span absent → field is on the
-        # layout, just unset. Same fail-closed outcome as a missing
-        # wrapper — caller treats `None` as "not PK".
-        return None
-
-    text = value_locator.first.inner_text().strip()
-    return text or None
 
 
 def populate_is_packaging(
@@ -467,20 +515,18 @@ def populate_is_packaging(
 ) -> LeadRow:
     """Return a copy of `lead` with `is_packaging` set from the DOM.
 
-    Drives the Lead detail page once, reads Project Business Unit,
-    and returns a new LeadRow with `is_packaging` set to
-    `True` iff the value matches `SF_PROJECT_BUSINESS_UNIT_PK_VALUE`
-    exactly. Any other value (including `None`/blank) sets
-    `is_packaging=False`.
+    Drives the record detail page once, reads Business Unit ->
+    PACKAGING, and returns a new LeadRow with `is_packaging=True`
+    iff the checkbox is checked. Unchecked, missing, or unreadable
+    state sets `is_packaging=False`.
 
     Idempotent — calling twice produces the same result; the
     Salesforce session is the only side effect.
     """
 
-    value = read_project_business_unit(
+    checked = read_business_unit_packaging_checked(
         page=page,
         record_id=lead.record_id,
         salesforce_org_url=salesforce_org_url,
     )
-    is_pk = value == selectors.SF_PROJECT_BUSINESS_UNIT_PK_VALUE
-    return replace(lead, is_packaging=is_pk)
+    return replace(lead, is_packaging=checked is True)

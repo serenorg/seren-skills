@@ -9,9 +9,9 @@ source-report wiring — so Phase 4 can rely on them.
 Issue #563 collapsed the editor-driving paths to navigate-only
 validators (the artifacts are operator-owned, dedicated to this
 skill, and live inside Aura-app iframes that are too fragile to
-drive every cron tick). The spec contract below is still the
-load-bearing piece — the cron's cross-division gate depends on
-Nathan keeping the filter intact.
+drive every cron tick). The spec contract below keeps the candidate
+source shape stable; the live cross-division gate is the detail-page
+Business Unit checkbox read in `scripts.sf.client`.
 """
 
 from __future__ import annotations
@@ -45,16 +45,15 @@ class FakePage:
 # --------------------------------------------------------------------- #
 
 
-def test_all_sources_report_spec_filters_on_packaging():
-    """The cross-division gate lives in the report filter.
+def test_all_sources_report_spec_keeps_packaging_candidate_filter():
+    """The report filter scopes candidates before the live detail gate.
 
     Issue #563: the field migrated from `PACKAGING__c` (custom field
     the operator could not create) to `Project_Business_Unit__c`
     (Lightning standard custom field already on the Lead object,
-    value `PACKAGING` for the PK division). If this filter ever
-    stops scoping to PK, the cron will enrich non-PK Leads and
-    write Notes onto the wrong division — the P0 mis-routing
-    defect called out in SKILL.md. The contract is locked here.
+    value `PACKAGING` for the PK division). The report is not the
+    write gate; every candidate still goes through Business Unit ->
+    PACKAGING on the record detail page before enrichment/write.
     """
 
     spec = all_leads_report.ALL_SOURCES_PK_LEADS_REPORT_SPEC
