@@ -13,7 +13,8 @@ The `run` command:
 1. Reads SF credentials from 1Password via `auth.op_service_account`.
 2. Launches a Playwright Chromium with the persisted storage_state
    (if any) and drives Microsoft SSO via `auth.microsoft_sso`.
-3. Navigates to the Lead list and reads the first Lead row.
+3. Reads candidates from the pinned `All Sources PK Leads` report and
+   verifies Business Unit -> PACKAGING on each record detail page.
 4. Runs the enrichment pipeline (`sf.enrich_lead`) over that lead —
    Perplexity research, LinkedIn discovery, Claude hypothesis — and
    writes a local `.docx` Note for operator review.
@@ -299,18 +300,19 @@ def _run_dry_run(
     headless: bool,
     op_vault: str,
     op_item: str,
+    candidate_limit: int,
 ) -> sf_client.LeadRow:
-    """Drive the full op → SSO → first-lead flow once.
+    """Drive the full op → SSO → first Packaging lead flow once.
 
     Returns the LeadRow so callers (CLI, tests, future cron) can
     log or pretty-print it as they please. Lifecycles the
     Playwright browser inside this function; callers do not need to
     manage it.
 
-    This function intentionally does NOT run enrichment — the
-    enrichment pipeline does not need the Playwright browser, and
-    keeping the Playwright lifecycle isolated to this function means
-    the browser closes before any HTTP-bound publisher call runs.
+    This function intentionally does NOT run enrichment. It only
+    selects a Lead that has passed the Business Unit -> PACKAGING
+    detail-page gate, then closes the browser before any HTTP-bound
+    publisher call runs.
     """
 
     creds = op_service_account.read_salesforce_credentials(
@@ -339,14 +341,52 @@ def _run_dry_run(
                     creds=creds,
                     storage_path=storage_path,
                 )
-                return sf_client.fetch_first_lead(
+                leads = _select_packaging_leads_from_report(
                     page=result.page,
                     salesforce_org_url=salesforce_org_url,
+                    limit=candidate_limit,
                 )
+                return leads[0]
             finally:
                 context.close()
         finally:
             browser.close()
+
+
+def _select_packaging_leads_from_report(
+    *,
+    page,
+    salesforce_org_url: str,
+    limit: int,
+) -> list[sf_client.LeadRow]:
+    """Return PK-report candidates that pass the live Business Unit gate."""
+
+    candidates = sf_client.fetch_all_sources_pk_leads(page=page, limit=limit)
+    selected: list[sf_client.LeadRow] = []
+    skipped_non_pk = 0
+
+    for lead in candidates:
+        populated_lead = sf_client.populate_is_packaging(
+            page=page,
+            lead=lead,
+            salesforce_org_url=salesforce_org_url,
+        )
+        if enrich_lead.is_packaging_lead(populated_lead):
+            selected.append(populated_lead)
+        else:
+            skipped_non_pk += 1
+
+    if not selected:
+        raise sf_client.ZeroLeadsFoundError(
+            "No Lead passed the Business Unit -> PACKAGING gate from "
+            "the All Sources PK Leads report "
+            f"(candidates scanned={len(candidates)}, "
+            f"non-PK skipped={skipped_non_pk}). "
+            "Confirm the pinned report and Lead detail Business Unit "
+            "fields agree before running enrichment."
+        )
+
+    return selected
 
 
 def _run_batch_fetch(
@@ -358,14 +398,14 @@ def _run_batch_fetch(
     op_item: str,
     limit: int,
 ) -> list[sf_client.LeadRow]:
-    """Drive the op → SSO → PK-report-N-leads flow once.
+    """Drive the op → SSO → PK-report gated leads flow once.
 
     Mirrors `_run_dry_run`'s Playwright lifecycle but returns up to
-    `limit` rows from the pinned All Sources PK Leads report instead
-    of the generic AllOpenLeads list view. Used by `--batch --dry-run`.
-    Enrichment runs against the returned list in `main` — this function
-    deliberately does no per-lead work so the browser closes before any
-    Perplexity or Claude call fires.
+    `limit` rows from the pinned All Sources PK Leads report after
+    verifying each row on the record detail page. Used by
+    `--batch --dry-run`. Enrichment runs against the returned list in
+    `main` — this function deliberately stops after selection so the
+    browser closes before any Perplexity or Claude call fires.
     """
 
     creds = op_service_account.read_salesforce_credentials(
@@ -388,8 +428,9 @@ def _run_batch_fetch(
                     creds=creds,
                     storage_path=storage_path,
                 )
-                return sf_client.fetch_all_sources_pk_leads(
+                return _select_packaging_leads_from_report(
                     page=result.page,
+                    salesforce_org_url=salesforce_org_url,
                     limit=limit,
                 )
             finally:
@@ -1296,14 +1337,33 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    # Single-lead path (unchanged behavior).
-    lead = _run_dry_run(
-        salesforce_org_url=salesforce_org_url,
-        storage_path=args.storage_path,
-        headless=args.headless,
-        op_vault=op_vault,
-        op_item=op_item,
-    )
+    try:
+        lead = _run_dry_run(
+            salesforce_org_url=salesforce_org_url,
+            storage_path=args.storage_path,
+            headless=args.headless,
+            op_vault=op_vault,
+            op_item=op_item,
+            candidate_limit=args.max_leads,
+        )
+    except sf_client.ZeroLeadsFoundError as exc:
+        print()
+        print("NO PACKAGING LEAD FOUND:")
+        print(f"  {exc}")
+        print()
+        _print_run_summary(
+            RunSummary(
+                command="run",
+                dry_run=args.dry_run,
+                leads_evaluated=0,
+                notes_written=0,
+                notes_skipped_non_pk=0,
+                notes_skipped_recent=0,
+                docx_written=0,
+                leads_failed=0,
+            )
+        )
+        return 0
 
     print("first_lead:")
     print(f"  record_id: {lead.record_id}")

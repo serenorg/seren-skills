@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -395,6 +396,175 @@ def _fake_lead(record_id: str, name: str):
         name=name,
         source_url="https://acme.lightning.force.com/lightning/o/Lead/list",
     )
+
+
+def test_select_packaging_leads_from_report_skips_non_pk_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Report rows are candidates; Business Unit is the dry-run gate."""
+
+    from dataclasses import replace
+
+    from scripts.sf import client as sf_client
+
+    non_pk = _fake_lead("00Q000000000001", "Plastics Lead")
+    pk = _fake_lead("00Q000000000002", "Packaging Lead")
+    populate_calls: list[str] = []
+
+    monkeypatch.setattr(
+        sf_client,
+        "fetch_all_sources_pk_leads",
+        lambda **_k: [non_pk, pk],
+    )
+
+    def fake_populate(**kwargs):
+        lead = kwargs["lead"]
+        populate_calls.append(lead.record_id)
+        return replace(lead, is_packaging=(lead.record_id == pk.record_id))
+
+    monkeypatch.setattr(sf_client, "populate_is_packaging", fake_populate)
+
+    selected = agent._select_packaging_leads_from_report(
+        page=object(),
+        salesforce_org_url="https://acme.lightning.force.com",
+        limit=10,
+    )
+
+    assert selected == [replace(pk, is_packaging=True)]
+    assert populate_calls == [non_pk.record_id, pk.record_id]
+
+
+def test_run_dry_run_uses_pk_report_gate_not_generic_first_lead(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    """Single dry-run must not source generic AllOpenLeads."""
+
+    from scripts.sf import client as sf_client
+
+    fake_page = object()
+    fake_lead = _fake_lead("00Q000000000002", "Packaging Lead")
+
+    class FakeContext:
+        def close(self):
+            pass
+
+    class FakeBrowser:
+        def new_context(self, **_kwargs):
+            return FakeContext()
+
+        def close(self):
+            pass
+
+    class FakeChromium:
+        def launch(self, *, headless):
+            assert headless is True
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+    class FakeSyncPlaywright:
+        def __enter__(self):
+            return FakePlaywright()
+
+        def __exit__(self, *_args):
+            return None
+
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: FakeSyncPlaywright()
+    monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+
+    monkeypatch.setattr(
+        agent.op_service_account,
+        "read_salesforce_credentials",
+        lambda **_k: object(),
+    )
+    monkeypatch.setattr(
+        agent.microsoft_sso,
+        "authenticate",
+        lambda **_k: types.SimpleNamespace(page=fake_page),
+    )
+    monkeypatch.setattr(
+        sf_client,
+        "fetch_first_lead",
+        lambda **_k: (_ for _ in ()).throw(
+            AssertionError("dry-run must not use generic AllOpenLeads")
+        ),
+    )
+
+    captured_gate_kwargs: dict = {}
+
+    def fake_select(**kwargs):
+        captured_gate_kwargs.update(kwargs)
+        return [fake_lead]
+
+    monkeypatch.setattr(agent, "_select_packaging_leads_from_report", fake_select)
+
+    result = agent._run_dry_run(
+        salesforce_org_url="https://acme.lightning.force.com",
+        storage_path=tmp_path / "missing-storage.json",
+        headless=True,
+        op_vault="vault",
+        op_item="item",
+        candidate_limit=7,
+    )
+
+    assert result is fake_lead
+    assert captured_gate_kwargs == {
+        "page": fake_page,
+        "salesforce_org_url": "https://acme.lightning.force.com",
+        "limit": 7,
+    }
+
+
+def test_main_single_dry_run_renders_summary_when_no_pk_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+):
+    """No PK candidate is a clean no-work result, not enrichment."""
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {"inputs": {"salesforce_org_url": "https://acme.lightning.force.com"}}
+        )
+    )
+
+    from scripts.sf import client as sf_client
+
+    monkeypatch.setattr(
+        agent,
+        "_run_dry_run",
+        lambda **_k: (_ for _ in ()).throw(
+            sf_client.ZeroLeadsFoundError(
+                "No Lead passed the Business Unit -> PACKAGING gate"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        agent,
+        "_run_enrichment",
+        lambda **_k: (_ for _ in ()).throw(
+            AssertionError("non-PK dry-run must not enrich")
+        ),
+    )
+
+    rc = agent.main(
+        ["--command", "run", "--dry-run", "--config", str(cfg)]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "NO PACKAGING LEAD FOUND" in out
+    summary = next(
+        ln for ln in out.splitlines()
+        if ln.startswith("pk-lead-intelligence run:")
+    )
+    assert "leads_evaluated=0" in summary
+    assert "docx_written=0" in summary
 
 
 def _fake_enrichment(tmp_path):

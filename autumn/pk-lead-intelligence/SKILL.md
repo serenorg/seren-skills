@@ -65,8 +65,8 @@ constrained to a regular-user role (no Setup access):
 
 ### How to tell what state you are in
 
-- `--command run --dry-run` — works end-to-end against a real org login. Produces a `.docx` of the rendered Note for the first matching Lead and exits.
-- `--command run --batch --dry-run` — reads candidates from the pinned `All Sources PK Leads` report and renders local `.docx` Notes without Salesforce writes.
+- `--command run --dry-run` — works end-to-end against a real org login. Reads candidates from the pinned `All Sources PK Leads` report, verifies Business Unit -> PACKAGING on the Lead detail page, produces a `.docx` for the first matching Lead, and exits.
+- `--command run --batch --dry-run` — reads candidates from the pinned `All Sources PK Leads` report, keeps only records whose Lead detail page has Business Unit -> PACKAGING checked, and renders local `.docx` Notes without Salesforce writes.
 - `--command run --allow-live` — requires `inputs.live_mode: true` AND `inputs.serendb_connection_uri` set in `config.json`. Live runs populate `is_packaging` from the Lead detail page before enrichment, then enforce the 24h recency gate via the SerenDB ledger, then drive the Note form on PK Leads only.
 - `--command provision --allow-live` — navigates to each of the three pinned artifact URLs and confirms they load under the operator's session. Does not edit them.
 - `--command weekly` — renders the weekly Google Doc and uploads + shares it.
