@@ -24,7 +24,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 
 # (method, url, headers, body) -> (status, body_bytes)
@@ -150,30 +150,72 @@ def resolve_api_key(
     return registered_key
 
 
-def _read_seren_api_key_from_dotenv(skill_root: Path) -> Optional[str]:
-    """Read `SEREN_API_KEY` from `<skill-root>/.env` if present.
+def _parse_dotenv(path: Path) -> dict[str, str]:
+    """Parse a simple `.env` file into an ordered `{KEY: value}` dict.
 
     Hand-rolled parser (no python-dotenv dependency at module import
-    time): the file format we need to support is a one-line
-    `KEY=value` per line plus `#` comments. Anything beyond that
-    (export prefixes, multiline values) is out of scope — the file
-    is operator-edited and the skill writes it in the simple form.
+    time): one `KEY=value` per line plus `#` comments and blank lines.
+    Surrounding single/double quotes on the value are stripped. The
+    first occurrence of a key wins. Anything beyond that (export
+    prefixes, multiline values) is out of scope — the file is
+    operator-edited and the skill writes it in the simple form.
     """
 
-    dotenv_path = skill_root / ".env"
-    if not dotenv_path.exists():
-        return None
-
-    for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+    result: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         if "=" not in line:
             continue
         key, _, value = line.partition("=")
-        if key.strip() == "SEREN_API_KEY":
-            return value.strip().strip('"').strip("'") or None
-    return None
+        key = key.strip()
+        if not key:
+            continue
+        result.setdefault(key, value.strip().strip('"').strip("'"))
+    return result
+
+
+def load_dotenv_into_environ(paths: Iterable[Path]) -> dict[str, str]:
+    """Load every key from the first existing `.env` among `paths`
+    into `os.environ`.
+
+    The whole file is loaded — not just `SEREN_API_KEY` — so the
+    1Password credential path (`OP_SERVICE_ACCOUNT_TOKEN`, `OP_VAULT`,
+    `OP_ITEM`) and the Path-A `SF_*` vars resolve without the operator
+    running `set -a; . ./.env` before launch (issue #848).
+
+    A variable already present in `os.environ` is never overwritten:
+    the real environment wins over `.env`, matching `resolve_api_key`'s
+    precedence (env layers are checked before the `.env` fallback).
+    Only the first existing file in `paths` is consulted. Returns the
+    mapping of keys actually set, for logging / tests.
+    """
+
+    loaded: dict[str, str] = {}
+    for path in paths:
+        if not path.exists():
+            continue
+        for key, value in _parse_dotenv(path).items():
+            if key in os.environ:
+                continue
+            os.environ[key] = value
+            loaded[key] = value
+        break
+    return loaded
+
+
+def _read_seren_api_key_from_dotenv(skill_root: Path) -> Optional[str]:
+    """Read `SEREN_API_KEY` from `<skill-root>/.env` if present.
+
+    Shares `_parse_dotenv` with `load_dotenv_into_environ` so the file
+    format is parsed in exactly one place.
+    """
+
+    dotenv_path = skill_root / ".env"
+    if not dotenv_path.exists():
+        return None
+    return _parse_dotenv(dotenv_path).get("SEREN_API_KEY") or None
 
 
 def _register_new_agent_account(fetcher: Fetcher) -> str:
