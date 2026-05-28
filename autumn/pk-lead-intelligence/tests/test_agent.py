@@ -1200,6 +1200,121 @@ def test_iterate_batch_writes_sleeps_pause_seconds_only_between_writes(
 
 
 # --------------------------------------------------------------------- #
+# Batch visible-feedback contract (issue #850)                           #
+# --------------------------------------------------------------------- #
+
+
+def test_iterate_batch_writes_emits_progress_per_lead(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """The live batch loop must report each lead as it is processed:
+    a start event, then a terminal status. Without this the operator
+    sees nothing for the whole throttled cycle and a killed run leaves
+    no record of which leads were touched (issue #850).
+    """
+
+    from dataclasses import replace
+
+    from scripts.sf import client as sf_client
+    from scripts.sf import write_note
+
+    non_pk = _fake_lead("00Q000000000001", "Non PK")
+    pk = _fake_lead("00Q000000000002", "PK")
+
+    monkeypatch.setattr(
+        sf_client,
+        "populate_is_packaging",
+        lambda **k: replace(
+            k["lead"], is_packaging=(k["lead"].record_id == pk.record_id)
+        ),
+    )
+    monkeypatch.setattr(
+        agent, "_run_enrichment", lambda **k: _fake_enrichment(tmp_path)
+    )
+    monkeypatch.setattr(
+        write_note,
+        "write_note_to_lead",
+        lambda **k: write_note.NoteWriteResult(
+            status="written", last_enriched_at="2026-05-21T10:30:00Z"
+        ),
+    )
+
+    events: list[tuple] = []
+
+    class RecordingProgress:
+        def lead_start(self, **kw):
+            events.append(("start", kw["idx"], kw["record_id"]))
+
+        def lead_done(self, **kw):
+            events.append(("done", kw["idx"], kw["record_id"], kw["status"]))
+
+        def pause(self, **kw):
+            events.append(("pause", kw["idx"]))
+
+    agent._iterate_batch_writes(
+        leads=[non_pk, pk],
+        page=object(),
+        salesforce_org_url="https://acme.lightning.force.com",
+        output_dir=tmp_path,
+        ledger=object(),
+        scrape_fn=None,
+        linkedin_scrape_min_confidence=70,
+        pause_between_notes_seconds=0,
+        sleep_fn=lambda _s: None,
+        progress=RecordingProgress(),
+    )
+
+    assert ("start", 1, non_pk.record_id) in events
+    assert ("done", 1, non_pk.record_id, "skipped_non_pk") in events
+    assert ("start", 2, pk.record_id) in events
+    assert ("done", 2, pk.record_id, "written") in events
+
+
+def test_batch_dry_run_streams_per_lead_progress_and_writes_jsonl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+):
+    """--batch --dry-run must also stream per-lead progress to stderr
+    and persist an incremental JSONL run-log under state/runs, so the
+    dry-run path is observable and auditable just like the live one.
+    """
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {"inputs": {"salesforce_org_url": "https://acme.lightning.force.com"}}
+        )
+    )
+    leads = [
+        _fake_lead("00Q000000000001", "Lead One"),
+        _fake_lead("00Q000000000002", "Lead Two"),
+    ]
+    monkeypatch.setattr(agent, "_run_batch_fetch", lambda **k: leads)
+    monkeypatch.setattr(
+        agent, "_run_enrichment", lambda **k: _fake_enrichment(tmp_path)
+    )
+
+    state_dir = tmp_path / "state"
+    rc = agent.main(
+        [
+            "--command", "run", "--dry-run",
+            "--batch", "--max-leads", "10",
+            "--config", str(cfg),
+            "--state-dir", str(state_dir),
+        ]
+    )
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "[1/2] 00Q000000000001" in err
+    assert "[2/2] 00Q000000000002" in err
+
+    runs = list((state_dir / "runs").glob("batch_progress_*.jsonl"))
+    assert len(runs) == 1, f"expected one progress log, got {runs!r}"
+    records = [json.loads(ln) for ln in runs[0].read_text().splitlines()]
+    assert sum(1 for r in records if r["event"] == "lead_done") == 2
+
+
+# --------------------------------------------------------------------- #
 # Headless-by-default contract                                           #
 # --------------------------------------------------------------------- #
 
