@@ -36,7 +36,7 @@ class FakeSerenDBClient:
     create_project_calls: list[str] = field(default_factory=list)
     list_databases_calls: list[str] = field(default_factory=list)
     create_database_calls: list[tuple[str, str]] = field(default_factory=list)
-    get_connection_uri_calls: list[str] = field(default_factory=list)
+    get_connection_uri_calls: list[tuple[str, str]] = field(default_factory=list)
 
     def list_projects(self) -> list[dict]:
         self.list_projects_calls += 1
@@ -63,8 +63,8 @@ class FakeSerenDBClient:
         self.databases.setdefault(project_id, []).append(database)
         return database
 
-    def get_connection_uri(self, project_id: str) -> str:
-        self.get_connection_uri_calls.append(project_id)
+    def get_connection_uri(self, project_id: str, database_name: str) -> str:
+        self.get_connection_uri_calls.append((project_id, database_name))
         return self.connection_uris[project_id]
 
 
@@ -258,3 +258,29 @@ def test_second_call_is_no_op() -> None:
     assert uri1 == uri2
     assert len(client.create_project_calls) == create_project_count
     assert len(client.create_database_calls) == create_database_count
+
+
+# --------------------------------------------------------------------- #
+# URI database-name substitution (issue #855)                           #
+# --------------------------------------------------------------------- #
+
+
+def test_substitute_database_in_uri_rewrites_path_segment() -> None:
+    """The branch-scoped connection-string endpoint returns a URI
+    rooted at the branch default database (``/serendb``). Bootstrap
+    creates a dedicated database and must connect to THAT one — a
+    silent fall-back to the default would write to the wrong schema.
+    """
+
+    from scripts.storage.persistence import _substitute_database_in_uri
+
+    base = (
+        "postgresql://serendb_owner:secret@ep-foo.c-1.us-east-1.serendb.com/"
+        "serendb?sslmode=require&channel_binding=require"
+    )
+    rewritten = _substitute_database_in_uri(base, "pk_lead_enrichment")
+    assert (
+        rewritten
+        == "postgresql://serendb_owner:secret@ep-foo.c-1.us-east-1.serendb.com/"
+        "pk_lead_enrichment?sslmode=require&channel_binding=require"
+    )

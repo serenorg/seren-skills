@@ -69,8 +69,8 @@ def _fake_serendb_factory() -> bootstrap.SerenDBLike:
         def create_database(self, project_id: str, name: str) -> dict:
             return {"id": "db_x", "name": name}
 
-        def get_connection_uri(self, project_id: str) -> str:
-            return "postgresql://fake/pk"
+        def get_connection_uri(self, project_id: str, database_name: str) -> str:
+            return f"postgresql://fake/{database_name}"
 
     return _Client()
 
@@ -121,7 +121,7 @@ def test_auto_provision_populates_serendb_uri_and_drive_folder_id(
     config = json.loads((stable_dir / "config.json").read_text())
     assert (
         config["inputs"]["serendb_connection_uri"]
-        == "postgresql://fake/pk"
+        == "postgresql://fake/pk_lead_enrichment"
     )
     assert config["inputs"]["google_drive_folder_id"] == "folder_abc"
     assert "serendb_connection_uri" in result.auto_resolved
@@ -176,7 +176,7 @@ def test_apply_set_merges_without_dropping_siblings(
     )
     assert (
         config["inputs"]["serendb_connection_uri"]
-        == "postgresql://fake/pk"
+        == "postgresql://fake/pk_lead_enrichment"
     ), "siblings populated by run_bootstrap must survive --set"
     assert config["inputs"]["monthly_close_target_usd"] == 500000
     assert config["schedule"]["timezone"] == "America/New_York"
