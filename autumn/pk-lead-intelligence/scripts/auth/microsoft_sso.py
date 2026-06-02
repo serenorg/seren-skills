@@ -150,6 +150,69 @@ def _resolve_credentials(
 
 
 # --------------------------------------------------------------------- #
+# Verification-method routing (#857)                                     #
+# --------------------------------------------------------------------- #
+
+
+def _select_verification_code_method(*, page: _Page) -> None:
+    """Navigate past Microsoft's passkey default to the TOTP code screen.
+
+    Microsoft Entra now defaults many tenants to passkey / WebAuthn
+    ("Face, fingerprint, PIN or security key") as the verification step
+    after the password screen. Playwright cannot complete a WebAuthn
+    ceremony in a remote-controlled browser, so the driver clicks
+    "Sign in another way" → "Use a verification code" to reach the
+    legacy OTC input the existing TOTP step already knows how to drive.
+
+    This helper races three selectors and routes accordingly:
+
+    - OTC input already visible — tenant still defaults to TOTP. Return
+      immediately so the legacy happy path pays no extra latency.
+    - "Verify your identity" picker visible — tenant skipped the passkey
+      prompt and rendered the picker directly. Click "Use a verification
+      code" once and return.
+    - Otherwise we are on the passkey prompt. Click "Sign in another way"
+      to surface the picker, then click "Use a verification code".
+
+    After this helper returns, the caller's existing `wait_for_selector`
+    on `MS_TOTP_INPUT` finishes the step. The helper raises only when
+    none of the three expected screens appears within the selector
+    timeout — that surfaces a genuinely new Microsoft flow we have not
+    seen yet rather than silently hanging.
+    """
+
+    page.wait_for_selector(
+        f"{selectors.MS_TOTP_INPUT}, "
+        f"{selectors.MS_SIGN_IN_ANOTHER_WAY_LINK}, "
+        f"{selectors.MS_VERIFICATION_USE_CODE_OPTION}",
+        timeout=DEFAULT_SELECTOR_TIMEOUT_MS,
+    )
+
+    if page.is_visible(selectors.MS_TOTP_INPUT):
+        return
+
+    if page.is_visible(selectors.MS_VERIFICATION_USE_CODE_OPTION):
+        page.click(
+            selectors.MS_VERIFICATION_USE_CODE_OPTION,
+            timeout=DEFAULT_SELECTOR_TIMEOUT_MS,
+        )
+        return
+
+    page.click(
+        selectors.MS_SIGN_IN_ANOTHER_WAY_LINK,
+        timeout=DEFAULT_SELECTOR_TIMEOUT_MS,
+    )
+    page.wait_for_selector(
+        selectors.MS_VERIFICATION_USE_CODE_OPTION,
+        timeout=DEFAULT_SELECTOR_TIMEOUT_MS,
+    )
+    page.click(
+        selectors.MS_VERIFICATION_USE_CODE_OPTION,
+        timeout=DEFAULT_SELECTOR_TIMEOUT_MS,
+    )
+
+
+# --------------------------------------------------------------------- #
 # Fresh-login flow                                                      #
 # --------------------------------------------------------------------- #
 
@@ -233,6 +296,14 @@ def _drive_fresh_login(
     )
     page.fill(selectors.MS_PASSWORD_INPUT, creds.password)
     page.click(selectors.MS_PASSWORD_SUBMIT)
+
+    # Step 4a. Verification-method routing. Microsoft's late-2025 tenant
+    # default is passkey/WebAuthn ("Face, fingerprint, PIN or security
+    # key") — Playwright cannot complete a WebAuthn ceremony, so we
+    # navigate past the passkey prompt to the "Use a verification code"
+    # tile, which then renders the TOTP input the driver has always
+    # known. No-op on tenants whose default is still TOTP. Issue #857.
+    _select_verification_code_method(page=page)
 
     # Step 5. TOTP screen.
     page.wait_for_selector(
