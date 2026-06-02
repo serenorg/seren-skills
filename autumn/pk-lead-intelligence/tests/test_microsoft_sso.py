@@ -535,3 +535,143 @@ def test_fresh_login_returns_early_when_sf_resumes_session_without_microsoft_tra
     assert result.reused_storage is False
     # No Microsoft tenant URL to surface — race B bypassed Microsoft.
     assert result.microsoft_tenant_url is None
+
+
+# --------------------------------------------------------------------- #
+# Microsoft passkey-default verification-method routing (#857)          #
+# --------------------------------------------------------------------- #
+
+
+def test_fresh_login_navigates_passkey_default_to_totp(
+    creds, storage_path, discovery_path
+):
+    """Regression for #857. Tenant defaults to passkey after password.
+
+    Microsoft now renders the "Face, fingerprint, PIN or security key"
+    prompt after the password step on many tenants. Playwright cannot
+    complete a WebAuthn ceremony in a remote-controlled browser. The
+    driver must click "Sign in another way" → "Use a verification code"
+    to reach the existing OTC input. The full click order between
+    password submit and TOTP submit must be exactly:
+
+        Sign in another way → Use a verification code
+    """
+
+    page = FakePage(
+        wait_for_url_returns=[
+            "https://login.microsoftonline.com/tenant/oauth2/authorize",
+        ],
+        visible_selectors={selectors.MS_SIGN_IN_ANOTHER_WAY_LINK},
+    )
+    context = FakeContext(page=page)
+
+    microsoft_sso.authenticate(
+        context=context,
+        salesforce_org_url="https://acme.lightning.force.com",
+        creds=creds,
+        storage_path=storage_path,
+        discovery_path=discovery_path,
+    )
+
+    # Anchor on the password and TOTP fills (unique per step). The
+    # submit-button selectors are NOT unique — Microsoft reuses
+    # `input#idSIButton9` for the email and password submits — so
+    # `clicks.index(MS_PASSWORD_SUBMIT)` would match the email submit.
+    def call_index(call_type, target):
+        return next(
+            i for i, c in enumerate(page.call_log)
+            if c[0] == call_type and c[1][0] == target
+        )
+
+    pwd_fill = call_index("fill", selectors.MS_PASSWORD_INPUT)
+    totp_fill = call_index("fill", selectors.MS_TOTP_INPUT)
+    saw_click = call_index("click", selectors.MS_SIGN_IN_ANOTHER_WAY_LINK)
+    uvc_click = call_index("click", selectors.MS_VERIFICATION_USE_CODE_OPTION)
+
+    # Passkey flow strictly requires sign-in-another-way before
+    # use-verification-code; both must sit between password fill and
+    # TOTP fill.
+    assert pwd_fill < saw_click < uvc_click < totp_fill
+
+
+def test_fresh_login_clicks_use_code_when_picker_shown_directly(
+    creds, storage_path, discovery_path
+):
+    """Regression for #857. Tenant skips passkey, shows picker directly.
+
+    Some tenants render the "Verify your identity" method picker
+    immediately after password submit, without the passkey prompt
+    intermediate. In that case the driver must NOT click
+    "Sign in another way" (it does not exist on the picker page;
+    clicking a missing selector raises in real Playwright) and MUST
+    click "Use a verification code" exactly once.
+    """
+
+    page = FakePage(
+        wait_for_url_returns=[
+            "https://login.microsoftonline.com/tenant/oauth2/authorize",
+        ],
+        visible_selectors={selectors.MS_VERIFICATION_USE_CODE_OPTION},
+    )
+    context = FakeContext(page=page)
+
+    microsoft_sso.authenticate(
+        context=context,
+        salesforce_org_url="https://acme.lightning.force.com",
+        creds=creds,
+        storage_path=storage_path,
+        discovery_path=discovery_path,
+    )
+
+    clicks = [call[1][0] for call in page.call_log if call[0] == "click"]
+    assert selectors.MS_SIGN_IN_ANOTHER_WAY_LINK not in clicks
+    assert clicks.count(selectors.MS_VERIFICATION_USE_CODE_OPTION) == 1
+
+    # Anchor on the password and TOTP fills (unique per step). See the
+    # comment in test_fresh_login_navigates_passkey_default_to_totp for
+    # why submit-button selectors are not safe anchors.
+    def call_index(call_type, target):
+        return next(
+            i for i, c in enumerate(page.call_log)
+            if c[0] == call_type and c[1][0] == target
+        )
+
+    pwd_fill = call_index("fill", selectors.MS_PASSWORD_INPUT)
+    totp_fill = call_index("fill", selectors.MS_TOTP_INPUT)
+    uvc_click = call_index("click", selectors.MS_VERIFICATION_USE_CODE_OPTION)
+
+    assert pwd_fill < uvc_click < totp_fill
+
+
+def test_fresh_login_skips_method_picker_on_legacy_totp_default(
+    creds, storage_path, discovery_path
+):
+    """Regression for #857. Tenants on the old TOTP default still work.
+
+    When the OTC input is the first selector visible after password
+    submit, the driver must skip the method-picker code path entirely
+    — no "Sign in another way" click, no "Use a verification code"
+    click. This protects tenants that haven't been rolled onto the
+    passkey default from incurring extra clicks they don't need.
+    """
+
+    page = FakePage(
+        wait_for_url_returns=[
+            "https://login.microsoftonline.com/tenant/oauth2/authorize",
+        ],
+        visible_selectors={selectors.MS_TOTP_INPUT},
+    )
+    context = FakeContext(page=page)
+
+    microsoft_sso.authenticate(
+        context=context,
+        salesforce_org_url="https://acme.lightning.force.com",
+        creds=creds,
+        storage_path=storage_path,
+        discovery_path=discovery_path,
+    )
+
+    clicks = [call[1][0] for call in page.call_log if call[0] == "click"]
+
+    assert selectors.MS_SIGN_IN_ANOTHER_WAY_LINK not in clicks
+    assert selectors.MS_VERIFICATION_USE_CODE_OPTION not in clicks

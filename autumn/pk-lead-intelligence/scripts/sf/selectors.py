@@ -49,6 +49,33 @@ MS_PASSWORD_SUBMIT = 'input#idSIButton9'
 MS_TOTP_INPUT = 'input[name="otc"]'
 MS_TOTP_SUBMIT = 'input#idSubmit_SAOTCC_Continue'
 
+# Microsoft's passkey / WebAuthn-default prompt ("Face, fingerprint,
+# PIN or security key") that many tenants now render BEFORE the TOTP
+# step. Playwright cannot complete a WebAuthn ceremony in a remote-
+# controlled browser, so the driver clicks "Sign in another way" to
+# escape to the method picker. The id `signInAnotherWay` is the
+# stable handle; the text-based fallbacks absorb tenant-language and
+# minor markup churn. Issue #857.
+MS_SIGN_IN_ANOTHER_WAY_LINK = (
+    'a#signInAnotherWay, '
+    'a:has-text("Sign in another way"), '
+    'button:has-text("Sign in another way")'
+)
+
+# "Verify your identity" method-picker tile for the TOTP option.
+# Microsoft renders each method as a separately clickable element
+# (anchor/div/button depending on the tenant); match by visible text
+# to absorb the markup variation. The label has been stable at
+# "Use a verification code" across tenant rollouts; the
+# `data-value="PhoneAppOTP"` attribute is the legacy hook still
+# present on some tenants. Issue #857.
+MS_VERIFICATION_USE_CODE_OPTION = (
+    'div[role="button"]:has-text("Use a verification code"), '
+    'button:has-text("Use a verification code"), '
+    'a:has-text("Use a verification code"), '
+    '[data-value="PhoneAppOTP"]'
+)
+
 # The "Stay signed in?" (KMSI) interstitial Microsoft shows after a
 # successful sign-in. Body says "Stay signed in?"; "Yes" is
 # `idSIButton9`, "No" is `idBtn_Back`. We click "No" to keep
