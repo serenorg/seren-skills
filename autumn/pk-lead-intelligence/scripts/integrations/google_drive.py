@@ -58,6 +58,37 @@ class ShareResult:
 # --------------------------------------------------------------------- #
 
 
+def create_folder(
+    *,
+    name: str,
+    publisher_call: PublisherCall,
+) -> str:
+    """Create a Google Drive folder and return its id.
+
+    Used by `scripts.bootstrap` to provision the weekly-reports
+    output folder on first run. Kept distinct from `upload_and_share`
+    because folder creation has different idempotency rules — Drive
+    silently allows duplicate folder names, and the chat AI calls
+    this once per fresh install, not per-run.
+    """
+
+    resp = publisher_call(
+        "google-drive",
+        "/files",
+        {
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder",
+        },
+    )
+    folder_id = resp.get("id")
+    if not folder_id:
+        raise RuntimeError(
+            "google-drive POST /files for folder returned no `id`. "
+            f"Response keys: {sorted(resp.keys())}"
+        )
+    return folder_id
+
+
 def upload_and_share(
     *,
     doc: WeeklyStatusDoc,

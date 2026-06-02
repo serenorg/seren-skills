@@ -195,14 +195,31 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--command",
         required=True,
-        choices=["run", "provision", "weekly"],
+        choices=["run", "provision", "weekly", "bootstrap"],
         help=(
             "Top-level command. `run` enriches a Lead (dry-run or "
             "live Note write). `provision` validates the three "
             "operator-owned Salesforce artifacts are reachable. "
             "`weekly` composes the Tuesday-morning status doc and "
-            "uploads it to Google Drive. Live commands require "
-            "`--allow-live` paired with config `inputs.live_mode=true`."
+            "uploads it to Google Drive. `bootstrap` (issue #853) "
+            "stages config + .env into the stable user-config dir, "
+            "auto-provisions SerenDB and Drive, and emits a JSON "
+            "envelope listing fields the chat AI must ask the "
+            "operator about. Live commands require `--allow-live` "
+            "paired with config `inputs.live_mode=true`."
+        ),
+    )
+    parser.add_argument(
+        "--set",
+        dest="bootstrap_assignments",
+        action="append",
+        default=[],
+        metavar="key=value",
+        help=(
+            "Bootstrap field assignment, repeatable. The chat AI "
+            "calls `--command bootstrap --set <key>=<value>` once "
+            "per operator answer; valid keys come from the envelope "
+            "the previous `--command bootstrap` invocation emitted."
         ),
     )
     parser.add_argument(
@@ -1145,6 +1162,106 @@ def _resolve_live_mode(config: dict) -> bool:
     return value is True
 
 
+def _parse_set_assignment(raw: str) -> tuple[str, str]:
+    """Split a single `--set key=value` argument.
+
+    Validation is intentionally strict — a malformed assignment is
+    almost always a typo in the chat AI's tool call, and a silent
+    accept would write garbage to `config.json` or `.env`.
+    """
+
+    if "=" not in raw:
+        raise ValueError(
+            f"--set expects key=value; got {raw!r}. The chat AI "
+            "must call `--command bootstrap --set <key>=<value>` "
+            "with a single equals sign per assignment."
+        )
+    key, _, value = raw.partition("=")
+    key = key.strip()
+    if not key:
+        raise ValueError(f"--set is missing the key: {raw!r}")
+    return key, value
+
+
+def _run_bootstrap_command(args) -> int:
+    """Drive the first-run bootstrap end-to-end and print the JSON
+    envelope the chat AI consumes.
+
+    Apply any `--set` assignments first, then run a bootstrap pass
+    (idempotent), then print the envelope. Exit code is 0 on a
+    successfully emitted envelope — the chat AI keys off the
+    envelope's `bootstrap` field, not the process exit code.
+    """
+
+    from scripts import bootstrap  # noqa: PLC0415
+    from scripts.storage import persistence  # noqa: PLC0415
+    from scripts import seren_client  # noqa: PLC0415
+
+    stable_dir = _STABLE_CONFIG_DIR
+    skill_root = Path(_SKILL_ROOT)
+
+    if args.bootstrap_assignments:
+        try:
+            assignments = [
+                _parse_set_assignment(raw) for raw in args.bootstrap_assignments
+            ]
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        # Stage the example files so apply_set has somewhere to
+        # write before we run the auto-resolve pass.
+        stable_dir.mkdir(parents=True, exist_ok=True)
+        if not (stable_dir / "config.json").exists():
+            import shutil  # noqa: PLC0415
+
+            shutil.copy2(skill_root / "config.example.json", stable_dir / "config.json")
+        if not (stable_dir / ".env").exists():
+            import shutil  # noqa: PLC0415
+
+            shutil.copy2(skill_root / ".env.example", stable_dir / ".env")
+        try:
+            bootstrap.apply_set(stable_dir=stable_dir, assignments=assignments)
+        except KeyError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
+    def _drive_call(publisher: str, path: str, body: dict) -> dict:
+        return seren_client.call_publisher(publisher, "POST", path, body=body)
+
+    def _serendb_factory() -> bootstrap.SerenDBLike:
+        return persistence.HttpSerenDBClient()
+
+    try:
+        result = bootstrap.run_bootstrap(
+            stable_dir=stable_dir,
+            skill_root=skill_root,
+            serendb_client_factory=_serendb_factory,
+            drive_publisher_call=_drive_call,
+        )
+    except Exception as exc:
+        # Auto-resolve failure should NOT stop the chat AI from
+        # asking the user the operator-only fields — still emit an
+        # envelope so the loop survives a transient publisher
+        # outage. Surface the error on stderr for the chat AI to
+        # relay if it chooses.
+        print(
+            f"bootstrap: auto-resolve failed: {exc!r}",
+            file=sys.stderr,
+        )
+        # Best-effort scan of whatever is on disk so the envelope
+        # is still well-formed.
+        result = bootstrap.BootstrapResult(
+            ready=False,
+            auto_resolved=[],
+            missing=list(bootstrap._ALL_FIELDS),
+            stable_dir=stable_dir,
+        )
+
+    envelope = bootstrap.format_envelope(result)
+    print(json.dumps(envelope))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry. Returns a process exit code."""
 
@@ -1162,7 +1279,21 @@ def main(argv: list[str] | None = None) -> int:
     seren_client.load_dotenv_into_environ(
         [directory / ".env" for directory in _config_search_dirs()]
     )
+
+    # Issue #853 — first-run bootstrap. Explicit `--command bootstrap`
+    # always runs the bootstrap pass. Any OTHER command that ran
+    # without `--config` AND has no config.json in any search dir
+    # also drops into the bootstrap path so the chat AI receives a
+    # parseable JSON envelope instead of a FileNotFoundError. When
+    # `--config` is supplied (tests / advanced operators), we trust
+    # the caller and skip the redirect. The bootstrap pass itself
+    # is idempotent and never overwrites operator edits.
+    explicit_config = args.config is not None
     args.config = _resolve_config_path(args.config)
+    if args.command == "bootstrap":
+        return _run_bootstrap_command(args)
+    if not explicit_config and not args.config.exists():
+        return _run_bootstrap_command(args)
 
     # `run` command — Phase 2 dry-run + Phase 4 live Note write.
     # `--dry-run` is required when `--allow-live` is absent (we
