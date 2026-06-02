@@ -90,3 +90,140 @@ def bootstrap_serendb(
             "Service Account has the connection-uri scope"
         )
     return uri
+
+
+# --------------------------------------------------------------------- #
+# HTTP-backed production client                                         #
+# --------------------------------------------------------------------- #
+#
+# The fake `SerenDBClient` lives in the tests. The real one bridges
+# the five Protocol methods to the `seren-db` publisher via the
+# existing `seren_client.call_publisher` seam, so bootstrap can run
+# on operator machines without any extra wiring.
+
+_DEFAULT_REGION = "aws-us-east-2"
+
+
+class HttpSerenDBClient:
+    """Production `SerenDBClient` impl backed by the `seren-db`
+    publisher gateway.
+
+    Endpoint shape mirrors the paths covered by `seren_client._build_url`
+    tests (`/projects`, `/projects/{id}/...`). The gateway resolves the
+    project's default branch when one is not supplied — bootstrap
+    targets a fresh project's main branch, so this matches the user
+    flow we ship.
+
+    The client is single-process and stateless; it can be reconstructed
+    per bootstrap pass.
+    """
+
+    PUBLISHER = "seren-db"
+
+    def __init__(self, *, region: str = _DEFAULT_REGION) -> None:
+        self._region = region
+
+    # ---- Protocol surface --------------------------------------------- #
+
+    def list_projects(self) -> list[dict]:
+        resp = self._call("GET", "/projects")
+        return _normalize_project_list(resp)
+
+    def create_project(self, name: str) -> dict:
+        resp = self._call(
+            "POST",
+            "/projects",
+            body={"name": name, "region": self._region},
+        )
+        return _normalize_project(resp)
+
+    def list_databases(self, project_id: str) -> list[dict]:
+        resp = self._call("GET", f"/projects/{project_id}/databases")
+        return _normalize_database_list(resp)
+
+    def create_database(self, project_id: str, name: str) -> dict:
+        resp = self._call(
+            "POST",
+            f"/projects/{project_id}/databases",
+            body={"name": name},
+        )
+        return _normalize_database(resp)
+
+    def get_connection_uri(self, project_id: str) -> str:
+        resp = self._call(
+            "GET",
+            f"/projects/{project_id}/connection_uri",
+        )
+        return _normalize_connection_uri(resp)
+
+    # ---- Transport ---------------------------------------------------- #
+
+    def _call(self, method: str, path: str, *, body: dict | None = None):
+        from scripts import seren_client  # noqa: PLC0415
+
+        return seren_client.call_publisher(
+            self.PUBLISHER,
+            method,
+            path,
+            body=body,
+        )
+
+
+def _normalize_project_list(resp) -> list[dict]:
+    """Coerce the gateway response into `[{id, name}, ...]`.
+
+    `seren-db` is a data publisher so `call_publisher` returns the
+    unwrapped `data` payload directly. Different gateway versions
+    have shipped either a bare list or a wrapper dict — handle both.
+    """
+
+    if isinstance(resp, list):
+        return [_normalize_project(item) for item in resp]
+    if isinstance(resp, dict):
+        for key in ("projects", "data", "items"):
+            value = resp.get(key)
+            if isinstance(value, list):
+                return [_normalize_project(item) for item in value]
+    return []
+
+
+def _normalize_project(item) -> dict:
+    if not isinstance(item, dict):
+        return {}
+    # Older paths used `project_id`; current shapes use `id`.
+    project_id = item.get("id") or item.get("project_id") or ""
+    return {"id": project_id, "name": item.get("name", "")}
+
+
+def _normalize_database_list(resp) -> list[dict]:
+    if isinstance(resp, list):
+        return [_normalize_database(item) for item in resp]
+    if isinstance(resp, dict):
+        for key in ("databases", "data", "items"):
+            value = resp.get(key)
+            if isinstance(value, list):
+                return [_normalize_database(item) for item in value]
+    return []
+
+
+def _normalize_database(item) -> dict:
+    if not isinstance(item, dict):
+        return {}
+    db_id = item.get("id") or item.get("database_id") or ""
+    return {"id": db_id, "name": item.get("name", "")}
+
+
+def _normalize_connection_uri(resp) -> str:
+    if isinstance(resp, str):
+        return resp
+    if isinstance(resp, dict):
+        for key in (
+            "uri",
+            "connection_uri",
+            "connection_string",
+            "url",
+        ):
+            value = resp.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""

@@ -244,15 +244,63 @@ credential in this skill — protect it like a production password.
 
 ### Install
 
-```bash
-cd autumn/pk-lead-intelligence
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
-cp .env.example .env       # fill in
-cp config.example.json config.json   # adjust
+Seren Desktop installs this skill at `~/.config/seren/skills/pk-lead-intelligence/` and provisions the Python venv, Chromium, and dependencies for you. You do not run any shell commands.
+
+On your first `/pk-lead-intelligence` invocation, the skill detects that no `config.json` exists, auto-provisions everything it can on its own (SerenDB project + database, Google Drive folder, Seren API key), and emits a JSON envelope listing the answers only you can give. Your Seren chat agent (Claude in this chat) reads that envelope and asks you for each value in turn — right here in chat — then persists each answer back into your local config via `python scripts/agent.py --command bootstrap --set <key>=<value>`. Seren Desktop itself does not prompt for, transport, or store any of these answers; the chat AI is the only thing that asks you, and your values stay on your machine. See §First-Run Bootstrap below for the envelope contract.
+
+When all answers are saved, the next invocation runs a dry-run end-to-end and renders the Note for review.
+
+> Maintainers running the skill from a clone of `seren-skills` can still set it up manually:
+>
+> ```bash
+> cd autumn/pk-lead-intelligence
+> python3 -m venv .venv
+> source .venv/bin/activate
+> pip install -r requirements.txt
+> playwright install chromium
+> ```
+>
+> The chat-driven bootstrap above is the supported path for everyone else; `.env` and `config.json` are written by the bootstrap command, never copied by hand.
+
+### First-Run Bootstrap (chat-AI contract)
+
+`pk-lead-intelligence` does not assume a Seren Desktop setup wizard exists. The skill itself owns first-run detection, the chat AI owns the conversation, and there is no third party in between.
+
+On any invocation where `~/.config/seren/pk-lead-intelligence/config.json` is missing or incomplete, `scripts/agent.py` runs an implicit bootstrap pass:
+
+1. Stages `config.example.json` → `config.json` and `.env.example` → `.env` in `~/.config/seren/pk-lead-intelligence/` (idempotent — existing files are never overwritten).
+2. Auto-resolves silently:
+   - `SEREN_API_KEY` via `resolve_api_key()`.
+   - `serendb_connection_uri` via `bootstrap_serendb(project_name='pk-lead-intelligence', database_name='pk_lead_enrichment')`.
+   - `google_drive_folder_id` via `google_drive.create_folder('PK Lead Intelligence — Weekly Reports')`.
+3. Emits a single JSON line on stdout listing operator-only fields it still needs:
+
+```json
+{
+  "bootstrap": "needs_input",
+  "skill": "pk-lead-intelligence",
+  "auto_resolved": ["SEREN_API_KEY", "serendb_connection_uri", "google_drive_folder_id"],
+  "missing": [
+    {"key": "salesforce_org_url",    "scope": "config", "prompt": "What URL do you use to log in to Salesforce?",                       "secret": false},
+    {"key": "salesforce_owner_email","scope": "config", "prompt": "What's your Salesforce SSO email?",                                   "secret": false},
+    {"key": "nathan_share_email",    "scope": "config", "prompt": "Who should receive the weekly status doc?",                          "secret": false},
+    {"key": "SF_USERNAME",           "scope": "env",    "prompt": "Microsoft / SSO username (often the same as your SSO email).",       "secret": false},
+    {"key": "SF_PASSWORD",           "scope": "env",    "prompt": "Microsoft / SSO password.",                                          "secret": true},
+    {"key": "SF_TOTP_SECRET",        "scope": "env",    "prompt": "Authenticator TOTP secret — see Path A walkthrough above.",          "secret": true}
+  ],
+  "persist_command": "python scripts/agent.py --command bootstrap --set <key>=<value>"
+}
 ```
+
+**Chat-AI responsibilities (Claude in the user's Seren chat):**
+
+- Read the envelope. Do not surface it to the user verbatim.
+- For each entry in `missing`, ask the user the `prompt` in the chat, one at a time, in order. Mask the user's response when `secret: true`.
+- Persist each answer immediately by invoking `persist_command` with that single key, e.g. `python scripts/agent.py --command bootstrap --set salesforce_org_url=https://example.lightning.force.com`. The bootstrap subcommand is idempotent and routes `config` keys to `config.json` and `env` keys to `.env`.
+- After every write, re-run `scripts/agent.py` (no flags). When the envelope flips to `{"bootstrap": "ready"}`, the same invocation continues into `--command run --dry-run` and surfaces the rendered `.docx` for review.
+- Never write `inputs.live_mode = true` during bootstrap — it is force-clamped to `false` until the user has reviewed dry-run output and explicitly approves.
+
+**Out of contract for Seren Desktop.** The Desktop runtime does not see, prompt for, transport, or store the values in `missing`. It only delivers the skill bundle and the `API_KEY`. If a Desktop setup wizard ever ships, it will be additive — this envelope contract is the supported UX today.
 
 ## Configuration
 
