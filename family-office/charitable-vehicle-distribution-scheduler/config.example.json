@@ -1,0 +1,53 @@
+{
+  "skill": "charitable-vehicle-distribution-scheduler",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "charitable-vehicle-distribution-scheduler-20260604-001",
+    "subject": "DAF annual giving budget",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "DAF & Charitable-Trust Distribution Scheduler & Reconciler",
+    "priority": "P1",
+    "cadence": "monthly-balance-obligation-reconcile-annual-valuation-recompute",
+    "gate": "DAF recommendations and trust distribution instructions require sign-off",
+    "sample_subject": "DAF annual giving budget",
+    "exception_flags": [
+      "required_payout_due"
+    ],
+    "actions": [
+      "reconcile_vehicle_balance",
+      "compute_required_payout",
+      "draft_distribution_packet"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "charitable-vehicle-distribution-scheduler-20260604-001",
+    "subject": "DAF annual giving budget",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "required_payout_due"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-charitable-vehicle-distribution-scheduler",
+    "database": "family_office_charitable_vehicle_distribution_scheduler"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
