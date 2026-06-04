@@ -1,0 +1,53 @@
+{
+  "skill": "policy-renewal-claims-operator",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "policy-renewal-claims-operator-20260604-001",
+    "subject": "Umbrella renewal",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Insurance Policy Renewal, Coverage-Gap & Claims Operator",
+    "priority": "P0",
+    "cadence": "daily-renewal-window-scan-weekly-coverage-gap-digest",
+    "gate": "binding coverage changes and claim submissions are review-gated",
+    "sample_subject": "Umbrella renewal",
+    "exception_flags": [
+      "coverage_gap_detected"
+    ],
+    "actions": [
+      "scan_renewal_windows",
+      "flag_coverage_gap",
+      "draft_broker_packet"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "policy-renewal-claims-operator-20260604-001",
+    "subject": "Umbrella renewal",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "coverage_gap_detected"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-policy-renewal-claims-operator",
+    "database": "family_office_policy_renewal_claims_operator"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
