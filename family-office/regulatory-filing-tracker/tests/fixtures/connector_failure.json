@@ -1,0 +1,38 @@
+{
+  "status": "error",
+  "skill": "regulatory-filing-tracker",
+  "error_code": "connector_failure",
+  "connector": "browser",
+  "message": "Connector call failed during smoke test.",
+  "connectors": {
+    "gmail": {
+      "get": {
+        "status": "error",
+        "connector": "gmail",
+        "action": "get",
+        "error_code": "connector_failure"
+      }
+    },
+    "outlook": {
+      "post": {
+        "status": "ok",
+        "connector": "outlook",
+        "action": "post"
+      }
+    },
+    "passwords": {
+      "post": {
+        "status": "ok",
+        "connector": "passwords",
+        "action": "post"
+      }
+    },
+    "storage": {
+      "post": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "post"
+      }
+    }
+  }
+}
