@@ -9,7 +9,7 @@
   "secrets": {
     "vault_name": "Example Vault",
     "affinity_item_title": "example-affinity-key",
-    "microsoft_login_item_title": "example-microsoft-login"
+    "affinity_env_var": "AFFINITY_API_KEY"
   },
   "email": {
     "dry_run_to": "dry-run@example.com",

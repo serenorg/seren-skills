@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,40 +15,111 @@ LOGGER = logging.getLogger(__name__)
 
 
 class SetupBlocked(RuntimeError):
-    """Raised when Passwords setup is incomplete for this runtime."""
+    """Raised when secret setup is incomplete for this runtime."""
+
+
+def _missing_secret_message(env_var: str) -> str:
+    return (
+        f"Affinity API key is not available. Set {env_var} in the environment "
+        "or the skill's .env / cloud secret store, or grant the hosted Seren "
+        "Passwords tools (passwords_vaults_list, passwords_items_list, "
+        "passwords_item_get) that return plaintext after an access grant."
+    )
 
 
 @dataclass
 class SecretConfig:
     vault_name: str
     affinity_item_title: str
-    microsoft_login_item_title: str
+    affinity_env_var: str = "AFFINITY_API_KEY"
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> "SecretConfig":
         return cls(
-            vault_name=str(data["vault_name"]),
-            affinity_item_title=str(data["affinity_item_title"]),
-            microsoft_login_item_title=str(data["microsoft_login_item_title"]),
+            vault_name=str(data.get("vault_name", "")),
+            affinity_item_title=str(data.get("affinity_item_title", "")),
+            affinity_env_var=str(data.get("affinity_env_var", "AFFINITY_API_KEY")),
         )
 
 
 class SecretResolver:
-    def __init__(self, gateway: Any, config: SecretConfig) -> None:
+    """Resolve the Affinity API key, env-first.
+
+    Order:
+      1. Environment / `.env` / cloud secret store (`AFFINITY_API_KEY`).
+         This is the cloud-cron path — the only one that works headless,
+         mirroring how the sibling `pk-lead-intelligence` skill injects
+         secrets (issue #865).
+      2. Hosted Seren Passwords MCP tools (desktop / post-grant). These
+         return plaintext only when present; the pure-HTTP REST surface
+         is end-to-end encrypted and cannot decrypt (issue #861).
+
+    `gateway` may be `None` (cloud with no Passwords MCP). `env` is
+    injectable for tests; it defaults to `os.environ`.
+    """
+
+    def __init__(
+        self,
+        gateway: Any,
+        config: SecretConfig,
+        *,
+        env: dict[str, str] | None = None,
+    ) -> None:
         self.gateway = gateway
         self.config = config
+        self._env = env if env is not None else os.environ
         self._vault_id: str | None = None
         self._items: list[dict[str, Any]] | None = None
         self._affinity_key: str | None = None
-        self._ms_login: dict[str, Any] | None = None
+
+    def get_affinity_key(self) -> str:
+        if self._affinity_key is not None:
+            return self._affinity_key
+
+        env_value = self._env.get(self.config.affinity_env_var)
+        if env_value and env_value.strip():
+            self._affinity_key = env_value.strip()
+            LOGGER.info(
+                "Resolved Affinity key from %s (len=%s)",
+                self.config.affinity_env_var,
+                len(self._affinity_key),
+            )
+            return self._affinity_key
+
+        if self.gateway is not None:
+            value = self._affinity_key_from_passwords()
+            if value:
+                self._affinity_key = value
+                LOGGER.info(
+                    "Resolved Affinity key from Seren Passwords (len=%s)",
+                    len(self._affinity_key),
+                )
+                return self._affinity_key
+
+        raise SetupBlocked(_missing_secret_message(self.config.affinity_env_var))
+
+    # ---- Seren Passwords fallback ------------------------------------- #
+
+    def _affinity_key_from_passwords(self) -> str | None:
+        try:
+            item = self._get_item(self.config.affinity_item_title)
+        except SetupBlocked:
+            raise
+        except (PublisherError, LookupError):
+            return None
+        value = item.get("primary_value") or item.get("password") or item.get("value")
+        if not value:
+            fields = item.get("fields") or {}
+            value = (
+                fields.get("primary_value")
+                or fields.get("password")
+                or fields.get("value")
+            )
+        return str(value).strip() if value else None
 
     def _vaults(self) -> list[dict[str, Any]]:
         try:
-            response = self.gateway.call_tool(
-                "seren-passwords",
-                "passwords_vaults_list",
-                {},
-            )
+            response = self.gateway.call_tool("seren-passwords", "passwords_vaults_list", {})
         except PublisherError:
             response = self.gateway.call_tool("seren-passwords", "get_vaults", {})
         return _as_list(response, "vaults")
@@ -63,12 +135,7 @@ class SecretResolver:
             if vault.get("name_ciphertext") and not vault.get("name"):
                 saw_encrypted_only = True
         if saw_encrypted_only:
-            raise SetupBlocked(
-                "This runtime can reach only encrypted Seren Passwords REST records. "
-                "Expose the hosted Seren Passwords tools "
-                "(passwords_vaults_list, passwords_items_list, passwords_item_get) "
-                "before running this skill."
-            )
+            raise SetupBlocked(_missing_secret_message(self.config.affinity_env_var))
         raise LookupError("Configured Seren Passwords vault was not found")
 
     def _list_items(self) -> list[dict[str, Any]]:
@@ -116,38 +183,6 @@ class SecretResolver:
             raise RuntimeError("Seren Passwords item response was not an object")
         return item
 
-    def get_affinity_key(self) -> str:
-        if self._affinity_key is not None:
-            return self._affinity_key
-        item = self._get_item(self.config.affinity_item_title)
-        value = item.get("primary_value") or item.get("password") or item.get("value")
-        if not value:
-            fields = item.get("fields") or {}
-            value = fields.get("primary_value") or fields.get("password") or fields.get("value")
-        if not value:
-            raise RuntimeError("Affinity secret item did not contain a primary value")
-        self._affinity_key = str(value).strip()
-        LOGGER.info("Resolved Affinity key from Seren Passwords (len=%s)", len(self._affinity_key))
-        return self._affinity_key
-
-    def get_ms_login(self) -> dict[str, Any]:
-        if self._ms_login is not None:
-            return dict(self._ms_login)
-        item = self._get_item(self.config.microsoft_login_item_title)
-        fields = item.get("fields") if isinstance(item.get("fields"), dict) else item
-        login = {
-            "username": fields.get("username") or fields.get("email"),
-            "password": fields.get("password"),
-            "totp": fields.get("totp") or fields.get("otp") or fields.get("totp_secret"),
-        }
-        if not login["username"] or not login["password"]:
-            raise RuntimeError("Microsoft login item missing username or password")
-        self._ms_login = login
-        username = str(login["username"])
-        masked = username[:2] + "***" + username[-4:] if len(username) > 6 else "***"
-        LOGGER.info("Resolved Microsoft login from Seren Passwords (user=%s)", masked)
-        return dict(login)
-
 
 def _as_list(response: Any, key: str) -> list[dict[str, Any]]:
     if isinstance(response, dict):
@@ -175,20 +210,20 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     config = _load_config(Path(args.config))
+    try:
+        gateway = GatewayClient.from_env()
+    except RuntimeError:
+        gateway = None
     resolver = SecretResolver(
-        GatewayClient.from_env(),
+        gateway,
         SecretConfig.from_mapping(config.get("secrets", {})),
     )
     try:
         key = resolver.get_affinity_key()
-        login = resolver.get_ms_login()
     except SetupBlocked as exc:
         print(f"setup-blocked: {exc}")
         return 2
-    user = str(login["username"])
-    masked = user[:2] + "***" + user[-4:] if len(user) > 6 else "***"
     print(f"affinity-crm: OK (len={len(key)})")
-    print(f"ms-login: OK (user={masked})")
     return 0
 
 
