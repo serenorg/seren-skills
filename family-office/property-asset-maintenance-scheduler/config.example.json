@@ -1,0 +1,53 @@
+{
+  "skill": "property-asset-maintenance-scheduler",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "property-asset-maintenance-scheduler-20260604-001",
+    "subject": "Palm Beach fire inspection",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Property & Physical-Asset Maintenance Calendar Operator",
+    "priority": "P1",
+    "cadence": "daily-due-overdue-scan-weekly-status-seasonal-templates",
+    "gate": "spend-committing dispatch above threshold requires approval",
+    "sample_subject": "Palm Beach fire inspection",
+    "exception_flags": [
+      "maintenance_overdue"
+    ],
+    "actions": [
+      "scan_due_maintenance",
+      "open_work_order",
+      "log_service_history"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "property-asset-maintenance-scheduler-20260604-001",
+    "subject": "Palm Beach fire inspection",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "maintenance_overdue"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-property-asset-maintenance-scheduler",
+    "database": "family_office_property_asset_maintenance_scheduler"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
