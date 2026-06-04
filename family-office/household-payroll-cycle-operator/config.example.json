@@ -1,0 +1,53 @@
+{
+  "skill": "household-payroll-cycle-operator",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "household-payroll-cycle-operator-20260604-001",
+    "subject": "June household payroll",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Household Staff Payroll & Compliance Cycle Operator",
+    "priority": "P0",
+    "cadence": "per-pay-period-daily-document-expiry-quarterly-employer-tax-package",
+    "gate": "ACH releases, tax remittances, and filings require dual gate approval",
+    "sample_subject": "June household payroll",
+    "exception_flags": [
+      "timesheet_missing_approval"
+    ],
+    "actions": [
+      "validate_timesheets",
+      "stage_pay_run",
+      "open_payroll_exception"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "household-payroll-cycle-operator-20260604-001",
+    "subject": "June household payroll",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "timesheet_missing_approval"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-household-payroll-cycle-operator",
+    "database": "family_office_household_payroll_cycle_operator"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
