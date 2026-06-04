@@ -1,0 +1,7 @@
+{
+  "status": "error",
+  "skill": "ap-invoice-intake-and-bill-pay-operator",
+  "error_code": "policy_violation",
+  "policy": "max_notional_usd",
+  "message": "Requested notional exceeds configured cap."
+}
