@@ -1,0 +1,53 @@
+{
+  "skill": "family-council-cycle-operator",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "family-council-cycle-operator-20260604-001",
+    "subject": "June family council",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Family Council & Commitment-to-Close Operator",
+    "priority": "P1",
+    "cadence": "meeting-event-t5-agenda-post-meeting-ingest-daily-commitment-watch",
+    "gate": "official minutes publication and owner nudges are review-gated",
+    "sample_subject": "June family council",
+    "exception_flags": [
+      "commitment_overdue"
+    ],
+    "actions": [
+      "draft_agenda",
+      "ingest_commitments",
+      "prepare_owner_nudges"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "family-council-cycle-operator-20260604-001",
+    "subject": "June family council",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "commitment_overdue"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-family-council-cycle-operator",
+    "database": "family_office_family_council_cycle_operator"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
