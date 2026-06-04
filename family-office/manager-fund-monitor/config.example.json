@@ -1,0 +1,53 @@
+{
+  "skill": "manager-fund-monitor",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "manager-fund-monitor-20260604-001",
+    "subject": "Acme Fund quarterly score",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Post-Allocation Manager & Fund Monitor",
+    "priority": "P1",
+    "cadence": "monthly-quarterly-reporting-period-rescore",
+    "gate": "redemption paperwork is drafted only and requires CIO or principal approval",
+    "sample_subject": "Acme Fund quarterly score",
+    "exception_flags": [
+      "threshold_breach"
+    ],
+    "actions": [
+      "rescore_manager_thresholds",
+      "flag_redemption_candidate",
+      "draft_cio_scorecard"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "manager-fund-monitor-20260604-001",
+    "subject": "Acme Fund quarterly score",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "threshold_breach"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-manager-fund-monitor",
+    "database": "family_office_manager_fund_monitor"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
