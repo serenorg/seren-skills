@@ -2,58 +2,72 @@ from __future__ import annotations
 
 import logging
 
-from scripts.secrets import SecretConfig, SecretResolver
+import pytest
+
+from scripts.secrets import SecretConfig, SecretResolver, SetupBlocked
+from scripts.seren_client import PublisherError
 
 
-class FakeGateway:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict]] = []
+class ExplodingGateway:
+    """Any tool call is a failure — proves env-first needs no gateway."""
 
-    def call_tool(self, publisher: str, tool: str, tool_args: dict | None = None):
-        self.calls.append((tool, tool_args or {}))
+    def call_tool(self, publisher, tool, tool_args=None):
+        raise AssertionError(f"gateway must not be called; got {tool!r}")
+
+
+class HostedPasswordsGateway:
+    """Hosted Seren Passwords MCP tools returning plaintext (desktop)."""
+
+    def call_tool(self, publisher, tool, tool_args=None):
         if tool == "passwords_vaults_list":
-            return [
-                {"vault_id": "other", "name": "Other"},
-                {"vault_id": "vault-1", "name": "Demo Vault"},
-            ]
+            return [{"vault_id": "vault-1", "name": "Demo Vault"}]
         if tool == "passwords_items_list":
-            assert tool_args == {"vault_id": "vault-1"}
-            return [
-                {"item_id": "item-a", "title": "crm-key"},
-                {"item_id": "item-b", "title": "ms-login"},
-            ]
+            return [{"item_id": "item-a", "title": "crm-key"}]
         if tool == "passwords_item_get":
-            if tool_args["item_id"] == "item-a":
-                return {"item": {"primary_value": "  secret-token  "}}
-            return {
-                "item": {
-                    "fields": {
-                        "username": "owner@example.com",
-                        "password": "password-value",
-                        "totp": "totp-value",
-                    }
-                }
-            }
+            return {"item": {"primary_value": "  secret-token  "}}
         raise AssertionError(f"unexpected tool {tool}")
 
 
-def test_secret_resolver_matches_configured_vault_strips_key_and_logs_no_secret(
-    caplog,
-):
+class EncryptedOnlyGateway:
+    """REST surface returns only E2E-encrypted records (the #861 path)."""
+
+    def call_tool(self, publisher, tool, tool_args=None):
+        if tool in {"passwords_vaults_list", "passwords_items_list", "passwords_item_get"}:
+            raise PublisherError(403, "Endpoint is not in the allowed endpoints list")
+        if tool == "get_vaults":
+            return {"data": [{"vault_id": "vault-1", "name_ciphertext": "encrypted"}]}
+        raise AssertionError(tool)
+
+
+def _config() -> SecretConfig:
+    return SecretConfig(vault_name="Demo Vault", affinity_item_title="crm-key")
+
+
+def test_affinity_key_resolves_from_env_first_without_gateway(caplog):
     caplog.set_level(logging.INFO)
     resolver = SecretResolver(
-        FakeGateway(),
-        SecretConfig(
-            vault_name="Demo Vault",
-            affinity_item_title="crm-key",
-            microsoft_login_item_title="ms-login",
-        ),
+        ExplodingGateway(),
+        _config(),
+        env={"AFFINITY_API_KEY": "  env-token  "},
     )
+    assert resolver.get_affinity_key() == "env-token"
+    assert "env-token" not in caplog.text  # never log the secret
 
+
+def test_affinity_key_falls_back_to_hosted_passwords_tools():
+    resolver = SecretResolver(HostedPasswordsGateway(), _config(), env={})
     assert resolver.get_affinity_key() == "secret-token"
-    assert resolver.get_ms_login()["username"] == "owner@example.com"
 
-    logs = caplog.text
-    assert "secret-token" not in logs
-    assert "password-value" not in logs
-    assert "totp-value" not in logs
+
+def test_setup_blocked_names_env_var_when_no_env_and_no_gateway():
+    resolver = SecretResolver(None, _config(), env={})
+    with pytest.raises(SetupBlocked) as exc:
+        resolver.get_affinity_key()
+    assert "AFFINITY_API_KEY" in str(exc.value)
+
+
+def test_setup_blocked_when_only_encrypted_rest_records():
+    resolver = SecretResolver(EncryptedOnlyGateway(), _config(), env={})
+    with pytest.raises(SetupBlocked) as exc:
+        resolver.get_affinity_key()
+    assert "AFFINITY_API_KEY" in str(exc.value)
