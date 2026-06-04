@@ -1,0 +1,53 @@
+{
+  "skill": "crummey-notice-engine",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "crummey-notice-engine-20260604-001",
+    "subject": "ILIT premium contribution",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Crummey Notice & Gift-Funding Deadline Engine",
+    "priority": "P1",
+    "cadence": "on-gift-event-daily-countdown-scheduled-premium-window",
+    "gate": "notices are drafted and sent only after review",
+    "sample_subject": "ILIT premium contribution",
+    "exception_flags": [
+      "notice_window_open"
+    ],
+    "actions": [
+      "draft_beneficiary_notices",
+      "start_withdrawal_window_countdown",
+      "log_notice_ledger"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "crummey-notice-engine-20260604-001",
+    "subject": "ILIT premium contribution",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "notice_window_open"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-crummey-notice-engine",
+    "database": "family_office_crummey_notice_engine"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
