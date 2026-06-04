@@ -1,0 +1,24 @@
+skill:
+  name: affinity-proposals
+  slug: glide-affinity-proposals
+  org: glide
+  description: Generate dry-run-first Glide proposal PDFs from Affinity CRM meeting notes and audit the workflow.
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+  mode: cron
+  cron_schedule: "0 10 * * *"
+  cron_timezone: America/Chicago
+policies:
+  dry_run_default: true
+  live_requires_dual_gate: true
+  idempotency_required: true
+  money_movement: false
+connectors:
+  - affinity-crm
+  - microsoft-outlook
+  - microsoft-sharepoint
+  - seren-passwords
+  - seren-db
+  - seren-cloud
+  - seren-models

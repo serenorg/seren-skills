@@ -1,0 +1,25 @@
+{
+  "dry_run": true,
+  "live_mode": false,
+  "affinity": {
+    "list_name": "Example Prospects",
+    "engaged_status": "Engaged - 25%",
+    "proposal_status": "Proposal - 50%"
+  },
+  "secrets": {
+    "vault_name": "Example Vault",
+    "affinity_item_title": "example-affinity-key",
+    "microsoft_login_item_title": "example-microsoft-login"
+  },
+  "email": {
+    "dry_run_to": "dry-run@example.com",
+    "dry_run_cc": ["reviewer@example.com"],
+    "live_cc": ["manager@example.com", "owner@example.com"]
+  },
+  "sharepoint": {
+    "folder_name": "AI Proposals"
+  },
+  "serendb": {
+    "database": "default"
+  }
+}

@@ -1,0 +1,10 @@
+.env
+config.json
+out/
+*.pdf
+state/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
