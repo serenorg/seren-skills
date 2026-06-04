@@ -23,6 +23,7 @@
     "folder_name": "AI Proposals"
   },
   "serendb": {
-    "database": "default"
+    "project": "glide-affinity-proposals",
+    "database": "glide_affinity_proposals"
   }
 }

@@ -132,11 +132,6 @@ class GatewayClient:
             body=tool_args,
         )
 
-    def call_database(self, *, publisher: str, query: str, database: str | None = None) -> Any:
-        body: dict[str, Any] = {"query": query}
-        if database:
-            body["database"] = database
-        return self.call_publisher(publisher, method="POST", path="/", body=body)
 
     def chat_json(
         self,

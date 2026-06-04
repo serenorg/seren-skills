@@ -165,6 +165,7 @@ def build_services(raw_config: dict[str, Any], *, skill_root: Path) -> AgentServ
     from scripts.email_send import OutlookEmailSender
     from scripts.proposal import ProposalService, ProposalTemplatePaths, SharePointRenderer
     from scripts.secrets import SecretConfig, SecretResolver
+    from scripts.serendb import SerenDBManager
     from scripts.seren_client import GatewayClient
 
     gateway = GatewayClient.from_env(skill_root=skill_root)
@@ -193,9 +194,18 @@ def build_services(raw_config: dict[str, Any], *, skill_root: Path) -> AgentServ
         ),
         output_dir=skill_root / "out",
     )
+    serendb_cfg = raw_config.get("serendb", {})
+    serendb_project = str(serendb_cfg.get("project", "glide-affinity-proposals"))
+    serendb_database = str(serendb_cfg.get("database", "glide_affinity_proposals"))
+    project_id, branch_id = SerenDBManager(gateway).ensure_project_database(
+        project_name=serendb_project,
+        database_name=serendb_database,
+    )
     audit = SerenDBAuditLedger(
         gateway,
-        database=raw_config.get("serendb", {}).get("database"),
+        project_id=project_id,
+        branch_id=branch_id,
+        database=serendb_database,
     )
     audit.ensure_schema()
     return AgentServices(
