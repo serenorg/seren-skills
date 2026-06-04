@@ -6,9 +6,15 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
+# Routable seren-models id. `"default"` is not a model — the publisher
+# routes by explicit provider-qualified id. Matches the id the sibling
+# pk-lead-intelligence skill uses against the same publisher (issue #866).
+DEFAULT_MODEL = "anthropic/claude-sonnet-4-5"
+
+
 @dataclass
 class ExtractionConfig:
-    model: str = "default"
+    model: str = DEFAULT_MODEL
     default_structure: str = "offshore"
 
 
@@ -120,7 +126,7 @@ def extract_profile(
 
 
 class GatewayModelClient:
-    def __init__(self, gateway: Any, *, model: str = "default") -> None:
+    def __init__(self, gateway: Any, *, model: str = DEFAULT_MODEL) -> None:
         self.gateway = gateway
         self.model = model
 

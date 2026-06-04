@@ -11,6 +11,9 @@
     "affinity_item_title": "example-affinity-key",
     "affinity_env_var": "AFFINITY_API_KEY"
   },
+  "extract": {
+    "model": "anthropic/claude-sonnet-4-5"
+  },
   "email": {
     "dry_run_to": "dry-run@example.com",
     "dry_run_cc": ["reviewer@example.com"],
