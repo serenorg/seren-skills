@@ -1,0 +1,53 @@
+{
+  "skill": "regulatory-filing-tracker",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "regulatory-filing-tracker-20260604-001",
+    "subject": "13F threshold check",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Regulatory Filing Tracker (FBAR / 13F / Foreign Information Returns)",
+    "priority": "P1",
+    "cadence": "quarterly-threshold-check-annual-foreign-reporting-season",
+    "gate": "government e-filing remains behind dual gate and human approval",
+    "sample_subject": "13F threshold check",
+    "exception_flags": [
+      "threshold_crossed"
+    ],
+    "actions": [
+      "recompute_filing_thresholds",
+      "draft_filing_package",
+      "escalate_threshold_crossing"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "regulatory-filing-tracker-20260604-001",
+    "subject": "13F threshold check",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "threshold_crossed"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-regulatory-filing-tracker",
+    "database": "family_office_regulatory_filing_tracker"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
