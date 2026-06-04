@@ -1,0 +1,53 @@
+{
+  "skill": "foundation-payout-compliance-monitor",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "foundation-payout-compliance-monitor-20260604-001",
+    "subject": "2026 foundation payout gap",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Foundation 5% Payout & 990-PF Compliance Monitor",
+    "priority": "P0",
+    "cadence": "monthly-recompute-weekly-final-quarter-annual-990pf-rollup",
+    "gate": "monitor only; CPA and board approval are required before filings or final figures",
+    "sample_subject": "2026 foundation payout gap",
+    "exception_flags": [
+      "payout_gap_projected"
+    ],
+    "actions": [
+      "recompute_payout_requirement",
+      "project_qualifying_distribution_gap",
+      "draft_board_memo"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "foundation-payout-compliance-monitor-20260604-001",
+    "subject": "2026 foundation payout gap",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "payout_gap_projected"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-foundation-payout-compliance-monitor",
+    "database": "family_office_foundation_payout_compliance_monitor"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}

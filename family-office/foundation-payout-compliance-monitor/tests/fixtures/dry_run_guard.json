@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "skill": "foundation-payout-compliance-monitor",
+  "dry_run": true,
+  "blocked_action": "live_execution"
+}
