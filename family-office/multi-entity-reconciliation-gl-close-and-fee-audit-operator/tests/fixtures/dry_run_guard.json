@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "skill": "multi-entity-reconciliation-gl-close-and-fee-audit-operator",
+  "dry_run": true,
+  "blocked_action": "live_execution"
+}
