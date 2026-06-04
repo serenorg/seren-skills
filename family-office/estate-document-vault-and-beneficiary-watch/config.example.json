@@ -1,0 +1,53 @@
+{
+  "skill": "estate-document-vault-and-beneficiary-watch",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "estate-document-vault-and-beneficiary-watch-20260604-001",
+    "subject": "IRA beneficiary designation",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Document-Vault Intake + Beneficiary-Designation Drift Watch",
+    "priority": "P1",
+    "cadence": "daily-vault-intake-quarterly-beneficiary-reconciliation-life-event-watch",
+    "gate": "the agent never changes designations and only prepares remediation packets",
+    "sample_subject": "IRA beneficiary designation",
+    "exception_flags": [
+      "designation_drift"
+    ],
+    "actions": [
+      "index_document_version",
+      "compare_beneficiary_designation",
+      "draft_remediation_packet"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "estate-document-vault-and-beneficiary-watch-20260604-001",
+    "subject": "IRA beneficiary designation",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "designation_drift"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-estate-document-vault-and-beneficiary-watch",
+    "database": "family_office_estate_document_vault_and_beneficiary_watch"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
