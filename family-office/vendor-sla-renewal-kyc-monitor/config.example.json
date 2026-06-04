@@ -1,0 +1,53 @@
+{
+  "skill": "vendor-sla-renewal-kyc-monitor",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "vendor-sla-renewal-kyc-monitor-20260604-001",
+    "subject": "Security vendor renewal",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Vendor & Advisor Roster SLA / Renewal / KYC Monitor",
+    "priority": "P1",
+    "cadence": "daily-expiry-notice-window-weekly-vendor-health-monthly-quarterly-screening",
+    "gate": "outbound notices, terminations, and onboarding state changes require approval",
+    "sample_subject": "Security vendor renewal",
+    "exception_flags": [
+      "notice_window_open"
+    ],
+    "actions": [
+      "scan_notice_windows",
+      "run_vendor_rescreen",
+      "draft_renewal_packet"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "vendor-sla-renewal-kyc-monitor-20260604-001",
+    "subject": "Security vendor renewal",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "notice_window_open"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-vendor-sla-renewal-kyc-monitor",
+    "database": "family_office_vendor_sla_renewal_kyc_monitor"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
