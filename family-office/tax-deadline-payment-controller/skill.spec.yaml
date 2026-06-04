@@ -1,0 +1,147 @@
+skill: tax-deadline-payment-controller
+description: "Family office: Maintains federal, state, and local obligation calendars, recalculates estimated payments from latest ytd data, and drafts review-gated voucher packets."
+triggers:
+  - run tax deadline payment controller
+  - check estimated tax payments
+  - prepare EFTPS voucher packet
+  - review upcoming tax obligations
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  event_id:
+    type: string
+    description: Stable id for the event, obligation, document, alert, payment, filing, or work item.
+  subject:
+    type: string
+    description: Human-readable event subject used in audit and review packets.
+  dry_run_to:
+    type: string
+    description: Review mailbox used for dry-run digest routing.
+    default: taariq@serendb.com
+  approval_confirmed:
+    type: boolean
+    description: Set true only after the responsible human approves the staged action.
+    default: false
+secrets:
+  - SEREN_API_KEY
+connectors:
+  storage:
+    kind: seren_publisher
+    publisher: seren-db
+  passwords:
+    kind: seren_publisher
+    publisher: seren-passwords
+  gmail:
+    kind: seren_publisher
+    publisher: gmail
+  outlook:
+    kind: seren_publisher
+    publisher: microsoft-outlook
+  browser:
+    kind: seren_publisher
+    publisher: browserbase
+  cron:
+    kind: seren_publisher
+    publisher: seren-cron
+state:
+  tax_obligations:
+    kind: serendb
+    database: family_office_tax_deadline_payment_controller
+    table: tax_obligations
+  payment_run_log:
+    kind: serendb
+    database: family_office_tax_deadline_payment_controller
+    table: payment_run_log
+  safe_harbor_calculations:
+    kind: serendb
+    database: family_office_tax_deadline_payment_controller
+    table: safe_harbor_calculations
+policies:
+  dry_run_default: true
+  idempotency_required: true
+  max_daily_spend_usd: 0
+workflow:
+  steps:
+    - id: normalize_event
+      use: transform.normalize_operator_event
+      with:
+        event_id: "{event_id}"
+        subject: "{subject}"
+    - id: resolve_seren_passwords_context
+      use: connector.passwords.post
+      with:
+        path: /mcp/passwords_vaults_list
+        body:
+          purpose: resolve_named_secret_references
+          forbid_vault_ids_from_config: true
+    - id: ensure_operator_database
+      use: connector.storage.post
+      with:
+        path: /projects
+        body:
+          project_name: family-office-tax-deadline-payment-controller
+          database: family_office_tax_deadline_payment_controller
+    - id: load_operator_register
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          step: ensure_operator_database
+          query: select * from tax_obligations limit 100
+    - id: scan_event_sources
+      use: connector.gmail.get
+      with:
+        path: /gmail/v1/users/me/messages
+        body:
+          query: "newer_than:7d"
+          dry_run_to: "{dry_run_to}"
+    - id: evaluate_control_event
+      use: transform.evaluate_family_office_operator_event
+      with:
+        event_from: normalize_event
+        register_from: load_operator_register
+        gate: "government payment submission requires --allow-live, live_mode=true, and human-witnessed approval"
+    - id: persist_audit_event
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          body_from: evaluate_control_event
+          table: operator_audit_events
+    - id: create_review_task
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          body_from: evaluate_control_event
+          table: operator_review_tasks
+    - id: send_dry_run_digest
+      use: connector.outlook.post
+      with:
+        path: /me/sendMail
+        body:
+          dry_run_to: "{dry_run_to}"
+          body_from: evaluate_control_event
+          review_gate_only: true
+    - id: summary
+      use: transform.render_operator_summary
+      with:
+        depends_on:
+          - persist_audit_event
+          - create_review_task
+          - send_dry_run_digest
+tests:
+  quick:
+    - validate spec
+  smoke:
+    - dry-run exception event routes to review gate
+    - live execution requires dual approval gate
+publish:
+  org: family-office
+  slug: tax-deadline-payment-controller
+metadata:
+  category: family-office-operator
+  priority: P0
+  cadence: daily-90-day-horizon-quarterly-estimated-payment-surge
+  issue: "852"
