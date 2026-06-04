@@ -149,7 +149,7 @@ class GatewayClient:
         *,
         messages: list[dict[str, str]],
         response_schema: dict[str, Any],
-        model: str = "anthropic/claude-sonnet-4-5",
+        model: str = "openai/gpt-5.5",
         temperature: float = 0,
     ) -> dict[str, Any]:
         response = self.call_publisher(

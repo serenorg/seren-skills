@@ -68,6 +68,7 @@ def test_gateway_model_client_sends_real_model_id_by_default():
     gateway = RecordingGateway()
     GatewayModelClient(gateway).chat_json([{"role": "user", "content": "hi"}], {})
     assert gateway.model == DEFAULT_MODEL
+    assert DEFAULT_MODEL == "openai/gpt-5.5"  # product default (issue #875)
     assert gateway.model != "default"
     assert "/" in gateway.model  # provider-qualified, routable id
 
