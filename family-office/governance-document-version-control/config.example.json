@@ -1,0 +1,53 @@
+{
+  "skill": "governance-document-version-control",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "governance-document-version-control-20260604-001",
+    "subject": "Investment policy draft",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Governance Document Version Control & Drift Watch",
+    "priority": "P1",
+    "cadence": "daily-document-hash-watch-weekly-review-window-digest",
+    "gate": "promoting a document to ratified requires explicit human confirmation",
+    "sample_subject": "Investment policy draft",
+    "exception_flags": [
+      "unratified_change_detected"
+    ],
+    "actions": [
+      "hash_governance_documents",
+      "open_signature_task",
+      "flag_policy_drift"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "governance-document-version-control-20260604-001",
+    "subject": "Investment policy draft",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "unratified_change_detected"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-governance-document-version-control",
+    "database": "family_office_governance_document_version_control"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
