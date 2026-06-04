@@ -12,7 +12,7 @@
     "affinity_env_var": "AFFINITY_API_KEY"
   },
   "extract": {
-    "model": "anthropic/claude-sonnet-4-5"
+    "model": "openai/gpt-5.5"
   },
   "email": {
     "dry_run_to": "dry-run@example.com",

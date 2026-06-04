@@ -7,9 +7,9 @@ from typing import Any, Protocol
 
 
 # Routable seren-models id. `"default"` is not a model — the publisher
-# routes by explicit provider-qualified id. Matches the id the sibling
-# pk-lead-intelligence skill uses against the same publisher (issue #866).
-DEFAULT_MODEL = "anthropic/claude-sonnet-4-5"
+# routes by explicit provider-qualified id. GPT-5.5 is the product default
+# for proposal extraction (issue #875); verified live-routable on seren-models.
+DEFAULT_MODEL = "openai/gpt-5.5"
 
 
 @dataclass
