@@ -1,0 +1,53 @@
+{
+  "skill": "trust-distribution-ledger-operator",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "trust-distribution-ledger-operator-20260604-001",
+    "subject": "GRAT annuity distribution",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Trust Distribution Scheduling & Execution Operator",
+    "priority": "P0",
+    "cadence": "daily-due-distribution-tick-quarterly-annual-fixed-distributions",
+    "gate": "release requires dual live gate and human-witnessed trustee approval",
+    "sample_subject": "GRAT annuity distribution",
+    "exception_flags": [
+      "beneficiary_wire_mismatch"
+    ],
+    "actions": [
+      "compute_distribution_amount",
+      "open_trustee_approval",
+      "reconcile_distribution_debit"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "trust-distribution-ledger-operator-20260604-001",
+    "subject": "GRAT annuity distribution",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "beneficiary_wire_mismatch"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-trust-distribution-ledger-operator",
+    "database": "family_office_trust_distribution_ledger_operator"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
