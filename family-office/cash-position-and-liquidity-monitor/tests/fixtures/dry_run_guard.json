@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "skill": "cash-position-and-liquidity-monitor",
+  "dry_run": true,
+  "blocked_action": "live_execution"
+}
