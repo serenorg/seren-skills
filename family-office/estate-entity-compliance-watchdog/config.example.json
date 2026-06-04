@@ -1,0 +1,53 @@
+{
+  "skill": "estate-entity-compliance-watchdog",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "estate-entity-compliance-watchdog-20260604-001",
+    "subject": "Acme Holdings LLC annual report",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Estate & Entity Annual-Filing, Registered-Agent & Good-Standing Watchdog",
+    "priority": "P0",
+    "cadence": "daily-entity-deadline-watch-weekly-good-standing-digest",
+    "gate": "government filings and entity changes require review and dual live gate",
+    "sample_subject": "Acme Holdings LLC annual report",
+    "exception_flags": [
+      "annual_report_due_soon"
+    ],
+    "actions": [
+      "scan_entity_deadlines",
+      "check_good_standing",
+      "draft_filing_packet"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "estate-entity-compliance-watchdog-20260604-001",
+    "subject": "Acme Holdings LLC annual report",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "annual_report_due_soon"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-estate-entity-compliance-watchdog",
+    "database": "family_office_estate_entity_compliance_watchdog"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
