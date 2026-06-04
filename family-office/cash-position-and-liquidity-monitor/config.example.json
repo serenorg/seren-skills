@@ -1,0 +1,53 @@
+{
+  "skill": "cash-position-and-liquidity-monitor",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "cash-position-and-liquidity-monitor-20260604-001",
+    "subject": "June liquidity forecast",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Daily Cash-Position & Liquidity-Floor Monitor",
+    "priority": "P0",
+    "cadence": "daily-balance-pull-weekly-liquidity-summary",
+    "gate": "monitor only; recommended sweeps or funding moves are decision packets and never money movement",
+    "sample_subject": "June liquidity forecast",
+    "exception_flags": [
+      "projected_cushion_breach"
+    ],
+    "actions": [
+      "pull_balance_snapshot",
+      "compute_liquidity_forecast",
+      "send_cushion_breach_alert"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "cash-position-and-liquidity-monitor-20260604-001",
+    "subject": "June liquidity forecast",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "projected_cushion_breach"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-cash-position-and-liquidity-monitor",
+    "database": "family_office_cash_position_and_liquidity_monitor"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}

@@ -3,6 +3,106 @@
     "autumn/pk-lead-intelligence": {
       "trading": false,
       "reason": "Salesforce CRM lead enrichment skill. `--allow-live` and `--dry-run` gate Salesforce Note writes to a CRM record, not orders on an exchange. The runtime has no exchange, no inventory, no order book, no money. The lexical heuristic flags the skill because it shares the `live_mode` / `dry_run` runtime pattern with sibling trading skills, but the trading-domain guardrails (`Trade Execution Contract`, `Pre-Trade Checklist`, marketable-exit rules, etc.) have nothing to validate here. Issue #753 documents the misclassification; the override is the minimum-change unblock for PR #752."
+    },
+    "family-office/wire-beneficiary-verification-gate": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/commitment-cashflow-ledger-operator": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/ap-invoice-intake-and-bill-pay-operator": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/cash-position-and-liquidity-monitor": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/multi-entity-reconciliation-gl-close-and-fee-audit-operator": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/tax-deadline-payment-controller": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/k1-1099-tracking-chase": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/trust-distribution-ledger-operator": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/household-payroll-cycle-operator": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/foundation-payout-compliance-monitor": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/grant-pipeline-disbursement-operator": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/policy-renewal-claims-operator": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/estate-entity-compliance-watchdog": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/manager-fund-monitor": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/consolidated-reporting-refresh-and-statement-chaser": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/regulatory-filing-tracker": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/crummey-notice-engine": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/estate-document-vault-and-beneficiary-watch": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/charitable-vehicle-distribution-scheduler": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/family-council-cycle-operator": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/governance-document-version-control": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/credential-hygiene-breach-monitor": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/travel-security-keyperson-watch": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/vendor-sla-renewal-kyc-monitor": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
+    },
+    "family-office/property-asset-maintenance-scheduler": {
+      "trading": false,
+      "reason": "Issue #852 family-office operator skill. The runtime uses `--allow-live`, `live_mode`, and `dry_run` for review-gated operational workflows, not broker, exchange, order-book, CLOB, or inventory execution. Money movement, government filings, beneficiary changes, and binding instructions remain human-approved; the trading-domain safety contract is not applicable."
     }
   },
   "waivers": {
@@ -16,7 +116,7 @@
         "runtime_marketable_exit",
         "tests_guardrail_coverage"
       ],
-      "reason": "Read-only at v1 by design (SKILL.md launch contract; design doc §13.10 / §15). `--yes-live` always exits non-zero. The runtime never places orders, holds inventory, or interacts with the CLOB. `scripts/trading_safety.py` exists ONLY to encode the three preconditions any future trading-enable PR must satisfy — its docstrings mirror trading-domain language from sibling Polymarket skills, which causes the pattern-based detector to classify this skill as trading. The order-book / marketability / pre-trade checklist rules apply only when execution is wired; at v1 they have nothing to validate. Issue #454 tracks the gate contract; revisit waivers when a future PR re-enables execution."
+      "reason": "Read-only at v1 by design (SKILL.md launch contract; design doc \u00a713.10 / \u00a715). `--yes-live` always exits non-zero. The runtime never places orders, holds inventory, or interacts with the CLOB. `scripts/trading_safety.py` exists ONLY to encode the three preconditions any future trading-enable PR must satisfy \u2014 its docstrings mirror trading-domain language from sibling Polymarket skills, which causes the pattern-based detector to classify this skill as trading. The order-book / marketability / pre-trade checklist rules apply only when execution is wired; at v1 they have nothing to validate. Issue #454 tracks the gate contract; revisit waivers when a future PR re-enables execution."
     }
   }
 }
