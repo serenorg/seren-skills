@@ -1,0 +1,53 @@
+{
+  "skill": "grant-pipeline-disbursement-operator",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "grant-pipeline-disbursement-operator-20260604-001",
+    "subject": "Example Arts Foundation grant",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Grant Pipeline, Diligence & Disbursement Operator",
+    "priority": "P0",
+    "cadence": "daily-pipeline-advance-weekly-committee-status",
+    "gate": "grant approvals and disbursements are review-gated and fail closed on sanctions hits",
+    "sample_subject": "Example Arts Foundation grant",
+    "exception_flags": [
+      "diligence_screening_required"
+    ],
+    "actions": [
+      "advance_grant_pipeline",
+      "run_diligence_checklist",
+      "stage_disbursement_packet"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "grant-pipeline-disbursement-operator-20260604-001",
+    "subject": "Example Arts Foundation grant",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "diligence_screening_required"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-grant-pipeline-disbursement-operator",
+    "database": "family_office_grant_pipeline_disbursement_operator"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
