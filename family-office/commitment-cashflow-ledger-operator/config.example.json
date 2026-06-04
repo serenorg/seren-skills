@@ -1,0 +1,53 @@
+{
+  "skill": "commitment-cashflow-ledger-operator",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "commitment-cashflow-ledger-operator-20260604-001",
+    "subject": "Acme Growth Fund Call 7",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Private-Markets Commitment, Capital-Call & Distribution Lifecycle Operator",
+    "priority": "P0",
+    "cadence": "hourly-mailbox-portal-poll-daily-deadline-sweep-weekly-pacing-digest",
+    "gate": "changed GP wire instructions halt funding until out-of-band callback approval",
+    "sample_subject": "Acme Growth Fund Call 7",
+    "exception_flags": [
+      "wire_instruction_changed"
+    ],
+    "actions": [
+      "stage_funding_plan",
+      "open_wire_verification_task",
+      "send_deadline_digest"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "commitment-cashflow-ledger-operator-20260604-001",
+    "subject": "Acme Growth Fund Call 7",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "wire_instruction_changed"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-commitment-cashflow-ledger-operator",
+    "database": "family_office_commitment_cashflow_ledger_operator"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
