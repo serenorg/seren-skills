@@ -1,0 +1,42 @@
+{
+  "status": "ok",
+  "skill": "ap-invoice-intake-and-bill-pay-operator",
+  "workflow_step_count": 10,
+  "dry_run": true,
+  "inputs": {
+    "approval_confirmed": false,
+    "dry_run_to": "taariq@serendb.com",
+    "event_id": "",
+    "subject": ""
+  },
+  "connectors": {
+    "gmail": {
+      "get": {
+        "status": "ok",
+        "connector": "gmail",
+        "action": "get"
+      }
+    },
+    "outlook": {
+      "post": {
+        "status": "ok",
+        "connector": "outlook",
+        "action": "post"
+      }
+    },
+    "passwords": {
+      "post": {
+        "status": "ok",
+        "connector": "passwords",
+        "action": "post"
+      }
+    },
+    "storage": {
+      "post": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "post"
+      }
+    }
+  }
+}

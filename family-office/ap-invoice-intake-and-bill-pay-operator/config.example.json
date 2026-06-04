@@ -1,0 +1,53 @@
+{
+  "skill": "ap-invoice-intake-and-bill-pay-operator",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "ap-invoice-intake-and-bill-pay-operator-20260604-001",
+    "subject": "Acme Services Invoice 1042",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Accounts-Payable Invoice Intake & Review-Gated Bill-Pay Operator",
+    "priority": "P0",
+    "cadence": "daily-inbox-sweep-twice-weekly-payment-run",
+    "gate": "payments never release without human approval and beneficiary verification for remit changes",
+    "sample_subject": "Acme Services Invoice 1042",
+    "exception_flags": [
+      "remit_to_changed"
+    ],
+    "actions": [
+      "parse_invoice",
+      "stage_payment_run",
+      "open_remit_change_verification"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "ap-invoice-intake-and-bill-pay-operator-20260604-001",
+    "subject": "Acme Services Invoice 1042",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "remit_to_changed"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-ap-invoice-intake-and-bill-pay-operator",
+    "database": "family_office_ap_invoice_intake_and_bill_pay_operator"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
