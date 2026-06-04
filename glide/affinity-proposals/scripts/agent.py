@@ -9,7 +9,12 @@ from typing import Any
 
 from scripts.audit import AuditLedger, InMemoryAuditLedger
 from scripts.email_send import EmailConfig, build_proposal_email
-from scripts.extract import ExtractionConfig, GatewayModelClient, extract_profile
+from scripts.extract import (
+    DEFAULT_MODEL,
+    ExtractionConfig,
+    GatewayModelClient,
+    extract_profile,
+)
 from scripts.idempotency import should_skip_prospect
 
 
@@ -198,7 +203,7 @@ def build_services(raw_config: dict[str, Any], *, skill_root: Path) -> AgentServ
         extractor=ExtractorService(
             GatewayModelClient(
                 gateway,
-                model=str(raw_config.get("extract", {}).get("model", "default")),
+                model=str(raw_config.get("extract", {}).get("model") or DEFAULT_MODEL),
             ),
             ExtractionConfig(),
         ),
