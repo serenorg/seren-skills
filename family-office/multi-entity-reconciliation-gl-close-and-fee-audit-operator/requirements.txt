@@ -1,0 +1,1 @@
+# No third-party runtime dependencies are required for multi-entity-reconciliation-gl-close-and-fee-audit-operator.

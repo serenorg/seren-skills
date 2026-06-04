@@ -1,0 +1,53 @@
+{
+  "skill": "multi-entity-reconciliation-gl-close-and-fee-audit-operator",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "multi-entity-reconciliation-gl-close-and-fee-audit-operator-20260604-001",
+    "subject": "May close exception",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Bank/Custodian Reconciliation, Multi-Entity GL Close & Fund Fee/NAV Audit Operator",
+    "priority": "P0",
+    "cadence": "daily-transaction-pull-monthly-close-quarterly-fee-true-up",
+    "gate": "non-routine entries, material reclasses, and fee dispute sends require approval",
+    "sample_subject": "May close exception",
+    "exception_flags": [
+      "unmatched_custodian_cash"
+    ],
+    "actions": [
+      "match_transactions",
+      "score_close_readiness",
+      "draft_fee_exception_packet"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "multi-entity-reconciliation-gl-close-and-fee-audit-operator-20260604-001",
+    "subject": "May close exception",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "unmatched_custodian_cash"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-multi-entity-reconciliation-gl-close-and-fee-audit-operator",
+    "database": "family_office_multi_entity_reconciliation_gl_close_and_fee_audit_operator"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
