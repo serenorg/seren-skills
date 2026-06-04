@@ -180,6 +180,7 @@ def build_services(raw_config: dict[str, Any], *, skill_root: Path) -> AgentServ
         list_name=str(affinity_cfg["list_name"]),
         engaged_status=str(affinity_cfg.get("engaged_status", "Engaged - 25%")),
         proposal_status=str(affinity_cfg.get("proposal_status", "Proposal - 50%")),
+        owner_emails=affinity_cfg.get("owner_emails"),
     )
 
     templates = ProposalTemplatePaths(

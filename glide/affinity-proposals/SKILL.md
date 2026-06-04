@@ -7,6 +7,8 @@ description: Generate dry-run-first Glide proposal PDFs from Affinity CRM meetin
 
 This skill scans an Affinity prospect list for engaged prospects with a substantive meeting note and no prior proposal note. It extracts a proposal profile, edits a bundled PowerPoint template, renders a PDF through Microsoft SharePoint/Graph, sends a review email, and records the run in SerenDB.
 
+When `affinity.owner_emails` is set, only prospects owned by one of those emails qualify (case-insensitive); other owners' rows in the same list are skipped before their notes are fetched. Leave it empty or omit it to consider every owner in the list.
+
 Dry-run is the default. Live mode requires both `--allow-live` and `live_mode: true` in `config.json`.
 
 ## Public Repo Rules

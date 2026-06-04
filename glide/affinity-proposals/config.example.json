@@ -4,7 +4,8 @@
   "affinity": {
     "list_name": "Example Prospects",
     "engaged_status": "Engaged - 25%",
-    "proposal_status": "Proposal - 50%"
+    "proposal_status": "Proposal - 50%",
+    "owner_emails": ["owner@example.com"]
   },
   "secrets": {
     "vault_name": "Example Vault",

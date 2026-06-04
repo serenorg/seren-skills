@@ -145,11 +145,18 @@ class AffinityProspectSource:
         list_name: str,
         engaged_status: str = "Engaged - 25%",
         proposal_status: str = "Proposal - 50%",
+        owner_emails: list[str] | str | None = None,
     ) -> None:
         self.client = client
         self.list_name = list_name
         self.engaged_status = engaged_status
         self.proposal_status = proposal_status
+        self.owner_emails = _normalize_owner_emails(owner_emails)
+
+    def _owner_allowed(self, owner_email: str) -> bool:
+        if not self.owner_emails:
+            return True
+        return owner_email.strip().lower() in self.owner_emails
 
     def qualified_prospects(self) -> list[Prospect]:
         prospect_list = self.client.find_list(self.list_name)
@@ -169,6 +176,9 @@ class AffinityProspectSource:
             org_id = _extract_org_id(entry)
             if not org_id:
                 continue
+            owner_email = _extract_owner_email(field_values)
+            if not self._owner_allowed(owner_email):
+                continue
             notes = [
                 Note(
                     content=str(item.get("content") or item.get("text") or ""),
@@ -182,7 +192,6 @@ class AffinityProspectSource:
                 engaged_status=self.engaged_status,
             ):
                 continue
-            owner_email = _extract_owner_email(field_values)
             prospects.append(
                 Prospect(
                     prospect_id=str(entry_id),
@@ -237,6 +246,16 @@ def _extract_status(field_values: list[dict[str, Any]]) -> tuple[str, str | None
         if status:
             return str(status), str(field_value.get("id")) if field_value.get("id") else None
     return "", None
+
+
+def _normalize_owner_emails(owner_emails: list[str] | str | None) -> frozenset[str]:
+    if not owner_emails:
+        return frozenset()
+    if isinstance(owner_emails, str):
+        owner_emails = [owner_emails]
+    return frozenset(
+        email.strip().lower() for email in owner_emails if email and email.strip()
+    )
 
 
 def _extract_owner_email(field_values: list[dict[str, Any]]) -> str:
