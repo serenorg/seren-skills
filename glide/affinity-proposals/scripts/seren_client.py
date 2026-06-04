@@ -159,10 +159,72 @@ class GatewayClient:
         )
         if isinstance(response, dict) and "choices" in response:
             content = response["choices"][0]["message"]["content"]
-            return json.loads(content) if isinstance(content, str) else content
+            return _loads_model_json(content) if isinstance(content, str) else content
         if isinstance(response, dict):
             return response
         raise RuntimeError("Model response was not a JSON object")
+
+
+def _loads_model_json(content: str) -> Any:
+    """Parse a JSON object out of seren-models chat content.
+
+    The model returns chat text, not guaranteed-bare JSON: commonly a
+    ```json fenced block, sometimes JSON with surrounding prose
+    (`response_schema` is not enforced as structured output). Strip a
+    surrounding code fence, then fall back to extracting the first
+    balanced `{...}` object before parsing (issue #870).
+    """
+
+    text = content.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        lines = lines[1:]  # drop opening ``` / ```json line
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]  # drop closing fence
+        text = "\n".join(lines).strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    obj = _first_json_object(text)
+    if obj is None:
+        raise RuntimeError("seren-models response did not contain a JSON object")
+    return json.loads(obj)
+
+
+def _first_json_object(text: str) -> str | None:
+    """Return the first balanced top-level `{...}` substring, or None.
+
+    String-aware so a `}` inside a quoted value does not close the
+    object early.
+    """
+
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_str:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_str = False
+        elif char == '"':
+            in_str = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None
 
 
 def _unwrap(payload: Any) -> Any:
