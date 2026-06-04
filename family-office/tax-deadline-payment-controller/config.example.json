@@ -1,0 +1,53 @@
+{
+  "skill": "tax-deadline-payment-controller",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "tax-deadline-payment-controller-20260604-001",
+    "subject": "Q2 estimated tax payment",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Tax Deadline & Estimated-Payment Controller",
+    "priority": "P0",
+    "cadence": "daily-90-day-horizon-quarterly-estimated-payment-surge",
+    "gate": "government payment submission requires --allow-live, live_mode=true, and human-witnessed approval",
+    "sample_subject": "Q2 estimated tax payment",
+    "exception_flags": [
+      "payment_inside_action_window"
+    ],
+    "actions": [
+      "recompute_tax_horizon",
+      "draft_voucher_packet",
+      "escalate_action_window"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "tax-deadline-payment-controller-20260604-001",
+    "subject": "Q2 estimated tax payment",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "payment_inside_action_window"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-tax-deadline-payment-controller",
+    "database": "family_office_tax_deadline_payment_controller"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
