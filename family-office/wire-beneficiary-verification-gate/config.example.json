@@ -1,0 +1,45 @@
+{
+  "skill": "wire-beneficiary-verification-gate",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "instruction_id": "wire-20260604-001",
+    "counterparty_name": "Acme Growth Fund",
+    "dry_run_to": "taariq@serendb.com",
+    "allow_register_write": false,
+    "allow_safe_to_pay": false
+  },
+  "payment_instruction": {
+    "instruction_id": "wire-20260604-001",
+    "counterparty_name": "Acme Growth Fund",
+    "bank_fingerprint": "bank:new",
+    "amount_usd": 125000,
+    "source": "gmail"
+  },
+  "known_good_register": [
+    {
+      "counterparty_name": "Acme Growth Fund",
+      "bank_fingerprint": "bank:old",
+      "callback_phone_hash": "phone:known-good",
+      "last_verified_at": "2026-05-01"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-wire-beneficiary-verification-gate",
+    "database": "family_office_wire_beneficiary_verification_gate"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "ap-mailbox-oauth",
+      "banking-portal-readonly",
+      "bill-pay-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "*/15 * * * *",
+    "timezone": "America/New_York"
+  }
+}

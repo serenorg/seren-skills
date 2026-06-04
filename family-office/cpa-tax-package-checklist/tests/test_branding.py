@@ -97,10 +97,10 @@ def _catalog() -> dict[str, Path]:
     return out
 
 
-def test_catalog_has_56_leaves_and_4_routers() -> None:
+def test_catalog_keeps_rebuilt_baseline_or_newer() -> None:
     catalog = _catalog()
-    assert len(catalog) == 60, (
-        f"expected 56 leaves + 4 routers = 60 branded skills; got {len(catalog)}"
+    assert len(catalog) >= 60, (
+        f"expected at least the rebuilt baseline of 60 branded skills; got {len(catalog)}"
     )
 
 

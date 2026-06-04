@@ -1,0 +1,43 @@
+{
+  "status": "ok",
+  "skill": "wire-beneficiary-verification-gate",
+  "workflow_step_count": 10,
+  "dry_run": true,
+  "inputs": {
+    "allow_register_write": false,
+    "allow_safe_to_pay": false,
+    "counterparty_name": "",
+    "dry_run_to": "taariq@serendb.com",
+    "instruction_id": ""
+  },
+  "connectors": {
+    "gmail": {
+      "get": {
+        "status": "ok",
+        "connector": "gmail",
+        "action": "get"
+      }
+    },
+    "outlook": {
+      "post": {
+        "status": "ok",
+        "connector": "outlook",
+        "action": "post"
+      }
+    },
+    "passwords": {
+      "post": {
+        "status": "ok",
+        "connector": "passwords",
+        "action": "post"
+      }
+    },
+    "storage": {
+      "post": {
+        "status": "ok",
+        "connector": "storage",
+        "action": "post"
+      }
+    }
+  }
+}
