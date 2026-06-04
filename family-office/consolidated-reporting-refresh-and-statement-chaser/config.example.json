@@ -1,0 +1,53 @@
+{
+  "skill": "consolidated-reporting-refresh-and-statement-chaser",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "consolidated-reporting-refresh-and-statement-chaser-20260604-001",
+    "subject": "June consolidated report",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Consolidated Reporting Refresh + K-1 / Statement Collection Chaser",
+    "priority": "P1",
+    "cadence": "report-cadence-refresh-weekly-document-chase-tax-season-intensified",
+    "gate": "external report distribution and outbound chasers are review-gated",
+    "sample_subject": "June consolidated report",
+    "exception_flags": [
+      "missing_statement"
+    ],
+    "actions": [
+      "refresh_report_snapshot",
+      "open_statement_chase",
+      "stage_distribution_review"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "consolidated-reporting-refresh-and-statement-chaser-20260604-001",
+    "subject": "June consolidated report",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "missing_statement"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-consolidated-reporting-refresh-and-statement-chaser",
+    "database": "family_office_consolidated_reporting_refresh_and_statement_chaser"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
