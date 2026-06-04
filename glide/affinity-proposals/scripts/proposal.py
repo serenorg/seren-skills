@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import tempfile
-import base64
+import urllib.parse
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -138,39 +138,61 @@ class SharePointRenderer:
 
     def preflight(self) -> dict[str, Any]:
         try:
-            site = self.gateway.call_tool("microsoft-sharepoint", "get_sites_root", {})
+            return self.gateway.call_publisher(
+                "microsoft-sharepoint", method="GET", path="/sites/root"
+            )
         except PublisherError as exc:
-            if "OAuthRequired" in str(exc):
+            if self._is_oauth_error(exc):
                 raise SetupBlocked(
                     "Microsoft OAuth connection required for the SharePoint render account. "
                     "Connect the render account to the microsoft-sharepoint publisher before dry-run."
                 ) from exc
             raise
-        return site
+
+    @staticmethod
+    def _is_oauth_error(exc: PublisherError) -> bool:
+        return getattr(exc, "status", None) in (401, 403) or "oauth" in str(exc).lower()
+
+    def _ensure_folder(self, drive_id: str) -> None:
+        try:
+            self.gateway.call_publisher(
+                "microsoft-sharepoint",
+                method="POST",
+                path=f"/drives/{drive_id}/root/children",
+                body={
+                    "name": self.folder_name,
+                    "folder": {},
+                    "@microsoft.graph.conflictBehavior": "fail",
+                },
+            )
+        except PublisherError as exc:
+            # Folder already exists -> Graph returns 409 nameAlreadyExists.
+            if getattr(exc, "status", None) != 409 and "alreadyexists" not in str(exc).lower():
+                raise
 
     def render_pdf(self, pptx_path: Path) -> bytes:
         site = self.preflight()
         site_id = site.get("id") or site.get("site", {}).get("id")
         if not site_id:
             raise RuntimeError("SharePoint root site response missing id")
-        drive = self.gateway.call_tool(
-            "microsoft-sharepoint",
-            "get_sites_by_siteId_drive",
-            {"siteId": site_id},
+        drive = self.gateway.call_publisher(
+            "microsoft-sharepoint", method="GET", path=f"/sites/{site_id}/drive"
         )
         drive_id = drive.get("id") or drive.get("drive", {}).get("id")
         if not drive_id:
             raise RuntimeError("SharePoint drive response missing id")
-        upload = self.gateway.call_tool(
+
+        self._ensure_folder(drive_id)
+        folder = urllib.parse.quote(self.folder_name)
+        name = urllib.parse.quote(pptx_path.name)
+        upload = self.gateway.call_publisher(
             "microsoft-sharepoint",
-            "put_drives_by_driveId_root___",
-            {
-                "driveId": drive_id,
-                "body": {
-                    "path": f"/{self.folder_name}/{pptx_path.name}",
-                    "content_base64": base64.b64encode(pptx_path.read_bytes()).decode("ascii"),
-                },
-            },
+            method="PUT",
+            path=f"/drives/{drive_id}/root:/{folder}/{name}:/content",
+            data=pptx_path.read_bytes(),
+            content_type=(
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            ),
         )
         item_id = upload.get("id") or upload.get("item", {}).get("id")
         if not item_id:
@@ -181,13 +203,25 @@ class SharePointRenderer:
             path=f"/drives/{drive_id}/items/{item_id}/content?format=pdf",
             response_format="bytes",
         )
-        if isinstance(pdf, str):
-            pdf_bytes = pdf.encode("latin1")
-        else:
-            pdf_bytes = bytes(pdf)
-        if not pdf_bytes.startswith(b"%PDF"):
-            raise RuntimeError("SharePoint render did not return PDF bytes")
-        return pdf_bytes
+        return self._decode_pdf(pdf)
+
+    @staticmethod
+    def _decode_pdf(raw: Any) -> bytes:
+        pdf_bytes = raw.encode("latin1", "replace") if isinstance(raw, str) else bytes(raw)
+        if pdf_bytes.startswith(b"%PDF"):
+            return pdf_bytes
+        if pdf_bytes[:1] == b"{":
+            # The gateway wrapped the binary download in a JSON envelope whose
+            # body is a lossily text-decoded string (no base64). The bytes are
+            # unrecoverable — a gateway limitation, not a skill issue (#873).
+            raise SetupBlocked(
+                "SharePoint returned the PDF inside a JSON gateway envelope with a "
+                "lossily text-decoded body (no base64); the bytes cannot be "
+                "reconstructed. This is a gateway binary-download limitation — "
+                "see issue #873. Render is blocked until the gateway returns "
+                "binary content losslessly."
+            )
+        raise RuntimeError("SharePoint render did not return PDF bytes")
 
 
 class ProposalService:

@@ -47,39 +47,46 @@ class GatewayClient:
         url: str,
         *,
         body: dict[str, Any] | None = None,
+        data: bytes | None = None,
+        content_type: str | None = None,
         headers: dict[str, str] | None = None,
         response_format: str = "json",
     ) -> Any:
-        encoded = json.dumps(body).encode("utf-8") if body is not None else None
+        if data is not None:
+            payload: bytes | None = data
+        else:
+            payload = json.dumps(body).encode("utf-8") if body is not None else None
         request_headers = {
             "Authorization": f"Bearer {self.api_key}",
             "User-Agent": self.user_agent,
         }
-        if encoded is not None:
+        if data is not None:
+            request_headers["Content-Type"] = content_type or "application/octet-stream"
+        elif payload is not None:
             request_headers["Content-Type"] = "application/json"
         if headers:
             request_headers.update(headers)
         request = urllib.request.Request(
             url,
-            data=encoded,
+            data=payload,
             headers=request_headers,
             method=method,
         )
         try:
             with urllib.request.urlopen(request) as response:  # noqa: S310
-                data = response.read()
+                response_bytes = response.read()
                 status = response.status
         except urllib.error.HTTPError as exc:
-            data = exc.read()
+            response_bytes = exc.read()
             status = exc.code
         if not (200 <= status < 300):
-            text = data.decode("utf-8", errors="replace")
+            text = response_bytes.decode("utf-8", errors="replace")
             raise PublisherError(status, text[:1000])
         if response_format == "bytes":
-            return data
-        if not data:
+            return response_bytes
+        if not response_bytes:
             return {}
-        decoded = json.loads(data)
+        decoded = json.loads(response_bytes)
         return _unwrap(decoded)
 
     def call_publisher(
@@ -89,6 +96,8 @@ class GatewayClient:
         method: str = "GET",
         path: str = "/",
         body: dict[str, Any] | None = None,
+        data: bytes | None = None,
+        content_type: str | None = None,
         headers: dict[str, str] | None = None,
         response_format: str = "json",
     ) -> Any:
@@ -98,6 +107,8 @@ class GatewayClient:
             method,
             url,
             body=body,
+            data=data,
+            content_type=content_type,
             headers=headers,
             response_format=response_format,
         )
