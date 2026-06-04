@@ -1,0 +1,53 @@
+{
+  "skill": "k1-1099-tracking-chase",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "k1-1099-tracking-chase-20260604-001",
+    "subject": "Acme Fund 2025 K-1",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "K-1 / 1099 Receipt Tracking & Chase",
+    "priority": "P0",
+    "cadence": "daily-tax-season-mining-weekly-chase-cycle",
+    "gate": "chase emails and CPA package pushes are review-gated",
+    "sample_subject": "Acme Fund 2025 K-1",
+    "exception_flags": [
+      "document_overdue"
+    ],
+    "actions": [
+      "match_document_receipts",
+      "open_chase_task",
+      "draft_cpa_package_delta"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "k1-1099-tracking-chase-20260604-001",
+    "subject": "Acme Fund 2025 K-1",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "document_overdue"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-k1-1099-tracking-chase",
+    "database": "family_office_k1_1099_tracking_chase"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
