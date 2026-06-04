@@ -1,0 +1,53 @@
+{
+  "skill": "travel-security-keyperson-watch",
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "travel-security-keyperson-watch-20260604-001",
+    "subject": "London family office trip",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Travel-Security & Threat-Intelligence Watch Operator",
+    "priority": "P1",
+    "cadence": "daily-feed-calendar-correlation-pretrip-t7-t2-briefs",
+    "gate": "the agent never cancels travel or dispatches protection without approval",
+    "sample_subject": "London family office trip",
+    "exception_flags": [
+      "corridor_risk_threshold_crossed"
+    ],
+    "actions": [
+      "correlate_trip_threats",
+      "draft_pretrip_brief",
+      "open_travel_alert"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "travel-security-keyperson-watch-20260604-001",
+    "subject": "London family office trip",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "corridor_risk_threshold_crossed"
+    ]
+  },
+  "serendb": {
+    "project": "family-office-travel-security-keyperson-watch",
+    "database": "family_office_travel_security_keyperson_watch"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly"
+    ]
+  },
+  "cloud": {
+    "mode": "cron",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
