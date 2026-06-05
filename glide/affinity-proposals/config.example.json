@@ -16,6 +16,7 @@
     "model": "openai/gpt-5.5"
   },
   "email": {
+    "sender_address": "proposals@your-seren-tenant.com",
     "dry_run_to": "dry-run@example.com",
     "dry_run_cc": ["reviewer@example.com"],
     "live_cc": ["manager@example.com", "owner@example.com"]

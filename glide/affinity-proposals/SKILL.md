@@ -25,6 +25,12 @@ The template directory is reserved for customer-approved proposal templates. Uni
 4. Connect the render account to the Microsoft SharePoint publisher and ensure the configured archive folder exists.
 5. Keep `dry_run: true` until a dry-run email with a rendered PDF has been verified.
 
+## Sender Mailbox
+
+Both dry-run and live send **from** the Seren-tenant mailbox configured at `email.sender_address` (the connected `microsoft-outlook` identity, via `/me/sendMail`). Before any send, the skill preflights the connected mailbox and refuses to run if it is not `email.sender_address` — so it never sends from the wrong or a customer mailbox. Connect that mailbox to the `microsoft-outlook` publisher during setup.
+
+This is the interim default until MS Publisher Verification (MPN) completes for the "Seren Mail" app; sending **from a customer's own mailbox** (which requires that tenant's admin consent) is tracked separately and re-enabled after verification. Recipient routing is unchanged: dry-run goes to the dry-run recipients, live goes to the prospect owner.
+
 ## Dry-Run Behavior
 
 In dry-run, email is routed only to the configured dry-run recipients. The live owner address is not included in `to` or `cc`. Affinity notes and status fields are never written. SerenDB audit rows are still written so the operator can inspect what would have happened.
