@@ -67,6 +67,51 @@ class OutlookEmailSender:
     def __init__(self, gateway: Any) -> None:
         self.gateway = gateway
 
+    def preflight(self, sender_address: str) -> Any:
+        """Assert the connected microsoft-outlook mailbox is the configured sender.
+
+        Until MS Publisher Verification lands, both dry-run and live send from a
+        fixed Seren-tenant mailbox (`/me/sendMail` sends from whichever mailbox is
+        OAuth-connected). Refuse to send from any other connected mailbox — e.g. a
+        customer's — so a misconnected or missing account fails fast before any
+        proposal is generated or emailed.
+        """
+
+        from scripts.proposal import SetupBlocked
+        from scripts.seren_client import PublisherError
+
+        expected = sender_address.strip().lower()
+        try:
+            identity = self.gateway.call_publisher(
+                "microsoft-outlook", method="GET", path="/me"
+            )
+        except PublisherError as exc:
+            if getattr(exc, "status", None) in (401, 403) or "oauth" in str(exc).lower():
+                raise SetupBlocked(
+                    "Microsoft OAuth connection required for the Outlook sender account. "
+                    f"Connect {sender_address} to the microsoft-outlook publisher before sending."
+                ) from exc
+            raise
+
+        connected = ""
+        if isinstance(identity, dict):
+            connected = str(
+                identity.get("mail") or identity.get("userPrincipalName") or ""
+            ).strip()
+        if not connected:
+            raise SetupBlocked(
+                "Could not determine the connected Outlook mailbox identity "
+                "(microsoft-outlook /me returned no address)."
+            )
+        if connected.lower() != expected:
+            raise SetupBlocked(
+                f"Connected Outlook mailbox is '{connected}' but the configured sender is "
+                f"'{sender_address}'. Connect the Seren sender mailbox to microsoft-outlook — "
+                "both dry-run and live send from this mailbox until MS Publisher Verification "
+                "is complete."
+            )
+        return identity
+
     def send(self, email: ProposalEmail) -> Any:
         attachment = {
             "@odata.type": "#microsoft.graph.fileAttachment",

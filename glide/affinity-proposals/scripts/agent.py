@@ -25,6 +25,7 @@ class AgentConfig:
     dry_run_to: str = "dry-run@example.com"
     dry_run_cc: list[str] = field(default_factory=list)
     live_cc: list[str] = field(default_factory=list)
+    sender_address: str = ""
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> "AgentConfig":
@@ -35,6 +36,7 @@ class AgentConfig:
             dry_run_to=str(email.get("dry_run_to", "dry-run@example.com")),
             dry_run_cc=[str(item) for item in email.get("dry_run_cc", [])],
             live_cc=[str(item) for item in email.get("live_cc", [])],
+            sender_address=str(email.get("sender_address", "")),
         )
 
 
@@ -84,6 +86,12 @@ class RunSummary:
 def run_once(config: AgentConfig, *, services: AgentServices, today: date) -> RunSummary:
     if not config.dry_run and not config.live_mode:
         raise RuntimeError("live run requires live_mode=true in config")
+
+    # Until MS Publisher Verification lands, both dry-run and live send from a
+    # fixed Seren-tenant mailbox. Verify the connected Outlook identity up front
+    # so a misconnected/missing sender fails fast before any proposal work.
+    if config.sender_address:
+        services.emailer.preflight(config.sender_address)
 
     mode = "dry-run" if config.dry_run else "live"
     summary = RunSummary()

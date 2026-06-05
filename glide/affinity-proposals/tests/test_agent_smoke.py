@@ -99,3 +99,37 @@ def test_dry_run_orchestrator_generates_sends_audits_and_never_writes_live():
     assert summary.written_back == 0
     assert affinity.write_calls == []
     assert emailer.sent[0].to == ["dry-run@example.com"]
+
+
+def test_run_once_blocks_when_connected_sender_mismatches():
+    import pytest
+
+    from scripts.email_send import OutlookEmailSender
+    from scripts.proposal import SetupBlocked
+
+    class WrongSenderGateway:
+        def call_publisher(self, publisher, *, method="GET", path="/", **kwargs):
+            return {"mail": "someone-else@elsewhere.com"}
+
+    affinity = FakeAffinity()
+    services = AgentServices(
+        affinity=affinity,
+        extractor=FakeExtractor(),
+        proposal=FakeProposal(),
+        emailer=OutlookEmailSender(WrongSenderGateway()),
+    )
+
+    with pytest.raises(SetupBlocked):
+        run_once(
+            AgentConfig(
+                dry_run=True,
+                live_mode=False,
+                dry_run_to="dry-run@example.com",
+                sender_address="taariq@serendb.com",
+            ),
+            services=services,
+            today=date(2026, 6, 5),
+        )
+
+    # Preflight must block before any prospect work or write-back.
+    assert affinity.write_calls == []
