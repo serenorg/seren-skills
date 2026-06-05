@@ -41,7 +41,9 @@ class RecordingGraphGateway:
             self.uploaded = data
             return {"id": "item-1"}
         if method == "GET" and path == "/drives/drive-1/items/item-1/content?format=pdf":
-            assert response_format == "bytes"
+            # GatewayClient decodes the gateway's base64 binary envelope and
+            # returns raw bytes to render_pdf (seren-core #182).
+            assert response_format == "binary"
             return b"%PDF-1.7\nrendered"
         raise AssertionError(f"unexpected {method} {path}")
 
@@ -80,16 +82,7 @@ def test_render_pdf_rejects_non_pdf_bytes(tmp_path):
         SharePointRenderer(NotPdfGateway(), folder_name="AI Proposals").render_pdf(pptx)
 
 
-def test_render_pdf_setup_blocks_on_json_enveloped_binary(tmp_path):
-    pptx = tmp_path / "x.pptx"
-    pptx.write_bytes(b"PPTX")
-
-    class EnvelopeGateway(RecordingGraphGateway):
-        def call_publisher(self, publisher, *, method="GET", path="/", **kw):
-            if method == "GET" and path == "/drives/drive-1/items/item-1/content?format=pdf":
-                return b'{"data":{"status":200,"body":"%PDF-corrupted"}}'
-            return super().call_publisher(publisher, method=method, path=path, **kw)
-
-    with pytest.raises(SetupBlocked) as exc:
-        SharePointRenderer(EnvelopeGateway(), folder_name="AI Proposals").render_pdf(pptx)
-    assert "#873" in str(exc.value)
+# The post-#182 gateway returns binary downloads as recoverable base64 in its
+# JSON envelope; the skill decodes them (GatewayClient.response_format="binary").
+# End-to-end decode against the real envelope shape is covered in
+# test_render_binary.py.

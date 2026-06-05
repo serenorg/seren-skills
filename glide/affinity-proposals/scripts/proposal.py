@@ -201,26 +201,19 @@ class SharePointRenderer:
             "microsoft-sharepoint",
             method="GET",
             path=f"/drives/{drive_id}/items/{item_id}/content?format=pdf",
-            response_format="bytes",
+            response_format="binary",
         )
         return self._decode_pdf(pdf)
 
     @staticmethod
     def _decode_pdf(raw: Any) -> bytes:
+        # The gateway returns binary downloads base64-encoded in its JSON
+        # envelope; GatewayClient.call_publisher(response_format="binary")
+        # decodes that to the raw bytes (seren-core #182). Render therefore
+        # receives real PDF bytes here.
         pdf_bytes = raw.encode("latin1", "replace") if isinstance(raw, str) else bytes(raw)
         if pdf_bytes.startswith(b"%PDF"):
             return pdf_bytes
-        if pdf_bytes[:1] == b"{":
-            # The gateway wrapped the binary download in a JSON envelope whose
-            # body is a lossily text-decoded string (no base64). The bytes are
-            # unrecoverable — a gateway limitation, not a skill issue (#873).
-            raise SetupBlocked(
-                "SharePoint returned the PDF inside a JSON gateway envelope with a "
-                "lossily text-decoded body (no base64); the bytes cannot be "
-                "reconstructed. This is a gateway binary-download limitation — "
-                "see issue #873. Render is blocked until the gateway returns "
-                "binary content losslessly."
-            )
         raise RuntimeError("SharePoint render did not return PDF bytes")
 
 

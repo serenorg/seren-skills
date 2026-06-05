@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import urllib.error
@@ -82,6 +83,8 @@ class GatewayClient:
         if not (200 <= status < 300):
             text = response_bytes.decode("utf-8", errors="replace")
             raise PublisherError(status, text[:1000])
+        if response_format == "binary":
+            return _decode_binary_response(response_bytes, status)
         if response_format == "bytes":
             return response_bytes
         if not response_bytes:
@@ -240,3 +243,31 @@ def _unwrap(payload: Any) -> Any:
             return inner["body"]
         return inner
     return payload
+
+
+def _decode_binary_response(response_bytes: bytes, status: int) -> bytes:
+    """Recover raw bytes from a binary publisher download.
+
+    The gateway wraps every publisher response in a ``{"data": {...}}``
+    envelope. For a non-JSON, non-text upstream (e.g. a SharePoint
+    ``?format=pdf`` conversion) it sets ``data.body`` to null and returns the
+    raw bytes base64-encoded as ``data.body_base64`` with the upstream
+    ``data.content_type`` (seren-core #182, commit 38f448eb). Recover the
+    exact bytes from ``body_base64``; fall back to encoding a textual
+    ``body``; and, if the response was not a JSON envelope at all, return it
+    unchanged.
+    """
+
+    try:
+        decoded = json.loads(response_bytes)
+    except (ValueError, TypeError):
+        return response_bytes
+    data = decoded.get("data", decoded) if isinstance(decoded, dict) else decoded
+    if isinstance(data, dict):
+        encoded = data.get("body_base64")
+        if isinstance(encoded, str) and encoded:
+            return base64.b64decode(encoded)
+        body = data.get("body")
+        if isinstance(body, str):
+            return body.encode("utf-8")
+    raise PublisherError(status, "Publisher binary response missing body_base64")
