@@ -67,50 +67,47 @@ class OutlookEmailSender:
     def __init__(self, gateway: Any) -> None:
         self.gateway = gateway
 
-    def preflight(self, sender_address: str) -> Any:
-        """Assert the connected microsoft-outlook mailbox is the configured sender.
+    def preflight(self, sender_address: str = "") -> Any:
+        """Verify the microsoft-outlook OAuth connection is live before sending.
 
-        Until MS Publisher Verification lands, both dry-run and live send from a
-        fixed Seren-tenant mailbox (`/me/sendMail` sends from whichever mailbox is
-        OAuth-connected). Refuse to send from any other connected mailbox — e.g. a
-        customer's — so a misconnected or missing account fails fast before any
-        proposal is generated or emailed.
+        Both dry-run and live send from the connected mailbox via `/me/sendMail`
+        (the operator connects the Seren `sender_address` at setup, so the send
+        always originates from that mailbox). The publisher runs a `default_deny`
+        allowlist with no identity endpoint, so this checks connection liveness
+        with an *allowed* read endpoint and fails fast on a missing/expired
+        connection; it cannot assert the exact mailbox address.
+
+        A genuine auth/consent failure raises `SetupBlocked`. An allowlist
+        "forbidden endpoint" 403 is never mislabeled as OAuth — it is re-raised.
         """
 
         from scripts.proposal import SetupBlocked
         from scripts.seren_client import PublisherError
 
-        expected = sender_address.strip().lower()
         try:
-            identity = self.gateway.call_publisher(
-                "microsoft-outlook", method="GET", path="/me"
+            return self.gateway.call_publisher(
+                "microsoft-outlook", method="GET", path="/me/mailFolders?$top=1"
             )
         except PublisherError as exc:
-            if getattr(exc, "status", None) in (401, 403) or "oauth" in str(exc).lower():
+            if self._is_auth_error(exc):
+                target = sender_address or "the Seren sender mailbox"
                 raise SetupBlocked(
                     "Microsoft OAuth connection required for the Outlook sender account. "
-                    f"Connect {sender_address} to the microsoft-outlook publisher before sending."
+                    f"Connect {target} to the microsoft-outlook publisher before sending — "
+                    "both dry-run and live send from this mailbox until MS Publisher "
+                    "Verification is complete."
                 ) from exc
             raise
 
-        connected = ""
-        if isinstance(identity, dict):
-            connected = str(
-                identity.get("mail") or identity.get("userPrincipalName") or ""
-            ).strip()
-        if not connected:
-            raise SetupBlocked(
-                "Could not determine the connected Outlook mailbox identity "
-                "(microsoft-outlook /me returned no address)."
-            )
-        if connected.lower() != expected:
-            raise SetupBlocked(
-                f"Connected Outlook mailbox is '{connected}' but the configured sender is "
-                f"'{sender_address}'. Connect the Seren sender mailbox to microsoft-outlook — "
-                "both dry-run and live send from this mailbox until MS Publisher Verification "
-                "is complete."
-            )
-        return identity
+    @staticmethod
+    def _is_auth_error(exc: Any) -> bool:
+        # A 401, or a 403 that names OAuth, is an auth/consent failure. A 403 that
+        # reports a forbidden/not-allowed endpoint is NOT — re-raise it as-is so a
+        # publisher allowlist gap is never reported as "OAuth required" (#935).
+        message = str(exc).lower()
+        if "allowed endpoints" in message or "not in the allowed" in message:
+            return False
+        return getattr(exc, "status", None) in (401, 403) or "oauth" in message
 
     def send(self, email: ProposalEmail) -> Any:
         attachment = {

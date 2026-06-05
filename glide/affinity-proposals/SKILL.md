@@ -27,7 +27,7 @@ The template directory is reserved for customer-approved proposal templates. Uni
 
 ## Sender Mailbox
 
-Both dry-run and live send **from** the Seren-tenant mailbox configured at `email.sender_address` (the connected `microsoft-outlook` identity, via `/me/sendMail`). Before any send, the skill preflights the connected mailbox and refuses to run if it is not `email.sender_address` — so it never sends from the wrong or a customer mailbox. Connect that mailbox to the `microsoft-outlook` publisher during setup.
+Both dry-run and live send **from** the Seren-tenant mailbox connected to the `microsoft-outlook` publisher, via `/me/sendMail`. Connect the mailbox named in `email.sender_address` during setup — that is the single connected identity every send originates from. Before any send, the skill preflights the connection (an allowed read endpoint) and fails fast with a setup blocker if Outlook is not connected. The publisher's `default_deny` allowlist exposes no identity endpoint, so the skill cannot assert the exact connected address — connecting the correct mailbox is an operator responsibility, confirmed by the From address on the first dry-run email.
 
 This is the interim default until MS Publisher Verification (MPN) completes for the "Seren Mail" app; sending **from a customer's own mailbox** (which requires that tenant's admin consent) is tracked separately and re-enabled after verification. Recipient routing is unchanged: dry-run goes to the dry-run recipients, live goes to the prospect owner.
 

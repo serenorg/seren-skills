@@ -101,22 +101,23 @@ def test_dry_run_orchestrator_generates_sends_audits_and_never_writes_live():
     assert emailer.sent[0].to == ["dry-run@example.com"]
 
 
-def test_run_once_blocks_when_connected_sender_mismatches():
+def test_run_once_blocks_when_outlook_oauth_missing():
     import pytest
 
     from scripts.email_send import OutlookEmailSender
     from scripts.proposal import SetupBlocked
+    from scripts.seren_client import PublisherError
 
-    class WrongSenderGateway:
+    class DisconnectedGateway:
         def call_publisher(self, publisher, *, method="GET", path="/", **kwargs):
-            return {"mail": "someone-else@elsewhere.com"}
+            raise PublisherError(401, "OAuthRequired: provider 'microsoft'")
 
     affinity = FakeAffinity()
     services = AgentServices(
         affinity=affinity,
         extractor=FakeExtractor(),
         proposal=FakeProposal(),
-        emailer=OutlookEmailSender(WrongSenderGateway()),
+        emailer=OutlookEmailSender(DisconnectedGateway()),
     )
 
     with pytest.raises(SetupBlocked):

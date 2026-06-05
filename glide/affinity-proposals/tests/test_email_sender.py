@@ -1,10 +1,10 @@
-"""Sender-identity preflight for the Seren-tenant mailbox fallback (#933).
+"""Outlook sender preflight (#933, fixed in #935).
 
-Until MS Publisher Verification completes, the skill sends from a fixed
-Seren-tenant mailbox in both dry-run and live. `OutlookEmailSender.preflight`
-asserts the OAuth-connected `microsoft-outlook` mailbox matches the configured
-sender before any send, so the run fails fast (and never sends from the wrong
-or customer mailbox).
+`microsoft-outlook` runs a `default_deny` endpoint allowlist with no identity
+endpoint (`GET /me` is forbidden). The preflight therefore checks connection
+liveness with an *allowed* read endpoint (`/me/mailFolders`) and fails fast on a
+missing/expired OAuth connection. It must never report an allowlist
+"forbidden endpoint" 403 as an OAuth/setup problem.
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ from scripts.proposal import SetupBlocked
 from scripts.seren_client import PublisherError
 
 
-class MeGateway:
-    def __init__(self, *, me=None, error=None) -> None:
-        self._me = me
+class FoldersGateway:
+    def __init__(self, *, result=None, error=None) -> None:
+        self._result = {"value": []} if result is None else result
         self._error = error
         self.calls: list[tuple[str, str, str]] = []
 
@@ -26,30 +26,39 @@ class MeGateway:
         self.calls.append((publisher, method, path))
         if self._error is not None:
             raise self._error
-        return self._me
+        return self._result
 
 
-def test_preflight_accepts_matching_connected_sender():
-    gateway = MeGateway(me={"mail": "Taariq@SerenDB.com"})
+def test_preflight_uses_allowed_endpoint_when_connection_live():
+    gateway = FoldersGateway(result={"value": [{"id": "inbox"}]})
 
-    OutlookEmailSender(gateway).preflight("taariq@serendb.com")  # case-insensitive
+    OutlookEmailSender(gateway).preflight("taariq@serendb.com")  # no raise
 
-    assert ("microsoft-outlook", "GET", "/me") in gateway.calls
+    publisher, method, path = gateway.calls[0]
+    assert publisher == "microsoft-outlook"
+    assert method == "GET"
+    assert path.startswith("/me/mailFolders")  # an allowed endpoint
+    assert not path.rstrip("/").endswith("/me")  # never the forbidden identity endpoint
 
 
-def test_preflight_blocks_when_connected_sender_differs():
-    gateway = MeGateway(me={"userPrincipalName": "cristin@glide.com"})
+def test_preflight_blocks_when_outlook_oauth_missing():
+    gateway = FoldersGateway(error=PublisherError(401, "OAuthRequired: provider 'microsoft'"))
 
     with pytest.raises(SetupBlocked) as exc:
         OutlookEmailSender(gateway).preflight("taariq@serendb.com")
 
-    message = str(exc.value)
-    assert "cristin@glide.com" in message
-    assert "taariq@serendb.com" in message
+    assert "taariq@serendb.com" in str(exc.value)
 
 
-def test_preflight_blocks_when_outlook_oauth_missing():
-    gateway = MeGateway(error=PublisherError(403, "OAuthRequired: provider 'microsoft'"))
+def test_preflight_does_not_mislabel_forbidden_endpoint_as_oauth():
+    # Regression for #935: an allowlist "forbidden endpoint" 403 must be
+    # re-raised as-is, never converted to a misleading OAuth SetupBlocked.
+    error = PublisherError(
+        403,
+        '{"error":"Forbidden","message":"Forbidden: Endpoint GET me is not in the '
+        'allowed endpoints list for this publisher"}',
+    )
+    gateway = FoldersGateway(error=error)
 
-    with pytest.raises(SetupBlocked):
+    with pytest.raises(PublisherError):
         OutlookEmailSender(gateway).preflight("taariq@serendb.com")
