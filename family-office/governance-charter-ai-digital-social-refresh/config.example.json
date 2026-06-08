@@ -1,0 +1,78 @@
+{
+  "skill": "governance-charter-ai-digital-social-refresh",
+  "issue": 946,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "governance-charter-ai-digital-social-refresh-20260608-001",
+    "subject": "Current family charter needs AI and digital assets refresh",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Governance Charter AI Digital Social Refresh Operator",
+    "priority": "P1",
+    "cadence": "annual-charter-refresh-or-policy-gap-event",
+    "gate": "adoption, publication, and version-control promotion require human approval",
+    "sample_subject": "Current family charter needs AI and digital assets refresh",
+    "exception_flags": [
+      "missing_current_policy",
+      "council_approval_required"
+    ],
+    "actions": [
+      "read_current_charter",
+      "map_policy_gaps",
+      "draft_topic_insertions",
+      "annotate_rationale",
+      "stage_council_review"
+    ],
+    "outputs": [
+      "redline_ready_insertions",
+      "rationale_by_topic",
+      "topic_tags",
+      "council_review_packet",
+      "version_control_handoff"
+    ],
+    "handoffs": [
+      "family-governance-charter",
+      "governance-document-version-control"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "governance-charter-ai-digital-social-refresh-20260608-001",
+    "subject": "Current family charter needs AI and digital assets refresh",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "missing_current_policy",
+      "council_approval_required"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::governance-charter-ai-digital-social-refresh::001",
+      "kind": "synthetic-dry-run",
+      "subject": "Current family charter needs AI and digital assets refresh",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-governance-charter-ai-digital-social-refresh",
+    "database": "family_office_governance_charter_ai_digital_social_refresh"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
