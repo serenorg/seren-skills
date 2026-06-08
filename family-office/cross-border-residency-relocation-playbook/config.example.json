@@ -1,0 +1,78 @@
+{
+  "skill": "cross-border-residency-relocation-playbook",
+  "issue": 940,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "cross-border-residency-relocation-playbook-20260608-001",
+    "subject": "Principal relocation from California to Portugal",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Cross Border Residency Relocation Playbook Operator",
+    "priority": "P1",
+    "cadence": "event-driven-pre-move-weekly-checklist-until-closeout",
+    "gate": "tax filings, identity refreshes, advisor instructions, and government submissions require human approval",
+    "sample_subject": "Principal relocation from California to Portugal",
+    "exception_flags": [
+      "exit_tax_review",
+      "fatca_crs_reclassification"
+    ],
+    "actions": [
+      "build_pre_move_tax_delta",
+      "generate_exit_entry_checklists",
+      "refresh_fatca_crs_review_queue",
+      "produce_reporting_calendar"
+    ],
+    "outputs": [
+      "tax_delta_model",
+      "relocation_playbook",
+      "reporting_calendar",
+      "per_asset_action_list",
+      "advisor_handoff_packet"
+    ],
+    "handoffs": [
+      "tax-strategy-memo",
+      "cpa-tax-package-checklist",
+      "trust-situs-selection-memo"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "cross-border-residency-relocation-playbook-20260608-001",
+    "subject": "Principal relocation from California to Portugal",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "exit_tax_review",
+      "fatca_crs_reclassification"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::cross-border-residency-relocation-playbook::001",
+      "kind": "synthetic-dry-run",
+      "subject": "Principal relocation from California to Portugal",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-cross-border-residency-relocation-playbook",
+    "database": "family_office_cross_border_residency_relocation_playbook"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}

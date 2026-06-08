@@ -1,0 +1,155 @@
+skill: cross-border-residency-relocation-playbook
+description: "Family office: Orchestrate a principal residency move with pre-move tax delta modeling, entity reclassification tasks, reporting calendars, and per-asset action lists."
+triggers:
+  - plan a principal residency move
+  - model cross-border tax delta
+  - build relocation reporting calendar
+  - coordinate FATCA CRS reclassification
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  event_id:
+    type: string
+    description: Stable id for the event, obligation, document, alert, payment, filing, or work item.
+  subject:
+    type: string
+    description: Human-readable event subject used in audit and review packets.
+  dry_run_to:
+    type: string
+    description: Review mailbox used for dry-run digest routing.
+    default: taariq@serendb.com
+  approval_confirmed:
+    type: boolean
+    description: Set true only after the responsible human approves the staged action.
+    default: false
+secrets:
+  - SEREN_API_KEY
+connectors:
+  storage:
+    kind: seren_publisher
+    publisher: seren-db
+  passwords:
+    kind: seren_publisher
+    publisher: seren-passwords
+  outlook:
+    kind: seren_publisher
+    publisher: microsoft-outlook
+  drive:
+    kind: seren_publisher
+    publisher: google-drive
+  docs:
+    kind: seren_publisher
+    publisher: google-docs
+  docreader:
+    kind: seren_publisher
+    publisher: seren-docreader
+  calendar:
+    kind: seren_publisher
+    publisher: google-calendar
+state:
+  principal_profile:
+    kind: serendb
+    database: family_office_cross_border_residency_relocation_playbook
+    table: principal_profile
+  entity_residency_map:
+    kind: serendb
+    database: family_office_cross_border_residency_relocation_playbook
+    table: entity_residency_map
+  asset_tax_delta:
+    kind: serendb
+    database: family_office_cross_border_residency_relocation_playbook
+    table: asset_tax_delta
+policies:
+  dry_run_default: true
+  idempotency_required: true
+  max_daily_spend_usd: 0
+workflow:
+  steps:
+    - id: normalize_event
+      use: transform.normalize_operator_event
+      with:
+        event_id: "{event_id}"
+        subject: "{subject}"
+    - id: resolve_seren_passwords_context
+      use: connector.passwords.post
+      with:
+        path: /mcp/passwords_vaults_list
+        body:
+          purpose: resolve_named_secret_references
+          forbid_vault_ids_from_config: true
+    - id: ensure_operator_database
+      use: connector.storage.post
+      with:
+        path: /projects
+        body:
+          project_name: family-office-cross-border-residency-relocation-playbook
+          database: family_office_cross_border_residency_relocation_playbook
+    - id: load_operator_state
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          step: ensure_operator_database
+          query: select * from principal_profile limit 100
+    - id: ingest_source_artifacts
+      use: connector.drive.get
+      with:
+        path: /dry-run/source-artifacts
+        body:
+          dry_run_to: "{dry_run_to}"
+          sample_subject: "Principal relocation from California to Portugal"
+    - id: evaluate_skill_outputs
+      use: transform.evaluate_family_office_operator_event
+      with:
+        gate: "tax filings, identity refreshes, advisor instructions, and government submissions require human approval"
+        required_outputs:
+          - tax_delta_model
+          - relocation_playbook
+          - reporting_calendar
+          - per_asset_action_list
+          - advisor_handoff_packet
+    - id: persist_audit_event
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          body_from: evaluate_skill_outputs
+          table: operator_audit_events
+    - id: create_review_task
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          body_from: evaluate_skill_outputs
+          table: operator_review_tasks
+    - id: send_dry_run_digest
+      use: connector.outlook.post
+      with:
+        path: /me/sendMail
+        body:
+          dry_run_to: "{dry_run_to}"
+          body_from: evaluate_skill_outputs
+          review_gate_only: true
+    - id: summary
+      use: transform.render_operator_summary
+      with:
+        depends_on:
+          - persist_audit_event
+          - create_review_task
+          - send_dry_run_digest
+tests:
+  quick:
+    - validate spec
+  smoke:
+    - functional dry-run returns all_green
+    - live execution requires dual approval gate
+publish:
+  org: family-office
+  slug: cross-border-residency-relocation-playbook
+metadata:
+  category: family-office-operator
+  family_office_category: "Tax and Entity Administration"
+  priority: P1
+  cadence: event-driven-pre-move-weekly-checklist-until-closeout
+  issue: "940"
