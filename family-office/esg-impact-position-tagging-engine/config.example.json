@@ -1,0 +1,77 @@
+{
+  "skill": "esg-impact-position-tagging-engine",
+  "issue": 948,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "esg-impact-position-tagging-engine-20260608-001",
+    "subject": "Public equities and fund look-through ESG mandate review",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "ESG Impact Position Tagging Engine Operator",
+    "priority": "P2",
+    "cadence": "monthly-position-tag-refresh-quarterly-impact-report",
+    "gate": "investment action, mandate waiver, and external impact-report distribution require human approval",
+    "sample_subject": "Public equities and fund look-through ESG mandate review",
+    "exception_flags": [
+      "exclusion_breach_detected",
+      "missing_data_source"
+    ],
+    "actions": [
+      "tag_position_sdg_emissions_controversy",
+      "merge_third_party_data",
+      "compare_to_mandate",
+      "draft_quarterly_report"
+    ],
+    "outputs": [
+      "tagged_positions",
+      "rollup_scores",
+      "quarterly_impact_report",
+      "exclusion_breach_list",
+      "source_citations"
+    ],
+    "handoffs": [
+      "esg-impact-investing-mandate",
+      "manager-dd-esg-impact"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "esg-impact-position-tagging-engine-20260608-001",
+    "subject": "Public equities and fund look-through ESG mandate review",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "exclusion_breach_detected",
+      "missing_data_source"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::esg-impact-position-tagging-engine::001",
+      "kind": "synthetic-dry-run",
+      "subject": "Public equities and fund look-through ESG mandate review",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-esg-impact-position-tagging-engine",
+    "database": "family_office_esg_impact_position_tagging_engine"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
