@@ -1,0 +1,78 @@
+{
+  "skill": "sfo-vs-mfo-operating-model-evaluator",
+  "issue": 942,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "sfo-vs-mfo-operating-model-evaluator-20260608-001",
+    "subject": "$850M multi-entity family office operating model review",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "SFO Vs MFO Operating Model Evaluator Operator",
+    "priority": "P1",
+    "cadence": "annual-operating-model-review-or-keyperson-event",
+    "gate": "vendor contact, migration commitments, and staff changes require human approval",
+    "sample_subject": "$850M multi-entity family office operating model review",
+    "exception_flags": [
+      "key_person_dependency",
+      "cost_gap_above_policy"
+    ],
+    "actions": [
+      "model_current_sfo_costs",
+      "benchmark_mfo_offerings",
+      "score_service_and_succession_gaps",
+      "draft_operating_model_recommendation"
+    ],
+    "outputs": [
+      "cost_to_serve_model",
+      "service_level_gap_analysis",
+      "technology_gap_analysis",
+      "succession_scorecard",
+      "recommendation_memo",
+      "benchmarked_mfo_offerings"
+    ],
+    "handoffs": [
+      "complexity-management-router",
+      "external-advisor-management-plan"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "sfo-vs-mfo-operating-model-evaluator-20260608-001",
+    "subject": "$850M multi-entity family office operating model review",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "key_person_dependency",
+      "cost_gap_above_policy"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::sfo-vs-mfo-operating-model-evaluator::001",
+      "kind": "synthetic-dry-run",
+      "subject": "$850M multi-entity family office operating model review",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-sfo-vs-mfo-operating-model-evaluator",
+    "database": "family_office_sfo_vs_mfo_operating_model_evaluator"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
