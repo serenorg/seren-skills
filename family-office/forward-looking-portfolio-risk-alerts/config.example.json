@@ -1,0 +1,79 @@
+{
+  "skill": "forward-looking-portfolio-risk-alerts",
+  "issue": 939,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "forward-looking-portfolio-risk-alerts-20260608-001",
+    "subject": "Synthetic sanctions headline impacting portfolio issuer",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Forward Looking Portfolio Risk Alerts Operator",
+    "priority": "P1",
+    "cadence": "hourly-event-scan-daily-risk-digest-weekly-threshold-review",
+    "gate": "hedge, exit, manager outreach, or watch-list handoff requires human approval before execution",
+    "sample_subject": "Synthetic sanctions headline impacting portfolio issuer",
+    "exception_flags": [
+      "high_severity_event",
+      "threshold_exceeded"
+    ],
+    "actions": [
+      "ingest_position_file",
+      "scan_event_feeds",
+      "map_events_to_positions",
+      "rank_forward_risk_alerts",
+      "stage_action_handoffs"
+    ],
+    "outputs": [
+      "ranked_risk_alerts",
+      "position_links",
+      "source_citations",
+      "proposed_action_set",
+      "threshold_audit_trail"
+    ],
+    "handoffs": [
+      "portfolio-risk-register",
+      "family-risk-management-plan",
+      "manager-fund-monitor"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "forward-looking-portfolio-risk-alerts-20260608-001",
+    "subject": "Synthetic sanctions headline impacting portfolio issuer",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "high_severity_event",
+      "threshold_exceeded"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::forward-looking-portfolio-risk-alerts::001",
+      "kind": "synthetic-dry-run",
+      "subject": "Synthetic sanctions headline impacting portfolio issuer",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-forward-looking-portfolio-risk-alerts",
+    "database": "family_office_forward_looking_portfolio_risk_alerts"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
