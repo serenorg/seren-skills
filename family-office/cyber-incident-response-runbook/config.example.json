@@ -1,0 +1,79 @@
+{
+  "skill": "cyber-incident-response-runbook",
+  "issue": 941,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "cyber-incident-response-runbook-20260608-001",
+    "subject": "Lost device with mailbox OAuth exposure",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Cyber Incident Response Runbook Operator",
+    "priority": "P0",
+    "cadence": "event-driven-incident-response-post-incident-review",
+    "gate": "outbound communications, account freezes, vendor instructions, and regulator or law-enforcement reports require human approval",
+    "sample_subject": "Lost device with mailbox OAuth exposure",
+    "exception_flags": [
+      "compromised_identity",
+      "credential_rotation_required"
+    ],
+    "actions": [
+      "classify_incident",
+      "stage_containment_tasks",
+      "generate_evidence_checklist",
+      "draft_principal_notification",
+      "open_post_incident_review"
+    ],
+    "outputs": [
+      "incident_runbook",
+      "containment_task_list",
+      "evidence_collection_checklist",
+      "principal_notification_draft",
+      "post_incident_review_template"
+    ],
+    "handoffs": [
+      "credential-hygiene-breach-monitor",
+      "password-management-setup-plan",
+      "family-risk-management-plan"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "cyber-incident-response-runbook-20260608-001",
+    "subject": "Lost device with mailbox OAuth exposure",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "compromised_identity",
+      "credential_rotation_required"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::cyber-incident-response-runbook::001",
+      "kind": "synthetic-dry-run",
+      "subject": "Lost device with mailbox OAuth exposure",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-cyber-incident-response-runbook",
+    "database": "family_office_cyber_incident_response_runbook"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
