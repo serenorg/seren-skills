@@ -1,0 +1,1 @@
+# No third-party runtime dependencies are required for esg-impact-position-tagging-engine.
