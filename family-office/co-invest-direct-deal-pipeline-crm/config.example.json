@@ -1,0 +1,80 @@
+{
+  "skill": "co-invest-direct-deal-pipeline-crm",
+  "issue": 943,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "co-invest-direct-deal-pipeline-crm-20260608-001",
+    "subject": "Three inbound co-investment opportunities for IC1 screening",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Co Invest Direct Deal Pipeline CRM Operator",
+    "priority": "P1",
+    "cadence": "daily-inbound-deal-intake-weekly-pipeline-rollup-quarterly-health-review",
+    "gate": "advancing to IC, requesting information, allocation, close, and post-close external follow-up require human approval",
+    "sample_subject": "Three inbound co-investment opportunities for IC1 screening",
+    "exception_flags": [
+      "missing_required_artifact",
+      "policy_fit_gap"
+    ],
+    "actions": [
+      "ingest_deal_batch",
+      "score_against_policy",
+      "update_stage_gates",
+      "draft_screen_recommendations",
+      "produce_pipeline_rollup"
+    ],
+    "outputs": [
+      "ranked_deal_queue",
+      "screen_recommendations",
+      "stage_gate_status",
+      "required_artifacts",
+      "pipeline_health_rollup",
+      "post_close_milestone_alerts"
+    ],
+    "handoffs": [
+      "client-sourced-deal-review-memo",
+      "manager-dd-direct-co-investment",
+      "new-business-diligence-memo"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "co-invest-direct-deal-pipeline-crm-20260608-001",
+    "subject": "Three inbound co-investment opportunities for IC1 screening",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "missing_required_artifact",
+      "policy_fit_gap"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::co-invest-direct-deal-pipeline-crm::001",
+      "kind": "synthetic-dry-run",
+      "subject": "Three inbound co-investment opportunities for IC1 screening",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-co-invest-direct-deal-pipeline-crm",
+    "database": "family_office_co_invest_direct_deal_pipeline_crm"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
