@@ -1,0 +1,79 @@
+{
+  "skill": "philanthropic-outcome-measurement-dashboard",
+  "issue": 945,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "philanthropic-outcome-measurement-dashboard-20260608-001",
+    "subject": "Education grants KPI update and evaluator notes",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Philanthropic Outcome Measurement Dashboard Operator",
+    "priority": "P1",
+    "cadence": "monthly-grantee-report-ingest-quarterly-impact-dashboard",
+    "gate": "grantee outreach, disbursement changes, and family distribution require human approval",
+    "sample_subject": "Education grants KPI update and evaluator notes",
+    "exception_flags": [
+      "kpi_drift_detected",
+      "missing_source_artifact"
+    ],
+    "actions": [
+      "ingest_grant_kpis",
+      "extract_report_updates",
+      "merge_evaluator_inputs",
+      "score_theory_of_change_drift",
+      "draft_family_dashboard"
+    ],
+    "outputs": [
+      "impact_dashboard",
+      "drift_alerts",
+      "kpi_source_citations",
+      "evaluator_input_summary",
+      "disbursement_handoff"
+    ],
+    "handoffs": [
+      "grant-pipeline-disbursement-operator",
+      "family-philanthropy-strategic-plan",
+      "foundation-payout-compliance-monitor"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "philanthropic-outcome-measurement-dashboard-20260608-001",
+    "subject": "Education grants KPI update and evaluator notes",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "kpi_drift_detected",
+      "missing_source_artifact"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::philanthropic-outcome-measurement-dashboard::001",
+      "kind": "synthetic-dry-run",
+      "subject": "Education grants KPI update and evaluator notes",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-philanthropic-outcome-measurement-dashboard",
+    "database": "family_office_philanthropic_outcome_measurement_dashboard"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
