@@ -1,0 +1,81 @@
+{
+  "skill": "responsible-ai-governance-stack",
+  "issue": 950,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "responsible-ai-governance-stack-20260608-001",
+    "subject": "Current AI tools and principal-data inventory review",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Responsible AI Governance Stack Operator",
+    "priority": "P1",
+    "cadence": "quarterly-ai-governance-recertification-and-policy-refresh",
+    "gate": "policy adoption, access changes, and production AI routing changes require human approval",
+    "sample_subject": "Current AI tools and principal-data inventory review",
+    "exception_flags": [
+      "high_risk_ai_use",
+      "human_review_required"
+    ],
+    "actions": [
+      "inventory_ai_tools",
+      "classify_data",
+      "build_risk_tiers",
+      "draft_acceptable_use_policy",
+      "wire_human_review_and_audit_template"
+    ],
+    "outputs": [
+      "acceptable_use_policy",
+      "risk_tier_matrix",
+      "data_classification_routes",
+      "anonymization_playbook",
+      "recertification_template",
+      "principal_signoff_memo",
+      "audit_template"
+    ],
+    "handoffs": [
+      "family-governance-charter",
+      "governance-document-version-control",
+      "seren-cloud-audit-entries"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "responsible-ai-governance-stack-20260608-001",
+    "subject": "Current AI tools and principal-data inventory review",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "high_risk_ai_use",
+      "human_review_required"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::responsible-ai-governance-stack::001",
+      "kind": "synthetic-dry-run",
+      "subject": "Current AI tools and principal-data inventory review",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-responsible-ai-governance-stack",
+    "database": "family_office_responsible_ai_governance_stack"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
