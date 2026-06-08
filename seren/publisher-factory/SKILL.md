@@ -1,8 +1,6 @@
 ---
 name: publisher-factory
 description: "Create Seren API integration publishers for a company, its top competitors, and adjacent category leaders after live catalog checks and verified API research."
-version: 1.0.0
-tags: [seren, publishers, integrations, api-research]
 ---
 
 # Publisher Factory
