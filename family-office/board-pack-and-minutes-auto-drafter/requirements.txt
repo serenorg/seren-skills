@@ -1,0 +1,1 @@
+# No third-party runtime dependencies are required for board-pack-and-minutes-auto-drafter.

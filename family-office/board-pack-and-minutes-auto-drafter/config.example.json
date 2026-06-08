@@ -1,0 +1,79 @@
+{
+  "skill": "board-pack-and-minutes-auto-drafter",
+  "issue": 944,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "board-pack-and-minutes-auto-drafter-20260608-001",
+    "subject": "Family council quarterly meeting transcript",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Board Pack And Minutes Auto Drafter Operator",
+    "priority": "P1",
+    "cadence": "event-driven-after-meeting-transcript-ingest",
+    "gate": "publishing, distribution, and permanent governance-record updates require human approval",
+    "sample_subject": "Family council quarterly meeting transcript",
+    "exception_flags": [
+      "owner_low_confidence",
+      "approval_required_before_distribution"
+    ],
+    "actions": [
+      "ingest_transcript",
+      "infer_actions_and_decisions",
+      "cross_reference_prior_minutes",
+      "draft_board_pack_appendix",
+      "stage_human_review"
+    ],
+    "outputs": [
+      "draft_minutes_doc",
+      "action_item_list",
+      "decisions_log",
+      "board_pack_appendix",
+      "followup_status"
+    ],
+    "handoffs": [
+      "family-meeting-agenda-minutes-template",
+      "family-council-cycle-operator",
+      "governance-document-version-control"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "board-pack-and-minutes-auto-drafter-20260608-001",
+    "subject": "Family council quarterly meeting transcript",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "owner_low_confidence",
+      "approval_required_before_distribution"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::board-pack-and-minutes-auto-drafter::001",
+      "kind": "synthetic-dry-run",
+      "subject": "Family council quarterly meeting transcript",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-board-pack-and-minutes-auto-drafter",
+    "database": "family_office_board_pack_and_minutes_auto_drafter"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
