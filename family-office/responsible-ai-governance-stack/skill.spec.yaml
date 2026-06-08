@@ -1,0 +1,163 @@
+skill: responsible-ai-governance-stack
+description: "Family office: Create acceptable-use policy, risk tiering, data-classification routes, anonymization patterns, human-review rules, and audit templates for AI use."
+triggers:
+  - build responsible AI governance
+  - classify family office AI data
+  - create human review matrix
+  - draft AI acceptable-use policy
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  event_id:
+    type: string
+    description: Stable id for the event, obligation, document, alert, payment, filing, or work item.
+  subject:
+    type: string
+    description: Human-readable event subject used in audit and review packets.
+  dry_run_to:
+    type: string
+    description: Review mailbox used for dry-run digest routing.
+    default: taariq@serendb.com
+  approval_confirmed:
+    type: boolean
+    description: Set true only after the responsible human approves the staged action.
+    default: false
+secrets:
+  - SEREN_API_KEY
+connectors:
+  storage:
+    kind: seren_publisher
+    publisher: seren-db
+  passwords:
+    kind: seren_publisher
+    publisher: seren-passwords
+  outlook:
+    kind: seren_publisher
+    publisher: microsoft-outlook
+  drive:
+    kind: seren_publisher
+    publisher: google-drive
+  docs:
+    kind: seren_publisher
+    publisher: google-docs
+  docreader:
+    kind: seren_publisher
+    publisher: seren-docreader
+  calendar:
+    kind: seren_publisher
+    publisher: google-calendar
+  models:
+    kind: seren_publisher
+    publisher: seren-models
+  cloud:
+    kind: seren_publisher
+    publisher: seren-cloud
+state:
+  ai_tool_inventory:
+    kind: serendb
+    database: family_office_responsible_ai_governance_stack
+    table: ai_tool_inventory
+  data_inventory:
+    kind: serendb
+    database: family_office_responsible_ai_governance_stack
+    table: data_inventory
+  risk_tier_matrix:
+    kind: serendb
+    database: family_office_responsible_ai_governance_stack
+    table: risk_tier_matrix
+policies:
+  dry_run_default: true
+  idempotency_required: true
+  max_daily_spend_usd: 0
+workflow:
+  steps:
+    - id: normalize_event
+      use: transform.normalize_operator_event
+      with:
+        event_id: "{event_id}"
+        subject: "{subject}"
+    - id: resolve_seren_passwords_context
+      use: connector.passwords.post
+      with:
+        path: /mcp/passwords_vaults_list
+        body:
+          purpose: resolve_named_secret_references
+          forbid_vault_ids_from_config: true
+    - id: ensure_operator_database
+      use: connector.storage.post
+      with:
+        path: /projects
+        body:
+          project_name: family-office-responsible-ai-governance-stack
+          database: family_office_responsible_ai_governance_stack
+    - id: load_operator_state
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          step: ensure_operator_database
+          query: select * from ai_tool_inventory limit 100
+    - id: ingest_source_artifacts
+      use: connector.drive.get
+      with:
+        path: /dry-run/source-artifacts
+        body:
+          dry_run_to: "{dry_run_to}"
+          sample_subject: "Current AI tools and principal-data inventory review"
+    - id: evaluate_skill_outputs
+      use: transform.evaluate_family_office_operator_event
+      with:
+        gate: "policy adoption, access changes, and production AI routing changes require human approval"
+        required_outputs:
+          - acceptable_use_policy
+          - risk_tier_matrix
+          - data_classification_routes
+          - anonymization_playbook
+          - recertification_template
+          - principal_signoff_memo
+          - audit_template
+    - id: persist_audit_event
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          body_from: evaluate_skill_outputs
+          table: operator_audit_events
+    - id: create_review_task
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          body_from: evaluate_skill_outputs
+          table: operator_review_tasks
+    - id: send_dry_run_digest
+      use: connector.outlook.post
+      with:
+        path: /me/sendMail
+        body:
+          dry_run_to: "{dry_run_to}"
+          body_from: evaluate_skill_outputs
+          review_gate_only: true
+    - id: summary
+      use: transform.render_operator_summary
+      with:
+        depends_on:
+          - persist_audit_event
+          - create_review_task
+          - send_dry_run_digest
+tests:
+  quick:
+    - validate spec
+  smoke:
+    - functional dry-run returns all_green
+    - live execution requires dual approval gate
+publish:
+  org: family-office
+  slug: responsible-ai-governance-stack
+metadata:
+  category: family-office-operator
+  family_office_category: "Governance"
+  priority: P1
+  cadence: quarterly-ai-governance-recertification-and-policy-refresh
+  issue: "950"
