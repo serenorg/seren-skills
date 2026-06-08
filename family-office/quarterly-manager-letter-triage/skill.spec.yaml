@@ -1,0 +1,158 @@
+skill: quarterly-manager-letter-triage
+description: "Family office: Triage GP quarterly letters and K-1 packages, extract material events, diff against prior quarters, and draft principal-facing watch-list summaries."
+triggers:
+  - triage GP quarterly letters
+  - summarize manager letter deltas
+  - find material events in LP updates
+  - run quarterly manager letter watch-list
+runtime:
+  language: python
+  entrypoint: scripts/agent.py
+inputs:
+  event_id:
+    type: string
+    description: Stable id for the event, obligation, document, alert, payment, filing, or work item.
+  subject:
+    type: string
+    description: Human-readable event subject used in audit and review packets.
+  dry_run_to:
+    type: string
+    description: Review mailbox used for dry-run digest routing.
+    default: taariq@serendb.com
+  approval_confirmed:
+    type: boolean
+    description: Set true only after the responsible human approves the staged action.
+    default: false
+secrets:
+  - SEREN_API_KEY
+connectors:
+  storage:
+    kind: seren_publisher
+    publisher: seren-db
+  passwords:
+    kind: seren_publisher
+    publisher: seren-passwords
+  outlook:
+    kind: seren_publisher
+    publisher: microsoft-outlook
+  gmail:
+    kind: seren_publisher
+    publisher: gmail
+  drive:
+    kind: seren_publisher
+    publisher: google-drive
+  docs:
+    kind: seren_publisher
+    publisher: google-docs
+  docreader:
+    kind: seren_publisher
+    publisher: seren-docreader
+  sheets:
+    kind: seren_publisher
+    publisher: google-sheets
+state:
+  manager_letter_ingest:
+    kind: serendb
+    database: family_office_quarterly_manager_letter_triage
+    table: manager_letter_ingest
+  fund_period_letters:
+    kind: serendb
+    database: family_office_quarterly_manager_letter_triage
+    table: fund_period_letters
+  material_event_ledger:
+    kind: serendb
+    database: family_office_quarterly_manager_letter_triage
+    table: material_event_ledger
+policies:
+  dry_run_default: true
+  idempotency_required: true
+  max_daily_spend_usd: 0
+workflow:
+  steps:
+    - id: normalize_event
+      use: transform.normalize_operator_event
+      with:
+        event_id: "{event_id}"
+        subject: "{subject}"
+    - id: resolve_seren_passwords_context
+      use: connector.passwords.post
+      with:
+        path: /mcp/passwords_vaults_list
+        body:
+          purpose: resolve_named_secret_references
+          forbid_vault_ids_from_config: true
+    - id: ensure_operator_database
+      use: connector.storage.post
+      with:
+        path: /projects
+        body:
+          project_name: family-office-quarterly-manager-letter-triage
+          database: family_office_quarterly_manager_letter_triage
+    - id: load_operator_state
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          step: ensure_operator_database
+          query: select * from manager_letter_ingest limit 100
+    - id: ingest_source_artifacts
+      use: connector.gmail.get
+      with:
+        path: /dry-run/source-artifacts
+        body:
+          dry_run_to: "{dry_run_to}"
+          sample_subject: "Q2 GP letter strategy drift and key-person update"
+    - id: evaluate_skill_outputs
+      use: transform.evaluate_family_office_operator_event
+      with:
+        gate: "principal routing, manager outreach, and investment-committee escalation require human approval"
+        required_outputs:
+          - per_fund_summary
+          - prior_quarter_delta
+          - material_event_register
+          - portfolio_watchlist
+          - manager_fund_monitor_context
+    - id: persist_audit_event
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          body_from: evaluate_skill_outputs
+          table: operator_audit_events
+    - id: create_review_task
+      use: connector.storage.post
+      with:
+        path: /query
+        body:
+          body_from: evaluate_skill_outputs
+          table: operator_review_tasks
+    - id: send_dry_run_digest
+      use: connector.outlook.post
+      with:
+        path: /me/sendMail
+        body:
+          dry_run_to: "{dry_run_to}"
+          body_from: evaluate_skill_outputs
+          review_gate_only: true
+    - id: summary
+      use: transform.render_operator_summary
+      with:
+        depends_on:
+          - persist_audit_event
+          - create_review_task
+          - send_dry_run_digest
+tests:
+  quick:
+    - validate spec
+  smoke:
+    - functional dry-run returns all_green
+    - live execution requires dual approval gate
+publish:
+  org: family-office
+  slug: quarterly-manager-letter-triage
+metadata:
+  category: family-office-operator
+  family_office_category: "Investment Operations"
+  priority: P1
+  cadence: quarterly-letter-window-daily-ingest-weekly-watchlist
+  issue: "937"

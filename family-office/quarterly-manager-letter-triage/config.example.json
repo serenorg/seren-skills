@@ -1,0 +1,79 @@
+{
+  "skill": "quarterly-manager-letter-triage",
+  "issue": 937,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "quarterly-manager-letter-triage-20260608-001",
+    "subject": "Q2 GP letter strategy drift and key-person update",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Quarterly Manager Letter Triage Operator",
+    "priority": "P1",
+    "cadence": "quarterly-letter-window-daily-ingest-weekly-watchlist",
+    "gate": "principal routing, manager outreach, and investment-committee escalation require human approval",
+    "sample_subject": "Q2 GP letter strategy drift and key-person update",
+    "exception_flags": [
+      "material_event_detected",
+      "prior_quarter_delta"
+    ],
+    "actions": [
+      "ingest_quarterly_letters",
+      "extract_material_events",
+      "diff_prior_quarter",
+      "draft_principal_summary",
+      "update_watchlist"
+    ],
+    "outputs": [
+      "per_fund_summary",
+      "prior_quarter_delta",
+      "material_event_register",
+      "portfolio_watchlist",
+      "manager_fund_monitor_context"
+    ],
+    "handoffs": [
+      "manager-fund-monitor",
+      "manager-dd-private-equity",
+      "client-sourced-deal-review-memo"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "quarterly-manager-letter-triage-20260608-001",
+    "subject": "Q2 GP letter strategy drift and key-person update",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "material_event_detected",
+      "prior_quarter_delta"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::quarterly-manager-letter-triage::001",
+      "kind": "synthetic-dry-run",
+      "subject": "Q2 GP letter strategy drift and key-person update",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-quarterly-manager-letter-triage",
+    "database": "family_office_quarterly_manager_letter_triage"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
