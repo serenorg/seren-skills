@@ -1,0 +1,79 @@
+{
+  "skill": "geopolitical-fx-exposure-dashboard",
+  "issue": 947,
+  "dry_run": true,
+  "live_mode": false,
+  "dry_run_to": "taariq@serendb.com",
+  "inputs": {
+    "event_id": "geopolitical-fx-exposure-dashboard-20260608-001",
+    "subject": "EUR cash and operating company revenue exposure review",
+    "dry_run_to": "taariq@serendb.com",
+    "approval_confirmed": false
+  },
+  "operator_profile": {
+    "title": "Geopolitical FX Exposure Dashboard Operator",
+    "priority": "P1",
+    "cadence": "daily-exposure-refresh-weekly-policy-band-review-event-driven-sanctions-screen",
+    "gate": "hedge trade routing, position changes, and external advisor instructions require separate human approval",
+    "sample_subject": "EUR cash and operating company revenue exposure review",
+    "exception_flags": [
+      "exposure_above_policy_band",
+      "sanctions_review_hit"
+    ],
+    "actions": [
+      "calculate_fx_netting",
+      "map_country_and_sanctions_exposure",
+      "flag_supply_chain_concentration",
+      "draft_hedge_recommendations"
+    ],
+    "outputs": [
+      "fx_net_exposure",
+      "country_exposure_dashboard",
+      "sanctions_screen",
+      "supply_chain_flags",
+      "hedge_trade_recommendations",
+      "policy_band_check"
+    ],
+    "handoffs": [
+      "cash-position-and-liquidity-monitor",
+      "portfolio-risk-register",
+      "target-asset-allocation-model"
+    ],
+    "always_review": true
+  },
+  "control_event": {
+    "event_id": "geopolitical-fx-exposure-dashboard-20260608-001",
+    "subject": "EUR cash and operating company revenue exposure review",
+    "source": "synthetic-dry-run",
+    "amount_usd": 1000,
+    "exception_flags": [
+      "exposure_above_policy_band",
+      "sanctions_review_hit"
+    ]
+  },
+  "source_artifacts": [
+    {
+      "artifact_id": "synthetic::geopolitical-fx-exposure-dashboard::001",
+      "kind": "synthetic-dry-run",
+      "subject": "EUR cash and operating company revenue exposure review",
+      "citation_status": "placeholder-ready"
+    }
+  ],
+  "serendb": {
+    "project": "family-office-geopolitical-fx-exposure-dashboard",
+    "database": "family_office_geopolitical_fx_exposure_dashboard"
+  },
+  "secrets": {
+    "vault_name": "Family Office Operations",
+    "items": [
+      "primary-mailbox-oauth",
+      "document-store-readonly",
+      "family-office-review-channel"
+    ]
+  },
+  "cloud": {
+    "mode": "cron-or-event",
+    "schedule": "0 9 * * *",
+    "timezone": "America/New_York"
+  }
+}
