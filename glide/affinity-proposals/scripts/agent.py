@@ -232,23 +232,67 @@ def build_services(raw_config: dict[str, Any], *, skill_root: Path) -> AgentServ
     )
 
 
+def _run_setup(config_path: Path, skill_root: Path) -> int:
+    """First-run interview that writes config.json for a non-engineer operator (#967)."""
+
+    from scripts.affinity import AffinityClient
+    from scripts.email_send import OutlookEmailSender
+    from scripts.interview import InterviewAborted, InterviewIO, InterviewSession
+    from scripts.proposal import SharePointRenderer
+    from scripts.seren_client import GatewayClient
+
+    gateway = GatewayClient.from_env(skill_root=skill_root)
+    outlook = OutlookEmailSender(gateway)
+    sharepoint = SharePointRenderer(gateway)
+    session = InterviewSession(
+        io=InterviewIO(ask=input, write=lambda message: print(message, end="")),
+        gateway=gateway,
+        affinity_factory=AffinityClient,
+        outlook_preflight=outlook.preflight,
+        sharepoint_preflight=lambda folder: sharepoint.preflight(),
+    )
+    try:
+        session.run()
+    except InterviewAborted as exc:
+        print(f"\nsetup-blocked: {exc}")
+        return 2
+    session.write_to(config_path)
+    print(f"\nWrote {config_path}. Run `python -m scripts.agent --once` for a dry-run.\n")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.json")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--setup", action="store_true")
     parser.add_argument("--allow-live", action="store_true")
     args = parser.parse_args()
-    if not args.once:
-        parser.error("only --once is implemented")
 
-    raw = _load_config(Path(args.config))
+    config_path = Path(args.config)
+    skill_root = Path(__file__).resolve().parent.parent
+
+    if args.setup:
+        return _run_setup(config_path, skill_root)
+
+    if not args.once:
+        parser.error("only --once and --setup are implemented")
+
+    if not config_path.exists():
+        # Auto-trigger setup so a non-engineer operator never sees a stack trace
+        # when there's no config yet.
+        print(f"No {config_path} yet — starting first-run setup.\n")
+        rc = _run_setup(config_path, skill_root)
+        if rc != 0:
+            return rc
+
+    raw = _load_config(config_path)
     config = AgentConfig.from_mapping(raw)
     if args.allow_live:
         config.dry_run = False
     if not config.dry_run and not config.live_mode:
         raise RuntimeError("--allow-live also requires live_mode=true in config.json")
 
-    skill_root = Path(__file__).resolve().parent.parent
     summary = run_once(
         config,
         services=build_services(raw, skill_root=skill_root),

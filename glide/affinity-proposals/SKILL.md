@@ -19,11 +19,29 @@ The template directory is reserved for customer-approved proposal templates. Uni
 
 ## Setup
 
-1. Create local `config.json` from `config.example.json` and replace every placeholder with operator-approved values.
-2. Set `SEREN_API_KEY` in `.env` or the deployment secret store.
-3. Complete a one-time Seren Passwords access grant for the cloud agent identity that will run this cron. The skill reads vault and item names from config; it never hardcodes IDs.
-4. Connect the render account to the Microsoft SharePoint publisher and ensure the configured archive folder exists.
-5. Keep `dry_run: true` until a dry-run email with a rendered PDF has been verified.
+The skill interviews you on first run, so a non-engineer operator can finish setup without editing JSON.
+
+1. Set `SEREN_API_KEY` in `.env` (desktop) or the deployment secret store (cloud).
+2. Connect your Outlook mailbox to the `microsoft-outlook` publisher. This is the single sender mailbox both dry-run and live email go out from.
+3. Connect the render account to the `microsoft-sharepoint` publisher. Any folder name works — the interview lets you pick.
+4. Add your Affinity API key as an item in any Seren Passwords vault. Title it with something containing "affinity" so the interview finds it.
+5. Run `python -m scripts.agent --once`. With no `config.json` present, the interview starts automatically: it asks for the Affinity list, the engaged/proposal statuses, the owner emails to filter on, which Seren Passwords vault/item holds the key, the Outlook From address, the dry-run and live CC lists, and the SharePoint folder. It writes `config.json` and runs the first dry-run.
+6. Re-run setup any time with `python -m scripts.agent --setup`.
+
+`dry_run: true` is set automatically and never asked. Going live requires the separate `--allow-live` flag plus an explicit `live_mode: true` edit (live-mode UX is a separate ticket).
+
+### For engineers — fields the interview bakes in for the operator
+
+| Field | Hidden value | Source |
+| ----- | ------------ | ------ |
+| `dry_run` | `true` | `scripts/interview.py:HIDDEN_DEFAULTS` |
+| `live_mode` | `false` | same |
+| `extract.model` | current production default | `scripts/extract.py:DEFAULT_MODEL` |
+| `secrets.affinity_env_var` | `AFFINITY_API_KEY` | same |
+| `serendb.project` | `glide-affinity-proposals` | same |
+| `serendb.database` | `glide_affinity_proposals` | same |
+
+`config.example.json` is preserved for engineer reference; the interview is the supported operator path.
 
 ## Sender Mailbox
 
