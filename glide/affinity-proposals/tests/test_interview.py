@@ -30,6 +30,7 @@ from scripts.interview import (
     build_config_payload,
     rank_password_items,
 )
+from scripts.seren_client import PublisherError
 from scripts.secrets import SecretConfig
 
 
@@ -225,3 +226,85 @@ def test_setup_blocked_when_no_vaults_present() -> None:
     with pytest.raises(InterviewAborted) as exc:
         session.run()
     assert "Seren Passwords" in str(exc.value)
+
+
+def test_passwords_failure_uses_env_first_fallback_without_chat_secret(tmp_path: Path) -> None:
+    class PasswordsDown:
+        def call_tool(self, publisher: str, tool: str, args: dict[str, Any] | None = None) -> Any:
+            if tool == "passwords_vaults_list":
+                raise PublisherError(503, "upstream service unavailable")
+            raise AssertionError(tool)
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("AFFINITY_API_KEY=env-affinity-key\n", encoding="utf-8")
+    io = _ScriptedIO([
+        "Glide Prospects",
+        "Engaged - 25%",
+        "Proposal - 50%",
+        "cristin@glide.example",
+        "stored",
+        "y",
+        "proposals@serendb.com",
+        "cristin@glide.example",
+        "",
+        "manager@glide.example",
+        "",
+        "y",
+    ])
+    seen_keys: list[str] = []
+
+    class EnvAffinity(_StubAffinity):
+        def __init__(self, key: str) -> None:
+            super().__init__(key)
+            seen_keys.append(key)
+
+    session = InterviewSession(
+        io=InterviewIO(ask=io.ask, write=io.write),
+        gateway=PasswordsDown(),
+        affinity_factory=EnvAffinity,
+        outlook_preflight=lambda address: None,
+        sharepoint_preflight=lambda folder: None,
+        env_path=env_path,
+    )
+
+    session.run()
+    payload = build_config_payload(session.answers)
+
+    assert seen_keys == ["env-affinity-key"]
+    assert payload["secrets"]["vault_name"] is None
+    assert payload["secrets"]["affinity_item_title"] is None
+    assert "env-first fallback" in "".join(io.writes)
+    assert "AFFINITY_API_KEY" in "".join(io.writes)
+
+
+def test_env_key_gets_vault_recovered_reminder_and_can_stay_deferred(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("AFFINITY_API_KEY=env-affinity-key\n", encoding="utf-8")
+    io = _ScriptedIO([
+        "Glide Prospects",
+        "Engaged - 25%",
+        "Proposal - 50%",
+        "cristin@glide.example",
+        "n",
+        "y",
+        "proposals@serendb.com",
+        "cristin@glide.example",
+        "",
+        "manager@glide.example",
+        "",
+        "y",
+    ])
+    session = InterviewSession(
+        io=InterviewIO(ask=io.ask, write=io.write),
+        gateway=_StubGateway(),
+        affinity_factory=_StubAffinity,
+        outlook_preflight=lambda address: None,
+        sharepoint_preflight=lambda folder: None,
+        env_path=env_path,
+    )
+
+    session.run()
+
+    assert session.answers.vault_name is None
+    assert session.answers.affinity_item_title is None
+    assert "vault is back up" in "".join(io.writes)

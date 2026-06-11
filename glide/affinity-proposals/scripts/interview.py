@@ -15,6 +15,7 @@ pastes a key into the terminal.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,8 +52,8 @@ class InterviewAnswers:
     engaged_status: str = ""
     proposal_status: str = ""
     owner_emails: list[str] = field(default_factory=list)
-    vault_name: str = ""
-    affinity_item_title: str = ""
+    vault_name: str | None = ""
+    affinity_item_title: str | None = ""
     sender_address: str = ""
     dry_run_to: str = ""
     dry_run_cc: list[str] = field(default_factory=list)
@@ -144,12 +145,16 @@ class InterviewSession:
         affinity_factory: Callable[[str], Any],
         outlook_preflight: Callable[[str], None],
         sharepoint_preflight: Callable[[str], None],
+        env_path: Path | None = None,
+        env: dict[str, str] | None = None,
     ) -> None:
         self.io = io
         self.gateway = gateway
         self.affinity_factory = affinity_factory
         self.outlook_preflight = outlook_preflight
         self.sharepoint_preflight = sharepoint_preflight
+        self.env_path = env_path or Path(__file__).resolve().parent.parent / ".env"
+        self.env = env if env is not None else os.environ
         self.answers = InterviewAnswers()
 
     def run(self) -> InterviewAnswers:
@@ -227,15 +232,26 @@ class InterviewSession:
         self.answers.owner_emails = emails
 
     def _ask_passwords_item(self) -> None:
-        vault_id, vault_name = self._select_password_vault()
-        self.answers.vault_name = vault_name
-        item = self._select_password_item(vault_id)
-        if item is None:
-            item = self._create_password_item(vault_id)
-        self.answers.affinity_item_title = item["title"]
+        if self._affinity_key_from_env() and self._passwords_available():
+            answer = self.io.ask(
+                "5) Affinity key is on `.env` — vault is back up; want to migrate? "
+                "(y/n) "
+            ).strip().lower()
+            if answer not in ("y", "yes", ""):
+                self._use_env_first_key()
+                return
+        try:
+            vault_id, vault_name = self._select_password_vault()
+            self.answers.vault_name = vault_name
+            item = self._select_password_item(vault_id)
+            if item is None:
+                item = self._create_password_item(vault_id)
+            self.answers.affinity_item_title = item["title"]
 
-        api_key = self._reveal_password_item(vault_id, item["item_id"])
-        self._verify_affinity_key(api_key)
+            api_key = self._reveal_password_item(vault_id, item["item_id"])
+            self._verify_affinity_key(api_key, source="Seren Passwords")
+        except PublisherError as exc:
+            self._ask_env_first_fallback(exc)
 
     def _select_password_vault(self) -> tuple[str, str]:
         vaults = _passwords_list(
@@ -359,18 +375,71 @@ class InterviewSession:
             )
         return str(value).strip()
 
-    def _verify_affinity_key(self, api_key: str) -> None:
+    def _ask_env_first_fallback(self, exc: PublisherError) -> None:
+        self.io.write(
+            f"5) Seren Passwords is unavailable ({exc.status}). The skill reads "
+            "`AFFINITY_API_KEY` from the environment before it touches Passwords; "
+            "this is the documented headless env-first fallback.\n"
+            f"   Store this line in {self.env_path} with file mode 0600:\n"
+            "   AFFINITY_API_KEY=<your Affinity API key>\n"
+            "   Do not paste the key into chat. Reply `stored` after the file is saved.\n"
+        )
+        while True:
+            answer = self.io.ask("   Stored outside chat? (type 'stored') ").strip().lower()
+            if answer == "stored":
+                try:
+                    self._use_env_first_key()
+                    return
+                except InterviewAborted as abort:
+                    self.io.write(f"   {abort}\n")
+            else:
+                self.io.write("   Please store it outside chat, then reply `stored`.\n")
+
+    def _passwords_available(self) -> bool:
+        try:
+            vaults = _passwords_list(
+                self.gateway.call_tool("seren-passwords", "passwords_vaults_list", {}),
+                "vaults",
+            )
+        except PublisherError:
+            return False
+        return bool(vaults)
+
+    def _use_env_first_key(self) -> None:
+        api_key = self._affinity_key_from_env()
+        if not api_key:
+            raise InterviewAborted(
+                f"{HIDDEN_DEFAULTS['secrets_env_var']} was not found in the "
+                f"environment or {self.env_path}."
+            )
+        self.answers.vault_name = None
+        self.answers.affinity_item_title = None
+        self._verify_affinity_key(api_key, source=HIDDEN_DEFAULTS["secrets_env_var"])
+
+    def _affinity_key_from_env(self) -> str:
+        env_var = HIDDEN_DEFAULTS["secrets_env_var"]
+        value = self.env.get(env_var)
+        if value and value.strip():
+            return value.strip()
+        if not self.env_path.exists():
+            return ""
+        for line in self.env_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"{env_var}="):
+                return line.partition("=")[2].strip()
+        return ""
+
+    def _verify_affinity_key(self, api_key: str, *, source: str) -> None:
         try:
             client = self.affinity_factory(api_key)
             client.lists()
         except PublisherError as exc:
             raise InterviewAborted(
-                f"Affinity rejected the API key from Seren Passwords ({exc}). "
+                f"Affinity rejected the API key from {source} ({exc}). "
                 "Check the value and re-run setup."
             ) from exc
         except Exception as exc:  # noqa: BLE001 - any failure is a setup blocker
             raise InterviewAborted(
-                f"Couldn't authenticate against Affinity with the key from Seren Passwords: {exc}"
+                f"Couldn't authenticate against Affinity with the key from {source}: {exc}"
             ) from exc
 
     def _ask_sender(self) -> None:

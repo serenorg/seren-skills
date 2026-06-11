@@ -36,8 +36,8 @@ class SecretConfig:
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> "SecretConfig":
         return cls(
-            vault_name=str(data.get("vault_name", "")),
-            affinity_item_title=str(data.get("affinity_item_title", "")),
+            vault_name=str(data.get("vault_name") or ""),
+            affinity_item_title=str(data.get("affinity_item_title") or ""),
             affinity_env_var=str(data.get("affinity_env_var", "AFFINITY_API_KEY")),
         )
 
