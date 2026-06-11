@@ -22,6 +22,7 @@ The agent itself runs the interview in chat. For each question:
 1. Validate the answer the same way `scripts/interview.py` does (non-empty for required questions, email shape for address questions, list-comma-split for CC fields, etc.).
 2. Call the live MCP tools directly when a question needs to look something up:
    - Question 5 (Affinity API key item) ranks the operator's Seren Passwords vault items via `mcp__seren-mcp__passwords_items_list` / `mcp__seren-mcp__passwords_item_get`. Reuse the same ranking rules as `rank_password_items` in `scripts/interview.py`.
+     If Seren Passwords returns a non-2xx response, do not ask the operator to paste the key into chat. Explain that the skill reads `AFFINITY_API_KEY` from the environment before Passwords, ask the operator to store `AFFINITY_API_KEY=<key>` in the skill `.env` with mode 0600, and continue only after they reply `stored`.
    - Question 6 (Outlook sender mailbox) preflights `microsoft-outlook` via `mcp__seren-mcp__call_publisher`. If the publisher returns `OAuthRequired`, surface the connect URL and stop until the operator confirms the connection.
    - Question 10 (SharePoint folder) preflights `microsoft-sharepoint` via `mcp__seren-mcp__call_publisher` the same way.
 3. After the last answer, write `~/.config/seren/skills/affinity-proposals/config.json` directly with the `Write` tool. Hidden defaults (`dry_run: true`, `live_mode: false`, `extract.model`, `secrets.affinity_env_var`, `serendb.project`, `serendb.database`) come from `scripts/interview.py:HIDDEN_DEFAULTS` — never ask the operator about them.
@@ -127,6 +128,18 @@ If a live provider blocks the full dry-run, create a `bug` issue assigned to the
 The SharePoint renderer runs a preflight against `microsoft-sharepoint` before upload. If the publisher returns `OAuthRequired`, connect the render account to the Microsoft provider and rerun the dry-run; the skill will stop before generating partial artifacts.
 
 The secret resolver requires the hosted Seren Passwords tools that return plaintext vault and item metadata after access is granted. If only encrypted REST records are available, the skill stops with a setup blocker before making any Affinity calls.
+
+### Passwords Down During Setup
+
+The runtime resolver is env-first: it reads `AFFINITY_API_KEY` from the process environment or the skill `.env` before it touches Seren Passwords. If Passwords returns 503, times out, or otherwise returns non-2xx during Question 5, use that documented fallback instead of collecting the secret in chat.
+
+Tell the operator to create or update the skill `.env` with:
+
+```bash
+AFFINITY_API_KEY=<your Affinity API key>
+```
+
+The `.env` file is gitignored and should be mode 0600. After the operator replies `stored`, verify the key through Affinity and write `null` for `secrets.vault_name` and `secrets.affinity_item_title` in `config.json`. When Passwords is healthy again and `.env` is still in use, the next setup run should show: `Affinity key is on .env - vault is back up; want to migrate?`
 
 ## Cloud Deployment
 
