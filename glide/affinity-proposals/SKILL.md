@@ -1,6 +1,6 @@
 ---
 name: affinity-proposals
-description: Generate dry-run-first Glide proposal PDFs from Affinity CRM meeting notes, send them for review, and audit the workflow before any live CRM write-back.
+description: Generate dry-run-first Glide proposal PDFs from Affinity CRM meeting notes, send them for review, and audit the workflow before any live CRM write-back. When invoked with no config.json, drive the first-run setup entirely as a chat interview — no menus, no terminal commands.
 ---
 
 # Glide Affinity Proposals
@@ -11,6 +11,27 @@ When `affinity.owner_emails` is set, only prospects owned by one of those emails
 
 Dry-run is the default. Live mode requires both `--allow-live` and `live_mode: true` in `config.json`.
 
+## On invocation
+
+The operator cannot use a terminal. The loading agent owns every keystroke. This section is normative.
+
+**Fresh invocation — no `~/.config/seren/skills/affinity-proposals/config.json` on disk.** Open the very first assistant turn with the interview's intro paragraph and Question 1 (the Affinity list name). Do not offer a menu of actions. Do not propose a terminal command. Do not ask the operator to paste bash. Do not ask "what do you want to do?" first.
+
+The agent itself runs the interview in chat. For each question:
+
+1. Validate the answer the same way `scripts/interview.py` does (non-empty for required questions, email shape for address questions, list-comma-split for CC fields, etc.).
+2. Call the live MCP tools directly when a question needs to look something up:
+   - Question 5 (Affinity API key item) ranks the operator's Seren Passwords vault items via `mcp__seren-mcp__passwords_items_list` / `mcp__seren-mcp__passwords_item_get`. Reuse the same ranking rules as `rank_password_items` in `scripts/interview.py`.
+   - Question 6 (Outlook sender mailbox) preflights `microsoft-outlook` via `mcp__seren-mcp__call_publisher`. If the publisher returns `OAuthRequired`, surface the connect URL and stop until the operator confirms the connection.
+   - Question 10 (SharePoint folder) preflights `microsoft-sharepoint` via `mcp__seren-mcp__call_publisher` the same way.
+3. After the last answer, write `~/.config/seren/skills/affinity-proposals/config.json` directly with the `Write` tool. Hidden defaults (`dry_run: true`, `live_mode: false`, `extract.model`, `secrets.affinity_env_var`, `serendb.project`, `serendb.database`) come from `scripts/interview.py:HIDDEN_DEFAULTS` — never ask the operator about them.
+
+`python -m scripts.agent --setup` remains as an engineer fallback, but it is **never** the operator path. Do not propose it.
+
+**Repeat invocation — `config.json` already exists, no args.** The default action is the dry-run scan. Do not show a menu; run the scan directly.
+
+**Re-configure — operator says "re-run setup", "edit my settings", "change the list", etc.** Re-enter the same chat interview, pre-filling each question with the current value from `config.json` as the default. Only overwrite `config.json` after the operator confirms the last answer.
+
 ## Public Repo Rules
 
 This repo must not contain credentials, live CRM exports, generated proposal PDFs, real prospect notes, person/list/vault IDs, or real email routing values. Use `config.example.json` placeholders only. Local `config.json`, `.env`, `out/`, generated PDFs, and `state/` are gitignored.
@@ -19,18 +40,27 @@ The template directory is reserved for customer-approved proposal templates. Uni
 
 ## Setup
 
-The skill interviews you on first run, so a non-engineer operator can finish setup without editing JSON.
+The agent interviews the operator in chat on first run. The operator does not need to touch JSON, a terminal, or a CLI flag. The prerequisite live connections the interview will confirm:
 
-1. Set `SEREN_API_KEY` in `.env` (desktop) or the deployment secret store (cloud).
-2. Connect your Outlook mailbox to the `microsoft-outlook` publisher. This is the single sender mailbox both dry-run and live email go out from.
-3. Connect the render account to the `microsoft-sharepoint` publisher. Any folder name works — the interview lets you pick.
-4. Add your Affinity API key as an item in any Seren Passwords vault. Title it with something containing "affinity" so the interview finds it.
-5. Run `python -m scripts.agent --once`. With no `config.json` present, the interview starts automatically: it asks for the Affinity list, the engaged/proposal statuses, the owner emails to filter on, which Seren Passwords vault/item holds the key, the Outlook From address, the dry-run and live CC lists, and the SharePoint folder. It writes `config.json` and runs the first dry-run.
-6. Re-run setup any time with `python -m scripts.agent --setup`.
+- `SEREN_API_KEY` available to the runtime (`.env` for desktop, deployment secret for cloud).
+- Outlook mailbox connected to the `microsoft-outlook` publisher. This is the single sender mailbox both dry-run and live email go out from.
+- Render account connected to the `microsoft-sharepoint` publisher. Any folder name works — the interview lets the operator pick.
+- Affinity API key stored as a Seren Passwords vault item. Title it with something containing "affinity" so the interview's ranking finds it first.
 
 `dry_run: true` is set automatically and never asked. Going live requires the separate `--allow-live` flag plus an explicit `live_mode: true` edit (live-mode UX is a separate ticket).
 
-### For engineers — fields the interview bakes in for the operator
+## For engineers
+
+`scripts/interview.py` is the reference implementation of the chat flow; the loading agent should mirror its question order and validation rules. The CLI entrypoint is preserved for engineer use only:
+
+```bash
+python -m scripts.agent --once      # first run with no config.json
+python -m scripts.agent --setup     # re-enter the interview from a terminal
+```
+
+These commands are NOT for the operator. The loading agent must never print them as instructions in chat.
+
+### Fields the interview bakes in for the operator
 
 | Field | Hidden value | Source |
 | ----- | ------------ | ------ |
@@ -41,7 +71,7 @@ The skill interviews you on first run, so a non-engineer operator can finish set
 | `serendb.project` | `glide-affinity-proposals` | same |
 | `serendb.database` | `glide_affinity_proposals` | same |
 
-`config.example.json` is preserved for engineer reference; the interview is the supported operator path.
+`config.example.json` is preserved for engineer reference; the chat interview is the supported operator path.
 
 ## Sender Mailbox
 

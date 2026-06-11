@@ -2,7 +2,7 @@ skill:
   name: affinity-proposals
   slug: glide-affinity-proposals
   org: glide
-  description: Generate dry-run-first Glide proposal PDFs from Affinity CRM meeting notes and audit the workflow.
+  description: Generate dry-run-first Glide proposal PDFs from Affinity CRM meeting notes and audit the workflow. When invoked with no config.json, drive first-run setup entirely as a chat interview — no menus, no terminal commands.
 runtime:
   language: python
   entrypoint: scripts/agent.py
