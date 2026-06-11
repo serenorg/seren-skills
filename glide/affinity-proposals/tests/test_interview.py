@@ -116,6 +116,23 @@ def test_required_answer_rejects_blank_input_and_reprompts() -> None:
     assert sum(1 for w in io.writes if "can't be empty" in w) == 2
 
 
+def test_proposal_status_rejects_engaged_status_collision() -> None:
+    io = _ScriptedIO(["Proposal - 50%", "Sent - 75%"])
+    session = InterviewSession(
+        io=InterviewIO(ask=io.ask, write=io.write),
+        gateway=None,
+        affinity_factory=lambda key: None,
+        outlook_preflight=lambda address: None,
+        sharepoint_preflight=lambda folder: None,
+    )
+    session.answers.engaged_status = "Proposal - 50%"
+
+    session._ask_proposal_status()
+
+    assert session.answers.proposal_status == "Sent - 75%"
+    assert "can't be the same status" in "".join(io.writes)
+
+
 class _StubGateway:
     """Minimal Passwords + Affinity stand-in for the end-to-end test.
 

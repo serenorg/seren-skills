@@ -210,11 +210,21 @@ class InterviewSession:
         )
 
     def _ask_proposal_status(self) -> None:
-        self.answers.proposal_status = self._ask_required(
-            "3) What status should we move them to after the proposal is sent? "
-            "(e.g. 'Proposal - 50%') ",
-            "proposal status",
-        )
+        while True:
+            value = self._ask_required(
+                "3) What status should we move them to after the proposal is sent? "
+                "(e.g. 'Proposal - 50%') ",
+                "proposal status",
+            )
+            if value.strip().lower() != self.answers.engaged_status.strip().lower():
+                self.answers.proposal_status = value
+                return
+            self.io.write(
+                "  Q2 (engaged) and Q3 (post-send) describe two different "
+                "points in the funnel. They can't be the same status. Engaged "
+                "is \"ready for proposal\"; post-send is what you move them to "
+                "after the PDF goes out. What's the post-send status?\n"
+            )
 
     def _ask_owner_emails(self) -> None:
         raw = self.io.ask(

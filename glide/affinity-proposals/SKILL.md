@@ -50,6 +50,8 @@ The agent interviews the operator in chat on first run. The operator does not ne
 
 `dry_run: true` is set automatically and never asked. Going live requires the separate `--allow-live` flag plus an explicit `live_mode: true` edit (live-mode UX is a separate ticket).
 
+The engaged status and post-send proposal status must be different values. Engaged means "ready for proposal"; post-send is the status used after the PDF goes out. If Question 3 repeats the Question 2 value, setup rejects it and asks again.
+
 ## For engineers
 
 `scripts/interview.py` is the reference implementation of the chat flow; the loading agent should mirror its question order and validation rules. The CLI entrypoint is preserved for engineer use only:
@@ -95,6 +97,19 @@ curl -u :{key} 'https://api.affinity.co/notes?organization_id={id}'
 ```
 
 Use an Admin-level Affinity API key or grant the API key's user access to the affected list and notes in Affinity Settings, then rerun the dry-run.
+
+### Diagnosing A 0-Qualified Dry-Run
+
+When a dry-run scans zero raw entries or qualifies zero prospects, the summary prints a `dry_run_diagnostic` block before the JSON summary. It includes:
+
+- `scanned_raw_count`
+- the configured `engaged_status`
+- the top three statuses in the Affinity list
+- the configured owner filter
+- the top three owner emails in the list
+- an actionable setup hint, including Q2/Q3 collision, likely status mismatch, likely owner mismatch, or the prior-proposal filter
+
+If the diagnostic suggests the wrong status or owner, re-run setup with `/glide-affinity-proposals re-run setup` and update the affected answer.
 
 ## Live Behavior
 
