@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from scripts.agent import AgentConfig, AgentServices, run_once
-from scripts.affinity import Note, Prospect
+from scripts.affinity import AffinityScanSummary, Note, Prospect
 from scripts.extract import ProposalProfile
 from scripts.proposal import ProposalArtifact
 
@@ -134,3 +134,31 @@ def test_run_once_blocks_when_outlook_oauth_missing():
 
     # Preflight must block before any prospect work or write-back.
     assert affinity.write_calls == []
+
+
+def test_run_once_surfaces_affinity_scan_skip_counts():
+    class EmptyAffinity:
+        def __init__(self) -> None:
+            self.scan_summary = AffinityScanSummary(
+                scanned_raw_count=1,
+                skipped={"no_notes_via_api": 1},
+            )
+
+        def qualified_prospects(self):
+            return []
+
+    services = AgentServices(
+        affinity=EmptyAffinity(),
+        extractor=FakeExtractor(),
+        proposal=FakeProposal(),
+        emailer=FakeEmailer(),
+    )
+
+    summary = run_once(
+        AgentConfig(dry_run=True, live_mode=False),
+        services=services,
+        today=date(2026, 6, 11),
+    )
+
+    assert summary.scanned == 1
+    assert summary.skipped["no_notes_via_api"] == 1

@@ -83,6 +83,18 @@ This is the interim default until MS Publisher Verification (MPN) completes for 
 
 In dry-run, email is routed only to the configured dry-run recipients. The live owner address is not included in `to` or `cc`. Affinity notes and status fields are never written. SerenDB audit rows are still written so the operator can inspect what would have happened.
 
+### Troubleshooting Affinity Notes
+
+The scanner reads notes from both the Affinity organization and linked person records. If an organization qualifies by list, status, and owner but Affinity returns zero org notes and zero linked-person notes, the dry-run records `skipped.no_notes_via_api` and logs `prospect_skipped_no_notes_via_api` with a `likely_cause`.
+
+Affinity's API respects in-product sharing scope. If the Affinity UI shows notes but this command returns an empty result, the API key's user probably cannot access those notes/list/space, or exports are restricted to Admins:
+
+```bash
+curl -u :{key} 'https://api.affinity.co/notes?organization_id={id}'
+```
+
+Use an Admin-level Affinity API key or grant the API key's user access to the affected list and notes in Affinity Settings, then rerun the dry-run.
+
 ## Live Behavior
 
 Live mode is blocked unless both controls are set:
