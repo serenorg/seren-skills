@@ -71,9 +71,10 @@ class RunSummary:
     sent: int = 0
     written_back: int = 0
     skipped: dict[str, Any] = field(default_factory=dict)
+    diagnostics: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "scanned": self.scanned,
             "qualified": self.qualified,
             "generated": self.generated,
@@ -81,6 +82,12 @@ class RunSummary:
             "written_back": self.written_back,
             "skipped": self.skipped,
         }
+        if self.diagnostics:
+            payload["diagnostics"] = self.diagnostics
+        return payload
+
+    def diagnostic_text(self) -> str:
+        return "\n\n".join(self.diagnostics)
 
 
 def run_once(config: AgentConfig, *, services: AgentServices, today: date) -> RunSummary:
@@ -165,7 +172,120 @@ def run_once(config: AgentConfig, *, services: AgentServices, today: date) -> Ru
                     prospect.proposal_status_option_id,
                 )
             summary.written_back += 1
+    if config.dry_run and (summary.scanned == 0 or summary.qualified == 0):
+        diagnostic = _zero_qualified_diagnostic(
+            affinity=services.affinity,
+            scan_summary=scan_summary,
+            summary=summary,
+        )
+        if diagnostic:
+            summary.diagnostics.append(diagnostic)
     return summary
+
+
+def _zero_qualified_diagnostic(
+    *,
+    affinity: Any,
+    scan_summary: Any,
+    summary: RunSummary,
+) -> str:
+    if scan_summary is None:
+        return ""
+    engaged_status = str(getattr(affinity, "engaged_status", "") or "")
+    proposal_status = str(getattr(affinity, "proposal_status", "") or "")
+    owner_emails = _configured_owner_emails(getattr(affinity, "owner_emails", None))
+    status_counts = getattr(scan_summary, "status_counts", {}) or {}
+    owner_counts = getattr(scan_summary, "owner_counts", {}) or {}
+    scanned_raw_count = int(
+        getattr(scan_summary, "scanned_raw_count", summary.scanned) or 0
+    )
+
+    top_statuses = _top_counts(status_counts)
+    top_owners = _top_counts(owner_counts)
+    lines = [
+        "dry_run_diagnostic:",
+        f"scanned_raw_count: {scanned_raw_count}",
+        f'configured_engaged_status: "{engaged_status}"',
+        f"top_statuses: {_format_counts(top_statuses)}",
+        f"configured_owner_emails: {_format_owner_config(owner_emails)}",
+        f"top_owners: {_format_counts(top_owners)}",
+        f'0 prospects qualified. The configured engaged_status is "{engaged_status}".',
+    ]
+
+    if engaged_status and proposal_status and engaged_status == proposal_status:
+        lines.append(
+            "Q2/Q3 collision: engaged_status and proposal_status are both "
+            f'"{engaged_status}".'
+        )
+    status_suggestion = ""
+    if engaged_status == proposal_status or engaged_status not in status_counts:
+        status_suggestion = _status_suggestion(top_statuses, engaged_status)
+    if status_suggestion:
+        lines.append(
+            f'The list\'s top statuses are: {_format_counts(top_statuses)}. '
+            f'Did you mean "{status_suggestion}"?'
+        )
+    owner_suggestion = _owner_suggestion(top_owners, owner_emails)
+    if owner_suggestion:
+        lines.append(
+            "No rows match the configured owner email filter. "
+            f'Did you mean owner "{owner_suggestion}"?'
+        )
+    prior_count = int(getattr(scan_summary, "prior_proposal_filtered", 0) or 0)
+    if prior_count:
+        lines.append(
+            f"{prior_count} matching prospect(s) already had a proposal note."
+        )
+    lines.append("Re-run setup with: /glide-affinity-proposals re-run setup")
+    return "\n".join(lines)
+
+
+def _top_counts(counts: dict[str, int], *, limit: int = 3) -> list[tuple[str, int]]:
+    return sorted(
+        ((str(key), int(value)) for key, value in counts.items()),
+        key=lambda item: (-item[1], item[0].lower()),
+    )[:limit]
+
+
+def _format_counts(items: list[tuple[str, int]]) -> str:
+    if not items:
+        return "(none)"
+    return ", ".join(f"{name} ({count})" for name, count in items)
+
+
+def _configured_owner_emails(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return sorted(str(item) for item in value if item)
+
+
+def _format_owner_config(owner_emails: list[str]) -> str:
+    return ", ".join(owner_emails) if owner_emails else "all owners"
+
+
+def _status_suggestion(
+    top_statuses: list[tuple[str, int]],
+    engaged_status: str,
+) -> str:
+    for status, _count in top_statuses:
+        if status != engaged_status and status != "(blank)":
+            return status
+    return ""
+
+
+def _owner_suggestion(
+    top_owners: list[tuple[str, int]],
+    owner_emails: list[str],
+) -> str:
+    if not owner_emails:
+        return ""
+    normalized = {email.lower() for email in owner_emails}
+    for owner, _count in top_owners:
+        if owner.lower() in normalized:
+            return ""
+    return top_owners[0][0] if top_owners else ""
 
 
 def _load_config(path: Path) -> dict[str, Any]:
@@ -303,6 +423,8 @@ def main() -> int:
         services=build_services(raw, skill_root=skill_root),
         today=date.today(),
     )
+    if summary.diagnostic_text():
+        print(summary.diagnostic_text())
     print(json.dumps(summary.to_dict(), sort_keys=True))
     return 0
 

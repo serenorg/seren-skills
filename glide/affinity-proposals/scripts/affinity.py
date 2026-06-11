@@ -46,6 +46,7 @@ class AffinityScanSummary:
     owner_counts: dict[str, int] = field(default_factory=dict)
     skipped: dict[str, int] = field(default_factory=dict)
     warnings: list[dict[str, Any]] = field(default_factory=list)
+    prior_proposal_filtered: int = 0
 
 
 def _note_text(note: Note | dict[str, Any] | str) -> str:
@@ -274,6 +275,8 @@ class AffinityProspectSource:
                 )
                 for item in raw_notes
             ]
+            if has_prior_proposal_note(notes):
+                self.scan_summary.prior_proposal_filtered += 1
             if not should_generate_proposal(
                 status=status,
                 notes=notes,
