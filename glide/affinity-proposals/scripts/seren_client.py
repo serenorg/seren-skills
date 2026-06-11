@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,10 +24,12 @@ class GatewayClient:
         *,
         base_url: str = "https://api.serendb.com",
         user_agent: str = "glide-affinity-proposals",
+        timeout: float = 120.0,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.user_agent = user_agent
+        self.timeout = timeout
 
     @classmethod
     def from_env(cls, *, skill_root: Path | None = None) -> "GatewayClient":
@@ -40,7 +43,7 @@ class GatewayClient:
                         break
         if not api_key:
             raise RuntimeError("SEREN_API_KEY is required for publisher calls")
-        return cls(api_key)
+        return cls(api_key, timeout=_timeout_from_env())
 
     def _request(
         self,
@@ -74,12 +77,22 @@ class GatewayClient:
             method=method,
         )
         try:
-            with urllib.request.urlopen(request) as response:  # noqa: S310
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310
                 response_bytes = response.read()
                 status = response.status
         except urllib.error.HTTPError as exc:
             response_bytes = exc.read()
             status = exc.code
+        except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+            if not _is_timeout_error(exc):
+                raise
+            raise PublisherError(
+                0,
+                (
+                    f"Publisher request timed out after {self.timeout:g}s: "
+                    f"{method} {url}"
+                ),
+            ) from exc
         if not (200 <= status < 300):
             text = response_bytes.decode("utf-8", errors="replace")
             raise PublisherError(status, text[:1000])
@@ -243,6 +256,26 @@ def _unwrap(payload: Any) -> Any:
             return inner["body"]
         return inner
     return payload
+
+
+def _timeout_from_env() -> float:
+    raw = os.environ.get("SEREN_GATEWAY_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return 120.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 120.0
+    return value if value > 0 else 120.0
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        return isinstance(reason, (TimeoutError, socket.timeout))
+    return False
 
 
 def _decode_binary_response(response_bytes: bytes, status: int) -> bytes:
