@@ -70,7 +70,7 @@ class RunSummary:
     generated: int = 0
     sent: int = 0
     written_back: int = 0
-    skipped: dict[str, str] = field(default_factory=dict)
+    skipped: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -102,7 +102,12 @@ def run_once(config: AgentConfig, *, services: AgentServices, today: date) -> Ru
     )
 
     prospects = list(services.affinity.qualified_prospects())
-    summary.scanned = len(prospects)
+    scan_summary = getattr(services.affinity, "scan_summary", None)
+    if scan_summary is not None:
+        summary.scanned = int(getattr(scan_summary, "scanned_raw_count", 0) or 0)
+        summary.skipped.update(getattr(scan_summary, "skipped", {}) or {})
+    else:
+        summary.scanned = len(prospects)
     for prospect in prospects:
         reason = should_skip_prospect(
             prospect_id=prospect.prospect_id,

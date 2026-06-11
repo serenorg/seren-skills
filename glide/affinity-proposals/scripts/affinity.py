@@ -3,12 +3,21 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 import httpx
+
+
+LOGGER = logging.getLogger(__name__)
+NO_NOTES_VIA_API_LIKELY_CAUSE = (
+    "API key user lacks in-product access to these notes; try an Admin-level "
+    "Affinity API key, or grant the key's user access to the list/notes in "
+    "Affinity Settings."
+)
 
 
 @dataclass
@@ -28,6 +37,15 @@ class Prospect:
     notes: list[Note] = field(default_factory=list)
     status_field_value_id: str | None = None
     proposal_status_option_id: str | None = None
+
+
+@dataclass
+class AffinityScanSummary:
+    scanned_raw_count: int = 0
+    status_counts: dict[str, int] = field(default_factory=dict)
+    owner_counts: dict[str, int] = field(default_factory=dict)
+    skipped: dict[str, int] = field(default_factory=dict)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _note_text(note: Note | dict[str, Any] | str) -> str:
@@ -118,29 +136,39 @@ class AffinityClient:
     def field_values(self, list_entry_id: str | int) -> list[dict[str, Any]]:
         return self._request("GET", "/field-values", params={"list_entry_id": list_entry_id})
 
-    def notes(self, org_id: str | int) -> list[dict[str, Any]]:
-        """Return all notes for an org, unwrapping v1's paginated envelope.
+    def _paginated_notes(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return notes matching ``params``, unwrapping v1's paginated envelope.
 
         Live ``GET /notes`` returns ``{"notes": [...], "next_page_token": ...}``
         (not a bare array). Pages are followed until exhausted, with a safety
         cap so a malformed cursor can't loop forever.
         """
         collected: list[dict[str, Any]] = []
-        params: dict[str, Any] = {"organization_id": org_id}
+        current_params = dict(params)
         for _ in range(50):
-            payload = self._request("GET", "/notes", params=params)
+            payload = self._request("GET", "/notes", params=current_params)
             if isinstance(payload, dict):
                 collected.extend(payload.get("notes") or payload.get("data") or [])
                 token = payload.get("next_page_token")
                 if not token:
                     break
-                params = {"organization_id": org_id, "page_token": token}
+                current_params = dict(params)
+                current_params["page_token"] = token
             elif isinstance(payload, list):
                 collected.extend(payload)
                 break
             else:
                 break
         return collected
+
+    def notes(self, org_id: str | int) -> list[dict[str, Any]]:
+        return self._paginated_notes({"organization_id": org_id})
+
+    def person_notes(self, person_id: str | int) -> list[dict[str, Any]]:
+        return self._paginated_notes({"person_id": person_id})
+
+    def organization(self, org_id: str | int) -> dict[str, Any]:
+        return self._request("GET", f"/organizations/{org_id}")
 
     def person(self, person_id: str | int) -> dict[str, Any]:
         return self._request("GET", f"/persons/{person_id}")
@@ -176,6 +204,7 @@ class AffinityProspectSource:
         self.proposal_status = proposal_status
         self.owner_emails = _normalize_owner_emails(owner_emails)
         self._person_email_cache: dict[int, str] = {}
+        self.scan_summary = AffinityScanSummary()
 
     def _owner_allowed(self, owner_email: str) -> bool:
         if not self.owner_emails:
@@ -201,6 +230,7 @@ class AffinityProspectSource:
         return email
 
     def qualified_prospects(self) -> list[Prospect]:
+        self.scan_summary = AffinityScanSummary()
         prospect_list = self.client.find_list(self.list_name)
         list_id = prospect_list["id"]
         fields_payload = self.client.list_fields(list_id)
@@ -211,25 +241,38 @@ class AffinityProspectSource:
         )
         prospects: list[Prospect] = []
         for entry in self.client.list_entries(list_id):
+            self.scan_summary.scanned_raw_count += 1
             entry_id = entry.get("id") or entry.get("list_entry_id")
             if not entry_id:
                 continue
             field_values = self.client.field_values(entry_id)
             status, status_field_value_id = _extract_status(field_values, field_names)
+            self._count_status(status)
             org_id = _extract_org_id(entry)
             if not org_id:
                 continue
             owner_email = _extract_owner_email(
                 field_values, field_names, self._person_email
             )
+            self._count_owner(owner_email)
             if not self._owner_allowed(owner_email):
+                continue
+            if status != self.engaged_status:
+                continue
+            raw_notes, persons_checked = self._merged_note_payloads(org_id)
+            if not raw_notes:
+                self._warn_no_notes_via_api(
+                    org_id=org_id,
+                    org_name=_extract_name(entry),
+                    persons_checked=persons_checked,
+                )
                 continue
             notes = [
                 Note(
                     content=str(item.get("content") or item.get("text") or ""),
                     created_at=item.get("created_at") or item.get("date"),
                 )
-                for item in self.client.notes(org_id)
+                for item in raw_notes
             ]
             if not should_generate_proposal(
                 status=status,
@@ -252,6 +295,56 @@ class AffinityProspectSource:
             )
         return prospects
 
+    def _count_status(self, status: str) -> None:
+        key = status or "(blank)"
+        self.scan_summary.status_counts[key] = self.scan_summary.status_counts.get(key, 0) + 1
+
+    def _count_owner(self, owner_email: str) -> None:
+        key = owner_email or "(blank)"
+        self.scan_summary.owner_counts[key] = self.scan_summary.owner_counts.get(key, 0) + 1
+
+    def _merged_note_payloads(self, org_id: str) -> tuple[list[dict[str, Any]], list[str]]:
+        org_notes = self.client.notes(org_id)
+        persons_checked: list[str] = []
+        merged = list(org_notes)
+        for person_id in self._organization_person_ids(org_id):
+            persons_checked.append(str(person_id))
+            if hasattr(self.client, "person_notes"):
+                merged.extend(self.client.person_notes(person_id))
+        return _dedupe_notes_by_id(merged), persons_checked
+
+    def _organization_person_ids(self, org_id: str) -> list[str]:
+        if not hasattr(self.client, "organization"):
+            return []
+        try:
+            organization = self.client.organization(org_id)
+        except Exception:  # noqa: BLE001 - missing linked people should not hide org notes
+            return []
+        return _extract_person_ids(organization)
+
+    def _warn_no_notes_via_api(
+        self,
+        *,
+        org_id: str,
+        org_name: str,
+        persons_checked: list[str],
+    ) -> None:
+        self.scan_summary.skipped["no_notes_via_api"] = (
+            self.scan_summary.skipped.get("no_notes_via_api", 0) + 1
+        )
+        warning = {
+            "org_id": str(org_id),
+            "org_name": org_name,
+            "ui_notes_url": _ui_notes_url(self.client, org_id),
+            "persons_checked": list(persons_checked),
+            "likely_cause": NO_NOTES_VIA_API_LIKELY_CAUSE,
+        }
+        self.scan_summary.warnings.append(warning)
+        LOGGER.warning(
+            "prospect_skipped_no_notes_via_api: %s",
+            json.dumps(warning, sort_keys=True),
+        )
+
 
 def _extract_name(entry: dict[str, Any]) -> str:
     entity = entry.get("entity") if isinstance(entry.get("entity"), dict) else {}
@@ -271,6 +364,65 @@ def _extract_org_id(entry: dict[str, Any]) -> str | None:
         or entity.get("id")
     )
     return str(value) if value else None
+
+
+def _note_dedupe_key(note: dict[str, Any]) -> tuple[str, ...]:
+    note_id = note.get("id") or note.get("note_id")
+    if note_id is not None:
+        return ("id", str(note_id))
+    return (
+        "content",
+        str(note.get("content") or note.get("text") or ""),
+        str(note.get("created_at") or note.get("date") or ""),
+    )
+
+
+def _dedupe_notes_by_id(notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, ...]] = set()
+    deduped: list[dict[str, Any]] = []
+    for note in notes:
+        key = _note_dedupe_key(note)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(note)
+    return deduped
+
+
+def _extract_person_ids(organization: dict[str, Any]) -> list[str]:
+    raw_candidates: list[Any] = []
+    for key in ("person_ids", "people_ids"):
+        value = organization.get(key)
+        if isinstance(value, list):
+            raw_candidates.extend(value)
+    for key in ("persons", "people"):
+        value = organization.get(key)
+        if isinstance(value, list):
+            raw_candidates.extend(value)
+
+    ids: list[str] = []
+    seen: set[str] = set()
+    for candidate in raw_candidates:
+        if isinstance(candidate, dict):
+            value = candidate.get("id") or candidate.get("person_id")
+        else:
+            value = candidate
+        if value is None:
+            continue
+        person_id = str(value)
+        if person_id and person_id not in seen:
+            seen.add(person_id)
+            ids.append(person_id)
+    return ids
+
+
+def _ui_notes_url(client: Any, org_id: str) -> str:
+    base_url = str(
+        getattr(client, "ui_base_url", None)
+        or getattr(client, "base_url", None)
+        or "https://api.affinity.co"
+    ).rstrip("/")
+    return f"{base_url}/companies/{org_id}/notes"
 
 
 def _field_name_map(fields_payload: Any) -> dict[Any, str]:
