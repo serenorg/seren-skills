@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import tempfile
 import urllib.parse
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -25,7 +24,7 @@ class ProposalTemplatePaths:
 @dataclass
 class ProposalArtifact:
     pptx_path: Path | None
-    pdf_bytes: bytes
+    attachment_bytes: bytes
     file_name: str
     template_used: Path | None
 
@@ -81,8 +80,22 @@ def _replace_paragraph_text(paragraph: Any, replacements: list[tuple[str, str]])
         run.text = ""
 
 
+def _iter_shapes(container: Any):
+    """Yield every shape in `container`, descending into GROUP shapes.
+
+    Slide-6's advisor/fund rectangles live inside nested groups (#980) — a
+    flat `slide.shapes` walk would skip them.
+    """
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    for shape in container.shapes:
+        yield shape
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            yield from _iter_shapes(shape)
+
+
 def _iter_text_frames(slide: Any):
-    for shape in slide.shapes:
+    for shape in _iter_shapes(slide):
         if getattr(shape, "has_text_frame", False):
             yield shape.text_frame
         if getattr(shape, "has_table", False):
@@ -107,12 +120,13 @@ def write_proposal_deck(
         for text_frame in _iter_text_frames(slide):
             for paragraph in text_frame.paragraphs:
                 _replace_paragraph_text(paragraph, replacements)
+    prs.core_properties.title = f"Glide - {profile.client_name} Proposal"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(output_path)
-    file_name = f"{_safe_filename(profile.client_name)}_proposal_{today:%Y%m%d}.pdf"
+    file_name = f"{_safe_filename(profile.client_name)}_proposal_{today:%Y%m%d}.pptx"
     return ProposalArtifact(
         pptx_path=output_path,
-        pdf_bytes=b"",
+        attachment_bytes=b"",
         file_name=file_name,
         template_used=template,
     )
@@ -222,29 +236,27 @@ class ProposalService:
         self,
         *,
         templates: ProposalTemplatePaths,
-        renderer: SharePointRenderer,
         output_dir: Path,
     ) -> None:
         self.templates = templates
-        self.renderer = renderer
         self.output_dir = output_dir
 
     def build(self, profile: ProposalProfile, today: date) -> ProposalArtifact:
-        with tempfile.NamedTemporaryFile(suffix=".pptx", delete=False) as tmp:
-            pptx_path = Path(tmp.name)
+        # The skill ships the editable .pptx as the email attachment (#980);
+        # there is no PDF render step anymore.
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        file_name = f"{_safe_filename(profile.client_name)}_proposal_{today:%Y%m%d}.pptx"
+        out_path = self.output_dir / file_name
         artifact = write_proposal_deck(
             profile,
             templates=self.templates,
-            output_path=pptx_path,
+            output_path=out_path,
             today=today,
         )
-        pdf_bytes = self.renderer.render_pdf(pptx_path)
-        out_path = self.output_dir / artifact.file_name
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        out_path.write_bytes(pdf_bytes)
+        pptx_bytes = out_path.read_bytes()
         return ProposalArtifact(
-            pptx_path=pptx_path,
-            pdf_bytes=pdf_bytes,
+            pptx_path=out_path,
+            attachment_bytes=pptx_bytes,
             file_name=artifact.file_name,
             template_used=artifact.template_used,
         )

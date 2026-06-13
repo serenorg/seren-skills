@@ -113,7 +113,10 @@ class OutlookEmailSender:
         attachment = {
             "@odata.type": "#microsoft.graph.fileAttachment",
             "name": email.attachment_name,
-            "contentType": "application/pdf",
+            "contentType": (
+                "application/vnd.openxmlformats-officedocument."
+                "presentationml.presentation"
+            ),
             "contentBytes": base64.b64encode(email.attachment_bytes).decode("ascii"),
         }
         body = {

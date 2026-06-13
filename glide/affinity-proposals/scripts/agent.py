@@ -139,7 +139,7 @@ def run_once(config: AgentConfig, *, services: AgentServices, today: date) -> Ru
             config=email_config,
             dry_run=config.dry_run,
             attachment_name=artifact.file_name,
-            attachment_bytes=artifact.pdf_bytes,
+            attachment_bytes=artifact.attachment_bytes,
         )
         send_result = services.emailer.send(email)
         message_id = str((send_result or {}).get("id") or "")
@@ -296,7 +296,7 @@ def build_services(raw_config: dict[str, Any], *, skill_root: Path) -> AgentServ
     from scripts.affinity import AffinityClient, AffinityProspectSource
     from scripts.audit import SerenDBAuditLedger
     from scripts.email_send import OutlookEmailSender
-    from scripts.proposal import ProposalService, ProposalTemplatePaths, SharePointRenderer
+    from scripts.proposal import ProposalService, ProposalTemplatePaths
     from scripts.secrets import SecretConfig, SecretResolver
     from scripts.serendb import SerenDBManager
     from scripts.seren_client import GatewayClient
@@ -322,10 +322,6 @@ def build_services(raw_config: dict[str, Any], *, skill_root: Path) -> AgentServ
     )
     proposal = ProposalService(
         templates=templates,
-        renderer=SharePointRenderer(
-            gateway,
-            folder_name=str(raw_config.get("sharepoint", {}).get("folder_name", "AI Proposals")),
-        ),
         output_dir=skill_root / "out",
     )
     serendb_cfg = raw_config.get("serendb", {})
