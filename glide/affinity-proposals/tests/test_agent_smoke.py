@@ -56,8 +56,8 @@ class FakeProposal:
     def build(self, profile, today):
         return ProposalArtifact(
             pptx_path=None,
-            pdf_bytes=b"%PDF-test",
-            file_name="acme.pdf",
+            attachment_bytes=b"PPTX-bytes",
+            file_name="acme.pptx",
             template_used=None,
         )
 

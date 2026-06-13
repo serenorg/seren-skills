@@ -37,6 +37,8 @@ HIDDEN_DEFAULTS: dict[str, Any] = {
 }
 
 DEFAULT_SHAREPOINT_FOLDER = "AI Proposals"
+# Cristin's spec (#980): live mode CCs the manager (Mark) and Cristin.
+DEFAULT_LIVE_CC = ("mark@glideplatform.com", "cristin@glideplatform.com")
 
 _AFFINITY_KEY_HINTS = ("affinity", "api", "key", "crm")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -487,9 +489,14 @@ class InterviewSession:
         self.answers.dry_run_cc = emails
 
     def _ask_live_cc(self) -> None:
+        default = ", ".join(DEFAULT_LIVE_CC)
         raw = self.io.ask(
-            "9) When we go live, who's CC'd? (manager + anyone else, comma-separated) "
+            "9) When we go live, who's CC'd? (manager + anyone else, "
+            f"comma-separated) [default: {default}] "
         ).strip()
+        if not raw:
+            self.answers.live_cc = list(DEFAULT_LIVE_CC)
+            return
         emails = parse_email_list(raw)
         if not emails or any(not is_valid_email(email) for email in emails):
             self.io.write("  Couldn't parse those as emails — try again.\n")
